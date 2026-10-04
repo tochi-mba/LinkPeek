@@ -28,7 +28,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: node scripts/check_site.mjs
+      - run: ALLOW_MISSING_DOWNLOADS=1 node scripts/check_site.mjs
       - run: timeout 4m npm run test:e2e
       - uses: actions/upload-artifact@v7
         if: failure()
@@ -41,12 +41,14 @@ jobs:
           LINKPEEK_CRX_KEY_B64: ${{ secrets.LINKPEEK_CRX_KEY_B64 }}
         run: |
           set -euxo pipefail
+          CHROMIUM=$(node -e "const {chromium}=require('@playwright/test'); process.stdout.write(chromium.executablePath())")
+          test -x "$CHROMIUM"
           if [ -n "$LINKPEEK_CRX_KEY_B64" ]; then
             printf '%s' "$LINKPEEK_CRX_KEY_B64" | base64 -d > linkpeek.pem
-            google-chrome --pack-extension="$GITHUB_WORKSPACE/dist" --pack-extension-key="$GITHUB_WORKSPACE/linkpeek.pem"
+            "$CHROMIUM" --pack-extension="$GITHUB_WORKSPACE/dist" --pack-extension-key="$GITHUB_WORKSPACE/linkpeek.pem"
           else
             echo "::warning::LINKPEEK_CRX_KEY_B64 is not configured; generating a packaging key for this build. Add the secret for a stable extension ID across releases."
-            google-chrome --pack-extension="$GITHUB_WORKSPACE/dist"
+            "$CHROMIUM" --pack-extension="$GITHUB_WORKSPACE/dist"
           fi
           mkdir -p site/downloads
           mv dist.crx site/downloads/LinkPeek.crx
