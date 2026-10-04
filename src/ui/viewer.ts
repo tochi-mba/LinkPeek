@@ -22,7 +22,8 @@ export class Viewer{
     this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;
     this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;
     const item=this.result.items[this.index];
-    const media=item?.type==="gif"?`<div class="lp-gif-mount"></div>`:`<img class="lp-image" src="${item?this.escape(item.previewUrl):""}" alt="${item?this.escape(item.filename||"Preview image"):""}">`;
+    const hasDecoded=item&&item.type!=="gif"&&this.preloader.isReady(item);
+    const media=item?.type==="gif"?`<div class="lp-gif-mount"></div>`:hasDecoded?`<div class="lp-image-slot"></div>`:`<img class="lp-image" src="${item?this.escape(item.previewUrl):""}" alt="${item?this.escape(item.filename||"Preview image"):""}">`;
     const tip=item?.type==="gif"?"Space play/pause · ,/. frame step · ? for help":"↕ scroll · pinch to zoom · ? for help";
     const body=this.view==="grid"?this.grid():item?`<div class="lp-stage">${media}${this.settings.showLearningTips?`<div class="lp-tip">${tip}</div>`:""}</div>`:'<div class="lp-empty">No posted media found.</div>';
     const progress=this.result.complete?"Complete":`${this.result.postsScanned??0}/${this.result.totalPosts??"?"} posts`;
@@ -37,7 +38,11 @@ export class Viewer{
         pan:(dx:number,dy:number)=>this.pan(dx,dy),zoom:(factor:number,x:number,y:number)=>this.applyZoom(factor,x,y),
         doubleClick:(x:number,y:number)=>this.onDoubleClick(x,y),isZoomed:()=>this.zoom>1.01
       },this.settings);
-      if(item.type==="gif")void this.mountGif(item,version)
+      if(item.type==="gif")void this.mountGif(item,version);
+      else if(hasDecoded){
+        const decoded=this.preloader.element(item),slot=this.stage.querySelector(".lp-image-slot");
+        if(decoded&&slot){decoded.className="lp-image";decoded.alt=item.filename||"Preview image";slot.replaceWith(decoded)}
+      }
     }
   }
   private async mountGif(item:MediaItem,version:number){
