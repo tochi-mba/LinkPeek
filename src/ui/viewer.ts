@@ -6,12 +6,16 @@ import {GestureController} from "./gesture";
 import {MediaPreloader} from "./media-preloader";
 
 type GifPlayerLike={init:()=>Promise<void>;destroy:()=>void;key:(e:KeyboardEvent)=>boolean};
+type GifModule={
+  GifPlayer:new(stage:HTMLElement,url:string,settings:LinkPeekSettings,onNotice?:(message:string)=>void)=>GifPlayerLike;
+  prepareGif:(url:string,maxMb:number)=>Promise<unknown>;
+};
 
 export class Viewer{
   host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
   panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
   index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;
+  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;private gifModulePromise?:Promise<GifModule>;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
   restoreViewerState(state?:{view?:"focus"|"grid";gridThumbSize?:number;expanded?:boolean}){
     if(state?.view==="focus"||state?.view==="grid")this.rememberedView=state.view;
@@ -45,6 +49,7 @@ export class Viewer{
     this.bind();
     this.preloader.reset(this.result.items,this.index,this.settings);
     if(this.view==="grid"){this.setupVirtualGrid();return}
+    void this.warmGifNeighborhood();
     if(item){
       this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{
         next:(n?:number)=>this.move(n||1),previous:(n?:number)=>this.move(-(n||1)),
@@ -59,9 +64,23 @@ export class Viewer{
       }
     }
   }
+  private loadGifModule(){return this.gifModulePromise??=import(chrome.runtime.getURL("gif-player.js")) as Promise<GifModule>}
+  private async warmGifNeighborhood(){
+    if(!this.result?.items.length)return;
+    const items=this.result.items,length=items.length,seen=new Set<number>(),indexes:number[]=[];
+    const add=(n:number)=>{const at=this.settings.loopMode==="wrap"?((n%length)+length)%length:n;if(at>=0&&at<length&&!seen.has(at)){seen.add(at);indexes.push(at)}};
+    add(this.index);
+    for(let d=1;d<=Math.min(2,this.settings.preloadNext);d++)add(this.index+d);
+    for(let d=1;d<=Math.min(1,this.settings.preloadPrevious);d++)add(this.index-d);
+    const gifs=indexes.map(i=>items[i]).filter(item=>item?.type==="gif");if(!gifs.length)return;
+    try{
+      const mod=await this.loadGifModule();
+      await Promise.allSettled(gifs.map(item=>mod.prepareGif(item.originalUrl,this.settings.gifDecodeMaxMb)));
+    }catch{}
+  }
   private async mountGif(item:MediaItem,version:number){
     try{
-      const mod=await import(chrome.runtime.getURL("gif-player.js")) as {GifPlayer:new(stage:HTMLElement,url:string,settings:LinkPeekSettings,onNotice?:(message:string)=>void)=>GifPlayerLike};
+      const mod=await this.loadGifModule();
       if(version!==this.renderVersion||this.view!=="focus"||this.result?.items[this.index]!==item)return;
       const player=new mod.GifPlayer(this.stage,item.originalUrl,this.settings,message=>this.toast(message));this.gifPlayer=player;await player.init();
     }catch(error){
