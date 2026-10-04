@@ -71,12 +71,12 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
-  const batchPosts:Array<DPost[]|undefined>=new Array(idBatches.length),batchItems:Array<MediaItem[]|undefined>=new Array(idBatches.length);
+  const batchPosts:Array<DPost[]>=Array.from({length:idBatches.length},()=>[]),batchItems:Array<MediaItem[]>=Array.from({length:idBatches.length},()=>[]);
   let cursor=0,completed=0;
-  const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
+  const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length));
   const compose=(complete=false)=>{
-    const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+(b?.length??0),0);
-    const items=[...state.items,...batchItems.flatMap(x=>x??[])];
+    const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+b.length,0);
+    const items=[...state.items,...batchItems.flat()];
     return resultFromItems(raw,topic,items,postsScanned,stream.length,settings,complete,fetched.warning);
   };
   const workers=Array.from({length:concurrency},async()=>{
@@ -88,5 +88,5 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
     }
   });
   await Promise.all(workers);ensureNotAborted(signal);
-  const final=compose(true);final.complete=(final.postsScanned??0)>=Math.min(stream.length,effectiveMax);return final;
+  const final=compose(true);final.complete=final.postsScanned!>=Math.min(stream.length,effectiveMax);return final;
 }
