@@ -67,13 +67,18 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
   const effectiveMax=settings?.scanScope==="first"?Math.min(maxPosts,50):maxPosts,stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
   const state=initialState(raw,topic,initial,stream,settings,fetched.warning),have=new Set(state.posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
   const initialResult={...state.result,complete:missing.length===0};if(missing.length===0)return initialResult;
-  let initialProgressTimer:ReturnType<typeof setTimeout>|undefined,lastProgressAt=performance.now();
-  if(onProgress)initialProgressTimer=setTimeout(()=>{initialProgressTimer=undefined;lastProgressAt=performance.now();onProgress(initialResult)},75);
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
   const batchPosts:Array<DPost[]|undefined>=new Array(idBatches.length),batchItems:Array<MediaItem[]|undefined>=new Array(idBatches.length);
-  let cursor=0,completed=0;
+  let cursor=0,completed=0,progressSent=false,lastProgressAt=performance.now();
+  const batchesStartedAt=performance.now();
+  let initialProgressTimer:ReturnType<typeof setTimeout>|undefined;
+  if(onProgress)initialProgressTimer=setTimeout(()=>{
+    initialProgressTimer=undefined;
+    if(progressSent||completed>0)return;
+    progressSent=true;lastProgressAt=performance.now();onProgress(initialResult);
+  },60);
   const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
   const compose=(complete=false)=>{
     const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+(b?.length??0),0);
@@ -84,8 +89,12 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
     while(true){
       ensureNotAborted(signal);const index=cursor++;if(index>=idBatches.length)return;
       const posts=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index],signal);batchPosts[index]=posts;batchItems[index]=fromPosts(posts,state.topicUrl,settings);completed++;
-      const now=performance.now();
-      if(onProgress&&completed<idBatches.length&&now-lastProgressAt>=120){lastProgressAt=now;onProgress(compose(false))}
+      const now=performance.now(),elapsed=now-batchesStartedAt;
+      if(onProgress&&!progressSent&&elapsed>=40){
+        progressSent=true;lastProgressAt=now;if(initialProgressTimer){clearTimeout(initialProgressTimer);initialProgressTimer=undefined}onProgress(compose(false));
+      }else if(onProgress&&progressSent&&completed<idBatches.length&&now-lastProgressAt>=120){
+        lastProgressAt=now;onProgress(compose(false));
+      }
     }
   });
   try{
