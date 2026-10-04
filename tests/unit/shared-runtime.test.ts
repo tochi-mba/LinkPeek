@@ -94,6 +94,9 @@ describe("shared runtime coverage",()=>{
     expect(await isFavorite("https://x.test/missing")).toBe(false);
     await removeFavorite("https://x.test/b");
     expect((await loadFavorites()).map(x=>x.url)).toEqual(["https://x.test/d","https://x.test/c"]);
+    store.favorites=[{url:"https://x.test/no-meta"}];
+    const noMeta=await loadFavorites();expect(noMeta[0].addedAt).toBe(0);expect(noMeta[0].mediaCount).toBeUndefined();expect(noMeta[0].title).toBe("https://x.test/no-meta");
+
   });
 
   it("scans direct images, GIFs, HTML pages, untitled pages and HTTP errors",async()=>{
