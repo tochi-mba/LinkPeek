@@ -1,0 +1,9 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+linkpeek.pem
+*.pem
+*.crx
+*.zip
+.DS_Store
