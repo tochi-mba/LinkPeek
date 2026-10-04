@@ -98,7 +98,9 @@ describe("shared runtime coverage",()=>{
       new Response("<img src='/b.jpg' width='400' height='300'>",{status:200}),
       new Response("no",{status:404})
     ];
-    vi.stubGlobal("fetch",vi.fn(async()=>responses.shift()!));
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+      const response=responses.shift()!;Object.defineProperty(response,"url",{configurable:true,value:String(input)});return response;
+    }));
     const png=await scanGeneric("https://x.test/a.png");expect(png.kind).toBe("direct-image");expect(png.items[0].type).toBe("image");
     const gif=await scanGeneric("https://x.test/a.gif");expect(gif.items[0].type).toBe("gif");
     const html=await scanGeneric("https://x.test/page",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0});expect(html.title).toBe("A Page");expect(html.items).toHaveLength(1);
