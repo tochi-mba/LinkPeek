@@ -87,7 +87,10 @@ try{
     await page.waitForTimeout(60);
   }
   async function hoverMeasure(selector,expected,{resetNet=true,label=selector}={}){
-    console.log("BASELINE_CASE_START",label,expected);await leave();if(resetNet){requestCount=0;responseBytes=0}
+    console.log("BASELINE_CASE_START",label,expected);
+    await page.reload({waitUntil:"domcontentloaded"});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
+    await leave();if(resetNet){requestCount=0;responseBytes=0}
     const target=page.locator(selector),box=await target.boundingBox();if(!box)throw new Error(`No benchmark target for ${selector}`);
     const t=performance.now();
     await target.dispatchEvent("pointerover",{pointerType:"mouse",clientX:box.x+box.width/2,clientY:box.y+box.height/2,bubbles:true});
@@ -120,7 +123,7 @@ try{
   results.ui.gesture_next_media_ms=round(performance.now()-t);
   await leave();await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_close_gc=await heap();
 
-  await patchSettings({gifAutoplay:"never"});
+  await patchSettings({gifAutoplay:"never"});await page.reload({waitUntil:"domcontentloaded"});await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
   t=performance.now();await page.locator("#gif").hover();await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-gif-controls")),null,{timeout:10000});
   results.latency.gif_hover_to_controls_ms=round(performance.now()-t);results.memory.after_gif_decode=await heap();
   const timeline=page.locator(".lp-gif-timeline");t=performance.now();for(let i=0;i<20;i++)await page.locator(".lp-gif-next").click();results.ui.gif_20_frame_steps_ms=round(performance.now()-t);
