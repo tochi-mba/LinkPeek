@@ -32,7 +32,7 @@ export const overlayCss=rexCss+`
 @keyframes pulse{to{opacity:.25;transform:scale(.7)}}
 .lp-foot{min-height:44px;display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid ${REX.line};font-size:11px;color:${REX.muted}}
 .lp-count{font-family:ui-monospace,monospace;color:${REX.text};font-weight:700}.lp-spacer{flex:1}.lp-signal{color:${REX.signal}}
-.lp-grid{position:relative;display:block;overflow:auto;max-height:min(65vh,640px);min-height:240px;background:${REX.ink};contain:strict}
+.lp-grid{position:relative;display:block;overflow:auto;height:min(65vh,640px);min-height:240px;background:${REX.ink};contain:strict}
 .lp-grid-spacer{width:1px;pointer-events:none}
 .lp-grid-window{position:absolute;display:grid;gap:6px;will-change:transform}
 .lp-thumb{aspect-ratio:1;border:1px solid ${REX.line};border-radius:9px;overflow:hidden;background:${REX.raised};padding:0;content-visibility:auto;contain:layout paint}
