@@ -27,7 +27,7 @@ function decodeBase64(value:string){
 
 export class GifPlayer{
   private mount:HTMLElement;private canvas?:HTMLCanvasElement;private ctx?:CanvasRenderingContext2D;
-  private frames:DecodedFrame[]=[];private frame=0;private rendered=-1;private restoreBeforePrevious:ImageData|null=null;
+  private frames:DecodedFrame[]=[];private frame=0;private rendered=-1;private restoreBeforePrevious:ImageData|null=null;private patchCanvas?:HTMLCanvasElement;private patchCtx?:CanvasRenderingContext2D;
   private playing=false;private loop=true;private speed=1;private timer?:number;private destroyed=false;private resumeAfterVisibility=false;
   private timeline?:HTMLInputElement;private toggleButton?:HTMLButtonElement;private loopButton?:HTMLButtonElement;private speedSelect?:HTMLSelectElement;private timeLabel?:HTMLElement;
   constructor(private stage:HTMLElement,private url:string,private settings:LinkPeekSettings,private onNotice:(message:string)=>void=()=>{}){
@@ -93,7 +93,8 @@ export class GifPlayer{
     </div>`;
     this.canvas=this.mount.querySelector(".lp-gif-canvas") as HTMLCanvasElement;this.canvas.width=width;this.canvas.height=height;
     this.ctx=this.canvas.getContext("2d",{willReadFrequently:true})||undefined;
-    if(!this.ctx)throw new Error("Canvas unavailable");
+    this.patchCanvas=document.createElement("canvas");this.patchCtx=this.patchCanvas.getContext("2d",{willReadFrequently:true})||undefined;
+    if(!this.ctx||!this.patchCtx)throw new Error("Canvas unavailable");
     this.timeline=this.mount.querySelector(".lp-gif-timeline") as HTMLInputElement;
     this.toggleButton=this.mount.querySelector(".lp-gif-toggle") as HTMLButtonElement;
     this.loopButton=this.mount.querySelector(".lp-gif-loop") as HTMLButtonElement;
@@ -150,7 +151,11 @@ export class GifPlayer{
     }
     const frame=this.frames[index];
     this.restoreBeforePrevious=frame.disposalType===3?this.ctx.getImageData(0,0,this.canvas.width,this.canvas.height):null;
-    this.ctx.putImageData(new ImageData(new Uint8ClampedArray(frame.patch),frame.dims.width,frame.dims.height),frame.dims.left,frame.dims.top);
+    if(!this.patchCanvas||!this.patchCtx)return;
+    this.patchCanvas.width=frame.dims.width;this.patchCanvas.height=frame.dims.height;
+    this.patchCtx.clearRect(0,0,frame.dims.width,frame.dims.height);
+    this.patchCtx.putImageData(new ImageData(new Uint8ClampedArray(frame.patch),frame.dims.width,frame.dims.height),0,0);
+    this.ctx.drawImage(this.patchCanvas,frame.dims.left,frame.dims.top);
     this.rendered=index;
   }
   private updateControls(){
