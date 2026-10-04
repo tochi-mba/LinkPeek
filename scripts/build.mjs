@@ -24,7 +24,17 @@ await build({
   format: "iife",
   target: "chrome120",
   sourcemap: false,
-  minify: false
+  minify: true
+});
+
+await build({
+  entryPoints: {"gif-player":"src/ui/gif-player.ts"},
+  bundle:true,
+  outdir:out,
+  format:"esm",
+  target:"chrome120",
+  sourcemap:false,
+  minify:true
 });
 
 await cp("public", out, { recursive: true });
@@ -33,4 +43,4 @@ const icons=JSON.parse(await readFile("assets/icons.json","utf8"));
 await mkdir(resolve(out,"icons"),{recursive:true});
 for(const [size,data] of Object.entries(icons)) await writeFile(resolve(out,"icons",`icon${size}.png`),Buffer.from(data,"base64"));
 await writeFile(resolve("site","favicon.png"),Buffer.from(icons["48"],"base64"));
-console.log("Built LinkPeek extension to dist/");
+console.log("Built optimized LinkPeek extension to dist/");
