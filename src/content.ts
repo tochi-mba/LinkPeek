@@ -65,7 +65,7 @@ function prefetchVisible(){
       const a=anchors[index++],kind=classifyLink(a.href);
       if(prefetched.has(a.href)||["anchor","download","ignored","generic"].includes(kind))continue;
       prefetched.add(a.href);active++;
-      chrome.runtime.sendMessage({type:"LINKPEEK_SCAN",url:a.href,kind}).finally(()=>{active--;next()});
+      chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH",url:a.href,kind}).finally(()=>{active--;next()});
     }
   };next();
 }
