@@ -34,7 +34,7 @@ function putCache(url:string,result:ScanResult,settings:LinkPeekSettings,discour
   if(bytes>limit)return;
   cache.set(url,{at:Date.now(),bytes,result,discourseSeed});cacheBytes+=bytes;
   while(cacheBytes>limit&&cache.size){
-    const oldest=cache.keys().next().value as string|undefined;if(!oldest)break;removeCache(oldest);
+    const oldest=cache.keys().next().value as string;removeCache(oldest);
   }
 }
 function removeBinary(url:string){const entry=binaryCache.get(url);if(!entry)return;binaryCache.delete(url);binaryBytes=Math.max(0,binaryBytes-entry.bytes)}
@@ -49,7 +49,7 @@ async function fetchBinary(urlRaw:string,maxMb:number){
     const buffer=await response.arrayBuffer();if(buffer.byteLength>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
     const entry:BinaryEntry={at:Date.now(),base64:bytesToBase64(buffer),mime:response.headers.get("content-type")||"application/octet-stream",bytes:buffer.byteLength};
     const limit=64*1024*1024;removeBinary(urlRaw);binaryCache.set(urlRaw,entry);binaryBytes+=entry.bytes;
-    while(binaryBytes>limit&&binaryCache.size){const oldest=binaryCache.keys().next().value as string|undefined;if(!oldest)break;removeBinary(oldest)}
+    while(binaryBytes>limit&&binaryCache.size){const oldest=binaryCache.keys().next().value as string;removeBinary(oldest)}
     return entry;
   })().finally(()=>binaryTasks.delete(urlRaw));
   binaryTasks.set(urlRaw,task);return task;
@@ -74,7 +74,7 @@ async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task
     const onProgress=settings.progressiveScan?(progress:ScanResult)=>{
       if(progressStarted){broadcast(task,url,progress);return}
       pendingProgress=progress;
-      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;if(pendingProgress)broadcast(task,url,pendingProgress)},60);
+      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;broadcast(task,url,pendingProgress!)},60);
     }:undefined;
     try{
       result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{signal:task.controller.signal,onProgress});
