@@ -19,13 +19,14 @@ export class Viewer{
     this.panel.innerHTML=this.shell(this.result.title||new URL(this.result.url).hostname,body,`${this.result.items.length} media · ${progress}`);
     this.bind();
     if(this.view==="focus"&&item){this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{
-      next:n=>this.move(this.settings.reverseVertical?-(n||1):(n||1)),
-      previous:n=>this.move(this.settings.reverseVertical?(n||1):-(n||1)),
-      scrub:d=>this.move((this.settings.reverseHorizontal?-1:1)*(d>0?this.settings.maxImagesPerSwipe:-this.settings.maxImagesPerSwipe)),
-      pan:(dx,dy)=>this.pan(dx,dy),
-      zoom:(f,x,y)=>this.applyZoom(f,x,y),
-      quickZoom:(x,y)=>this.quickZoom(x,y)
-    },this.settings.gestureThreshold*(.55/Math.max(.2,this.settings.navSensitivity)),this.settings.gestureCooldown,this.settings.maxImagesPerSwipe)}
+      next:(n?:number)=>this.move(n||1),
+      previous:(n?:number)=>this.move(-(n||1)),
+      scrub:(d:number)=>this.move(d>0?this.settings.maxImagesPerSwipe:-this.settings.maxImagesPerSwipe),
+      pan:(dx:number,dy:number)=>this.pan(dx,dy),
+      zoom:(factor:number,x:number,y:number)=>this.applyZoom(factor,x,y),
+      doubleClick:(x:number,y:number)=>this.onDoubleClick(x,y),
+      isZoomed:()=>this.zoom>1.01
+    },this.settings)}
   }
   private shell(title:string,body:string,status:string){return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span><button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button><button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span><span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
   private grid(){return `<div class="lp-grid">${this.result!.items.map((i,n)=>`<button class="lp-thumb" data-i="${n}" aria-current="${n===this.index}"><img src="${this.escape(i.previewUrl)}" alt=""></button>`).join("")}</div>`}
