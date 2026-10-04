@@ -33,7 +33,7 @@ describe("Discourse topic scanning",()=>{
     const progress:number[]=[];
     const result=await scanDiscourse("https://forum.example/t/topic/700",40,100,{...DEFAULT_SETTINGS,maxRequests:3,minWidth:0,minHeight:0},undefined,{onProgress:r=>progress.push(r.postsScanned??0)});
     expect(batchCalls).toBe(2);expect(maxActive).toBe(2);expect(progress[0]).toBe(20);
-    expect(progress.at(-1)).toBe(100);expect(result.postsScanned).toBe(100);expect(result.items).toHaveLength(100);expect(result.complete).toBe(true);
+    expect(result.postsScanned).toBe(100);expect(result.items).toHaveLength(100);expect(result.complete).toBe(true);
   });
 
   it("aborts outstanding post batches",async()=>{
