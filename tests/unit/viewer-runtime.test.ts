@@ -138,7 +138,7 @@ describe("Viewer runtime",()=>{
     (v as any).setupVirtualGrid();
     expect(v.panel.querySelectorAll(".lp-thumb").length).toBeGreaterThan(0);
     const thumb=v.panel.querySelector(".lp-thumb") as HTMLButtonElement;thumb.click();expect(v.view).toBe("focus");
-    v.view="grid";v.render?.();
+    v.view="grid";(v as any).render();
     (v as any).result=undefined;(v as any).setupVirtualGrid();
     (v as any).result=result([item(0)]);v.panel.innerHTML="";(v as any).setupVirtualGrid();
     v.close(true);
