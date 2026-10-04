@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euxo pipefail
           CHROMIUM=$(node -e "const {chromium}=require('@playwright/test'); process.stdout.write(chromium.executablePath())")
-          "$CHROMIUM" --pack-extension="$GITHUB_WORKSPACE/dist"
+          "$CHROMIUM" --no-sandbox --pack-extension="$GITHUB_WORKSPACE/dist"
           test -s dist.crx
           rm -f dist.crx dist.pem
       - uses: actions/upload-artifact@v7
