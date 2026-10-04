@@ -38,7 +38,7 @@ export class MediaPreloader{
   private entries=new Map<string,Entry>();private queue:Task[]=[];private active=0;private generation=0;private idleHandle:number|undefined;
   private items:MediaItem[]=[];private settings?:LinkPeekSettings;private index=0;
   reset(items:MediaItem[],index:number,settings:LinkPeekSettings){
-    this.items=items;this.settings=settings;this.index=index;this.generation++;this.queue=[];if(this.idleHandle!=null){cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
+    this.items=items;this.settings=settings;this.index=index;this.generation++;this.queue=[];if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
     this.schedule(index);
     this.prune();
   }
@@ -55,14 +55,17 @@ export class MediaPreloader{
     }
   }
   async ensure(item:MediaItem){
-    if(item.type==="gif")return;
+    if(item.type==="gif"){
+      await chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});
+      return;
+    }
     const entry=this.load(item.previewUrl,0,this.generation);await entry.promise;
   }
   isReady(item:MediaItem){return item.type==="gif"||this.entries.get(item.previewUrl)?.ready===true}
   element(item:MediaItem){
     const entry=this.entries.get(item.previewUrl);if(!entry?.ready)return undefined;entry.lastUsed=performance.now();return entry.img
   }
-  dispose(){this.generation++;this.queue=[];this.items=[];if(this.idleHandle!=null){cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}this.entries.clear()}
+  dispose(){this.generation++;this.queue=[];this.items=[];if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}this.entries.clear()}
   private enqueuePreview(item:MediaItem,priority:number,generation:number){
     if(item.type==="gif"){void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});return}
     this.enqueue(item.previewUrl,priority,generation);
