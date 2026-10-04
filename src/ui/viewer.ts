@@ -4,6 +4,7 @@ import type {LinkPeekSettings} from "../shared/settings";
 import {overlayCss} from "./styles";
 import {GestureController} from "./gesture";
 import {MediaPreloader} from "./media-preloader";
+import {isFavorite,toggleFavorite} from "../shared/favorites";
 
 type GifPlayerLike={init:()=>Promise<void>;destroy:()=>void;key:(e:KeyboardEvent)=>boolean};
 type GifModule={
@@ -15,7 +16,7 @@ export class Viewer{
   host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
   panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
   index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;private gifModulePromise?:Promise<GifModule>;
+  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;private gifModulePromise?:Promise<GifModule>;private favorite=false;private favoriteVersion=0;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
   restoreViewerState(state?:{view?:"focus"|"grid";gridThumbSize?:number;expanded?:boolean}){
     if(state?.view==="focus"||state?.view==="grid")this.rememberedView=state.view;
@@ -40,7 +41,7 @@ export class Viewer{
       totalPosts:Math.max(same?.totalPosts??0,result.totalPosts??0)||undefined,
       diagnostics
     };
-    this.index=Math.min(this.index,Math.max(0,this.result.items.length-1));this.render()
+    this.index=Math.min(this.index,Math.max(0,this.result.items.length-1));this.render();void this.refreshFavorite()
   }
   error(message:string){this.panel.innerHTML=this.shell("Couldn’t preview",`<div class="lp-error"><strong>Preview unavailable</strong><span>${this.escape(message)}</span></div>`,"");this.bind()}
   close(force=false){if(this.pinned&&!force)return;this.renderVersion++;this.navigationVersion++;this.desiredIndex=null;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.preloader.dispose();this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
@@ -100,7 +101,7 @@ export class Viewer{
       this.toast(error instanceof Error?error.message:"GIF controls unavailable");
     }
   }
-  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Show more images" aria-label="Show more images">−</button><button class="lp-btn lp-grid-bigger" title="Make thumbnails bigger" aria-label="Make thumbnails bigger">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";const gridToggle=this.view==="grid"?`<button class="lp-btn lp-gridbtn" title="Back to single image (G)" aria-label="Back to single image">▣</button>`:`<button class="lp-btn lp-gridbtn" title="Show image grid (G)" aria-label="Show image grid">▦</button>`;return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}${gridToggle}${expand}<button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
+  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Show more images" aria-label="Show more images">−</button><button class="lp-btn lp-grid-bigger" title="Make thumbnails bigger" aria-label="Make thumbnails bigger">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";const gridToggle=this.view==="grid"?`<button class="lp-btn lp-gridbtn" title="Back to single image (G)" aria-label="Back to single image">▣</button>`:`<button class="lp-btn lp-gridbtn" title="Show image grid (G)" aria-label="Show image grid">▦</button>`;return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}${gridToggle}${expand}<button class="lp-btn lp-favorite" aria-pressed="${this.favorite}" title="${this.favorite?"Remove favorite (B)":"Favorite link (B)"}" aria-label="${this.favorite?"Remove favorite":"Favorite link"}">${this.favorite?"★":"☆"}</button><button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
   private grid(){const r=this.result!;const scanning=!r.complete?`<div class="lp-grid-progress"><span class="lp-loading-dot"></span><span>Scanning thread · ${r.postsScanned??0}/${r.totalPosts??"?"} posts · ${r.items.length} media found</span></div>`:"";return `${scanning}<div class="lp-grid" data-total="${r.items.length}" data-complete="${r.complete}" role="grid" aria-label="Media grid"><div class="lp-grid-spacer"></div><div class="lp-grid-window"></div></div>`}
   private setupVirtualGrid(){
     const grid=this.panel.querySelector(".lp-grid") as HTMLDivElement|null,windowEl=this.panel.querySelector(".lp-grid-window") as HTMLDivElement|null,spacer=this.panel.querySelector(".lp-grid-spacer") as HTMLDivElement|null;
@@ -141,6 +142,7 @@ export class Viewer{
     this.panel.querySelector(".lp-expandbtn")?.addEventListener("click",()=>{this.expanded=!this.expanded;this.persistViewerState();this.render()});
     this.panel.querySelector(".lp-grid-more")?.addEventListener("click",()=>{this.gridThumbSize=Math.max(48,this.gridThumbSize-16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
     this.panel.querySelector(".lp-grid-bigger")?.addEventListener("click",()=>{this.gridThumbSize=Math.min(320,this.gridThumbSize+16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
+    this.panel.querySelector(".lp-favorite")?.addEventListener("click",()=>void this.toggleFavorite());
     this.panel.querySelector(".lp-helpbtn")?.addEventListener("click",()=>{this.help=!this.help;this.render()});
     this.panel.addEventListener("mouseenter",()=>{if(this.closeTimer)clearTimeout(this.closeTimer)});
     this.panel.addEventListener("mouseleave",()=>{if(!this.pinned)this.closeTimer=window.setTimeout(()=>this.close(),this.settings.closeDelay)});
@@ -151,6 +153,7 @@ export class Viewer{
     if(hit("close",["Escape"])){this.close(true);return true}
     if(hit("grid",["g"])){this.toggleView();return true}
     if(hit("pin",["p"])){this.pinned=!this.pinned;this.render();return true}
+    if(hit("favorite",["b"])){void this.toggleFavorite();return true}
     if(hit("help",["?","/"])){this.help=!this.help;this.render();return true}
     if(hit("next",["ArrowDown","ArrowRight"," "])){this.move(1);return true}
     if(hit("previous",["ArrowUp","ArrowLeft"])){this.move(-1);return true}
@@ -167,6 +170,17 @@ export class Viewer{
   applyZoom(factor:number,x:number,y:number){const old=this.zoom;this.zoom=Math.max(this.settings.minZoom,Math.min(this.settings.maxZoom,this.zoom*factor));if(old===this.zoom&&factor>1&&old>1){this.zoom=1;this.tx=this.ty=0}else{const ratio=this.zoom/old;this.tx=x-(x-this.tx)*ratio;this.ty=y-(y-this.ty)*ratio}this.paintTransform();this.toast(`${Math.round(this.zoom*100)}%`)}
   pan(dx:number,dy:number){if(this.zoom<=1&&this.settings.verticalGesture!=="pan")return;this.tx+=dx;this.ty+=dy;this.paintTransform()}
   onDoubleClick(x:number,y:number){if(this.settings.doubleClick==="next"){this.move(1);return}if(this.settings.doubleClick==="fullscreen"){if(document.fullscreenElement)void document.exitFullscreen();else void this.panel.requestFullscreen?.();return}if(this.zoom>1&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}this.applyZoom(this.settings.doubleClickZoom,x,y)}
+  private async refreshFavorite(){
+    if(!this.result)return;const version=++this.favoriteVersion,url=this.result.url;
+    try{const value=await isFavorite(url);if(version===this.favoriteVersion&&this.result?.url===url&&this.favorite!==value){this.favorite=value;this.render()}}catch{}
+  }
+  private async toggleFavorite(){
+    if(!this.result)return;const current=this.result;
+    try{
+      const result=await toggleFavorite({url:current.url,title:current.title||new URL(current.url).hostname,mediaCount:current.items.length});
+      if(this.result?.url!==current.url)return;this.favorite=result.saved;this.render();this.toast(result.saved?"Saved offline":"Removed favorite");
+    }catch{this.toast("Couldn’t update favorite")}
+  }
   paintTransform(){const img=this.panel.querySelector(".lp-image") as HTMLElement|null;if(img)img.style.transform=`translate(${this.tx}px,${this.ty}px) scale(${this.zoom})`}
   toast(text:string){const t=document.createElement("div");t.className="lp-toast";t.textContent=text;this.panel.appendChild(t);setTimeout(()=>t.remove(),650)}
   position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.setProperty("--lp-stageh",`${this.settings.focusHeightVh}vh`);this.panel.style.setProperty("--lp-expandedw",`${this.settings.expandedWidthVw}vw`);this.panel.style.setProperty("--lp-expandedh",`${this.settings.expandedHeightVh}vh`);this.panel.style.setProperty("--lp-thumb",`${this.gridThumbSize}px`);this.panel.style.opacity=String(this.settings.panelOpacity);this.panel.style.background=`rgba(17,21,18,${Math.max(.1,1-this.settings.transparency)})`;this.panel.style.backdropFilter=`blur(${this.settings.blur}px)`;if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
