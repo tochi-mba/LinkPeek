@@ -26,6 +26,7 @@ const lines=[
 `- Discourse 20 posts / 40 media: **${browser.latency.discourse_20_posts.result_ms} ms**`,
 `- Discourse 100 posts / 200 media: **${browser.latency.discourse_100_posts.result_ms} ms**`,
 `- Discourse 500 posts / 1000 media: **${browser.latency.discourse_500_posts.result_ms} ms**`,
+`- Discourse 500 posts @ 100 ms RTT, first 40 media: **${browser.latency.discourse_500_posts_rtt100?.initial_ms??"n/a"} ms**`,
 `- Discourse cache hit: **${browser.latency.discourse_20_posts_cache_hit_ms??browser.latency.discourse_500_posts_cache_hit_ms??"n/a"} ms**`,
 `- Embedded fallback 100 posts: **${browser.latency.discourse_fallback_100_posts.result_ms} ms**`,
 `- GIF hover → decoded controls: **${browser.latency.gif_hover_to_controls_ms} ms**`,"",
