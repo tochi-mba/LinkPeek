@@ -104,7 +104,7 @@ export class GifPlayer{
     this.toggleButton.addEventListener("click",()=>this.toggle());
     this.loopButton.addEventListener("click",()=>{this.loop=!this.loop;this.updateControls()});
     this.speedSelect.addEventListener("change",()=>{this.speed=Number(this.speedSelect!.value)||1;if(this.playing)this.schedule();this.updateControls()});
-    this.timeline.addEventListener("input",()=>{const was=this.playing;this.pause();this.goto(Number(this.timeline!.value));if(was)this.play()});
+    this.timeline.addEventListener("input",()=>{this.pause();this.goto(Number(this.timeline!.value))});
     if(this.settings.gifScrubWheel)this.timeline.addEventListener("wheel",this.onTimelineWheel,{passive:false});
     this.mount.querySelector(".lp-gif-controls")?.addEventListener("dblclick",e=>e.stopPropagation());
   }
