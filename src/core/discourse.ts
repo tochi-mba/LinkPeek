@@ -2,8 +2,10 @@ import type {MediaItem,ScanResult} from "../shared/media";
 import {dedupeMedia,extractMediaFromHtml} from "./extract";
 import type {LinkPeekSettings} from "../shared/settings";
 
-type DPost={id:number;post_number:number;username?:string;cooked?:string;post_url?:string};
-type DTopic={id:number;title?:string;post_stream?:{posts?:DPost[];stream?:number[]}};
+export type DPost={id:number;post_number:number;username?:string;cooked?:string;post_url?:string};
+export type DTopic={id:number;title?:string;post_stream?:{posts?:DPost[];stream?:number[]}};
+export type DiscourseSeed={topic:DTopic;warning?:string};
+
 function topicJsonUrl(raw:string){
   const u=new URL(raw),parts=u.pathname.split("/").filter(Boolean),t=parts.indexOf("t");
   if(t<0)return null;
@@ -27,7 +29,7 @@ export function parsePreloadedDiscourseTopic(html:string,topicId:number):DTopic|
   }catch{}
   return null;
 }
-async function fetchTopic(raw:string,jsonUrl:URL):Promise<{topic:DTopic;warning?:string}>{
+async function fetchTopic(raw:string,jsonUrl:URL):Promise<DiscourseSeed>{
   try{return {topic:await fetchJson(jsonUrl.href) as DTopic}}
   catch(primaryError){
     const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)?.[1]);
@@ -47,26 +49,58 @@ function fromPosts(posts:DPost[],topicUrl:string,settings?:LinkPeekSettings){
   }
   return items;
 }
-export async function scanDiscourse(raw:string,batchSize=20,maxPosts=2000,settings?:LinkPeekSettings):Promise<ScanResult>{
-  const jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
-  const fetched=await fetchTopic(raw,jsonUrl),topic=fetched.topic;
+function makeResult(raw:string,topic:DTopic,posts:DPost[],stream:number[],settings?:LinkPeekSettings,complete=false,warning?:string):ScanResult{
   const topicUrl=new URL(raw);topicUrl.hash="";topicUrl.search="";
+  const unique=new Map(posts.map(p=>[p.id,p]));
+  const ordered=[...unique.values()].sort((a,b)=>a.post_number-b.post_number);
+  const extracted=fromPosts(ordered,topicUrl.href,settings),d=settings?.dedupe===false?{items:extracted,duplicates:0}:dedupeMedia(extracted);
+  return {
+    url:raw,kind:"discourse",title:topic.title,items:d.items,complete,
+    postsScanned:ordered.length,totalPosts:stream.length,
+    diagnostics:{adapter:"Discourse",ignored:0,duplicates:d.duplicates,warnings:warning?[warning]:[]}
+  };
+}
+export async function prefetchDiscourse(raw:string,settings?:LinkPeekSettings):Promise<{result:ScanResult;seed:DiscourseSeed}>{
+  const jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
+  const seed=await fetchTopic(raw,jsonUrl),topic=seed.topic;
+  const initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
+  const effectiveMax=settings?.scanScope==="first"?Math.min(settings.maxPosts,50):settings?.maxPosts??2000;
+  const stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
+  const result=makeResult(raw,topic,initial,stream,settings,initial.length>=stream.length,seed.warning);
+  return {result,seed};
+}
+async function fetchBatch(topicId:number,origin:string,ids:number[]):Promise<DPost[]>{
+  const u=new URL(`/t/${topicId}/posts.json`,origin);
+  ids.forEach(id=>u.searchParams.append("post_ids[]",String(id)));
+  try{
+    const data=await fetchJson(u.href) as {post_stream?:{posts?:DPost[]}};
+    return data.post_stream?.posts??[];
+  }catch{
+    const recovered:DPost[]=[];
+    for(const id of ids){
+      try{recovered.push(await fetchJson(new URL(`/posts/${id}.json`,origin).href) as DPost)}catch{}
+    }
+    return recovered;
+  }
+}
+export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settings?:LinkPeekSettings,seed?:DiscourseSeed):Promise<ScanResult>{
+  const jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
+  const fetched=seed??await fetchTopic(raw,jsonUrl),topic=fetched.topic;
   const initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
   const effectiveMax=settings?.scanScope==="first"?Math.min(maxPosts,50):maxPosts;
   const stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
-  let posts=[...initial];const have=new Set(posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
-  for(let i=0;i<missing.length;i+=batchSize){
-    const ids=missing.slice(i,i+batchSize),u=new URL(`/t/${topic.id}/posts.json`,jsonUrl.origin);
-    ids.forEach(id=>u.searchParams.append("post_ids[]",String(id)));
-    try{const data=await fetchJson(u.href) as {post_stream?:{posts?:DPost[]}};posts.push(...(data.post_stream?.posts??[]))}
-    catch{
-      for(const id of ids){
-        try{posts.push(await fetchJson(new URL(`/posts/${id}.json`,jsonUrl.origin).href) as DPost)}catch{}
-      }
+  const posts=[...initial],have=new Set(posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
+  const size=Math.max(1,Math.min(100,batchSize||50)),batches:DPost[][]=[],idBatches:number[][]=[];
+  for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
+  let cursor=0;
+  const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
+  const workers=Array.from({length:concurrency},async()=>{
+    while(true){
+      const index=cursor++;if(index>=idBatches.length)return;
+      batches[index]=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index]);
     }
-  }
-  const unique=new Map(posts.map(p=>[p.id,p]));posts=[...unique.values()].sort((a,b)=>a.post_number-b.post_number);
-  const extracted=fromPosts(posts,topicUrl.href,settings),d=settings?.dedupe===false?{items:extracted,duplicates:0}:dedupeMedia(extracted);
-  const warnings=fetched.warning?[fetched.warning]:[];
-  return {url:raw,kind:"discourse",title:topic.title,items:d.items,complete:posts.length>=Math.min(stream.length,effectiveMax),postsScanned:posts.length,totalPosts:stream.length,diagnostics:{adapter:"Discourse",ignored:0,duplicates:d.duplicates,warnings}};
+  });
+  await Promise.all(workers);
+  for(const batch of batches)if(batch)posts.push(...batch);
+  return makeResult(raw,topic,posts,stream,settings,posts.length>=Math.min(stream.length,effectiveMax),fetched.warning);
 }

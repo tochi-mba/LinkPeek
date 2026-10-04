@@ -24,7 +24,7 @@ await build({
   format: "iife",
   target: "chrome120",
   sourcemap: false,
-  minify: false
+  minify: true
 });
 
 await cp("public", out, { recursive: true });
