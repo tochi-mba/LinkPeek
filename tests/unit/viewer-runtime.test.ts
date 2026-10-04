@@ -86,7 +86,7 @@ describe("Viewer runtime",()=>{
     v.show(result([item(0)]));expect(v.panel.querySelector("img.lp-image")).toBeTruthy();
     const decoded=document.createElement("img");preload.isReady.mockReturnValue(true);preload.element.mockReturnValue(decoded);
     v.show(result([item(0)]));expect(v.panel.querySelector(".lp-image")).toBe(decoded);
-    v.show(result([]));expect(v.panel.textContent).toContain("No posted media");
+    v.show(result([],true,"https://empty.test/page"));expect(v.panel.textContent).toContain("No posted media");
     v.error("<bad>");expect(v.panel.innerHTML).toContain("&lt;bad&gt;");
     v.pinned=true;v.close();expect(v.root.childElementCount).toBe(1);
     v.close(true);expect(v.root.childElementCount).toBe(0);expect(preload.dispose).toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe("Viewer runtime",()=>{
     v.index=2;v.move(1);await tick();expect(v.index).toBe(2);
     let resolve!:()=>void;preload.ensure.mockImplementationOnce(()=>new Promise<void>(r=>resolve=r));
     v.index=0;v.move(1);v.move(2);resolve();await tick();await tick();expect(v.index).toBe(2);
-    v.show(result([]));v.move(1);await tick();expect(v.index).toBe(0);
+    v.show(result([],true,"https://empty.test/page"));v.move(1);await tick();expect(v.index).toBe(0);
     v.close(true);
   });
 
@@ -171,7 +171,7 @@ describe("Viewer runtime",()=>{
     v.key(new KeyboardEvent("keydown",{key:"b"}));await tick();expect(v.panel.textContent).toContain("1 / 1");
     (v as any).position(1190,890);expect(parseInt(v.panel.style.left)).toBeLessThan(1190);
     (v.panel.querySelector(".lp-helpbtn") as HTMLButtonElement).click();expect(v.help).toBe(true);
-    v.show(result([item(0,"gif")]));expect((v as any).helpMarkup()).toContain("GIF play");
+    v.show(result([item(0,"gif")],true,"https://gif.test/page"));expect((v as any).helpMarkup()).toContain("GIF play");
     v.panel.dispatchEvent(new MouseEvent("mouseenter"));v.pinned=false;v.panel.dispatchEvent(new MouseEvent("mouseleave"));vi.runAllTimers();
     vi.useRealTimers();v.close(true);
   });
