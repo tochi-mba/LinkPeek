@@ -19,7 +19,7 @@ vi.mock("../../src/ui/viewer",()=>({
 const scan=(url:string):ScanResult=>({url,kind:"generic",title:"x",items:[],complete:true,diagnostics:{adapter:"x",ignored:0,duplicates:0,warnings:[]}});
 
 describe("content script runtime",()=>{
-  let store:any,changed:Function[],runtimeListeners:Function[],messages:any[],idleCb:Function|undefined,viewer:any;
+  let store:any,changed:Function[],runtimeListeners:Function[],messages:any[],idleCb:Function|undefined,viewer:any,docListeners:Array<{type:string;listener:EventListenerOrEventListenerObject;options:any}>;
   let sendImpl:(msg:any)=>Promise<any>;
   const tick=async()=>{await Promise.resolve();await Promise.resolve();await Promise.resolve()};
 
@@ -27,7 +27,11 @@ describe("content script runtime",()=>{
     vi.resetModules();vi.useFakeTimers();vm.instances.length=0;document.body.innerHTML="";
     store={settings:{...DEFAULT_SETTINGS,hoverDelay:20,closeDelay:10,prefetch:"nearby"},viewerState:{view:"grid",gridThumbSize:90,expanded:false}};
     settingsHarness.current=store.settings;
-    changed=[];runtimeListeners=[];messages=[];idleCb=undefined;
+    changed=[];runtimeListeners=[];messages=[];idleCb=undefined;docListeners=[];
+    const add=document.addEventListener.bind(document);
+    vi.spyOn(document,"addEventListener").mockImplementation(((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
+      docListeners.push({type,listener,options});add(type,listener,options);
+    }) as typeof document.addEventListener);
     sendImpl=async(msg:any)=>{if(msg.type==="LINKPEEK_SCAN")return scan(msg.url);return {ok:true}};
     vi.stubGlobal("chrome",{
       storage:{
@@ -42,7 +46,7 @@ describe("content script runtime",()=>{
     vi.stubGlobal("requestIdleCallback",vi.fn((cb:Function)=>{idleCb=cb;return 1}));
     await import("../../src/content");await tick();viewer=vm.instances.at(-1);
   });
-  afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML=""});
+  afterEach(()=>{for(const {type,listener,options} of docListeners)document.removeEventListener(type,listener,options);vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML=""});
 
   const update=async(patch:any)=>{store.settings={...store.settings,...patch};settingsHarness.current=store.settings;for(const cb of changed)await cb({settings:{newValue:store.settings}});await tick()};
   const link=(id:string,href:string,rect:any={left:10,top:10,right:110,bottom:30})=>{
