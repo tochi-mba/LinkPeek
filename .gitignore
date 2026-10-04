@@ -7,3 +7,4 @@ linkpeek.pem
 *.crx
 *.zip
 .DS_Store
+site/favicon.png
