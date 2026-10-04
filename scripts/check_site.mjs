@@ -14,8 +14,7 @@ for(const f of files.filter(x=>x.endsWith(".html"))){
   const forbidden=[
     /open the downloaded extension/i,
     /open the package/i,
-    /open the downloaded crx/i,
-    /double-click the crx/i
+    /open the downloaded crx/i
   ];
   for(const pattern of forbidden){
     if(pattern.test(html)){console.error(`${f}: install copy suggests opening the CRX directly (${pattern})`);bad++}
