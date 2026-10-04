@@ -32,6 +32,9 @@ describe("shared runtime coverage",()=>{
     expect(classifyLink("mailto:a@b.test")).toBe("ignored");
     expect(classifyLink("https://x.test/article")).toBe("generic");
     expect(classifyLink("http://[bad")).toBe("ignored");
+    const originalLocation=(globalThis as any).location;vi.stubGlobal("location",undefined);
+    expect(classifyLink("https://x.test/no-location.jpg")).toBe("direct-image");
+    vi.stubGlobal("location",originalLocation);
   });
 
   it("canonicalizes media URLs and tolerates invalid URLs",()=>{
@@ -86,8 +89,10 @@ describe("shared runtime coverage",()=>{
     expect(removed.saved).toBe(false);
     const added=await toggleFavorite({url:"https://x.test/c",title:" C ",mediaCount:9});
     expect(added.saved).toBe(true);expect(added.favorite?.title).toBe("C");
+    const fallback=await toggleFavorite({url:"https://x.test/d"});expect(fallback.favorite?.title).toBe("https://x.test/d");
+    expect(await isFavorite("https://x.test/missing")).toBe(false);
     await removeFavorite("https://x.test/b");
-    expect((await loadFavorites()).map(x=>x.url)).toEqual(["https://x.test/c"]);
+    expect((await loadFavorites()).map(x=>x.url)).toEqual(["https://x.test/d","https://x.test/c"]);
   });
 
   it("scans direct images, GIFs, HTML pages, untitled pages and HTTP errors",async()=>{
@@ -106,6 +111,16 @@ describe("shared runtime coverage",()=>{
     const html=await scanGeneric("https://x.test/page",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0});expect(html.title).toBe("A Page");expect(html.items).toHaveLength(1);
     const untitled=await scanGeneric("https://x.test/no-title",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0});expect(untitled.title).toBeUndefined();
     await expect(scanGeneric("https://x.test/fail")).rejects.toThrow("HTTP 404");
+  });
+
+
+  it("covers generic responses without a content-type header",async()=>{
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>({
+      ok:true,status:200,url:String(input),headers:{get:()=>null},
+      text:async()=>'<img src="/plain.jpg" width="400" height="300">'
+    } as any)));
+    const r=await scanGeneric("https://x.test/plain",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0});
+    expect(r.kind).toBe("generic");expect(r.items).toHaveLength(1);
   });
 
   it("covers extraction filtering, formats, srcsets, dimensions, quotes and missing attributes",()=>{
