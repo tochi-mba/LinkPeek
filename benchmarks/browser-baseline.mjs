@@ -88,7 +88,7 @@ try{
     await page.keyboard.press("Escape").catch(()=>{});
     await page.waitForTimeout(60);
   }
-  async function hoverMeasure(selector,expected,{resetNet=true,label=selector}={}){
+  async function hoverMeasure(selector,expected,{resetNet=true,label=selector,resultTimeout=5000}={}){
     console.log("BASELINE_CASE_START",label,expected);
     await page.reload({waitUntil:"domcontentloaded"});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
@@ -98,8 +98,17 @@ try{
     await target.dispatchEvent("pointerover",{pointerType:"mouse",clientX:box.x+box.width/2,clientY:box.y+box.height/2,bubbles:true});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-panel")),null,{timeout:10000});
     const panel=performance.now()-t;
-    await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes(exp)),expected,{timeout:30000});
-    const measured={panel_ms:round(panel),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes};console.log("BASELINE_CASE_DONE",label,JSON.stringify(measured));return measured;
+    let timedOut=false;
+    try{
+      await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>{
+        const text=n.shadowRoot?.textContent||"";
+        return text.includes(exp)||text.includes("Preview unavailable")
+      }),expected,{timeout:resultTimeout});
+    }catch{timedOut=true}
+    const panelText=await page.evaluate(()=>Array.from(document.documentElement.children).map(n=>n.shadowRoot?.textContent||"").join("\n"));
+    const ok=panelText.includes(expected);
+    const measured={panel_ms:round(panel),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes,ok,timed_out:timedOut,panel_text:ok?undefined:panelText.slice(0,600)};
+    console.log("BASELINE_CASE_DONE",label,JSON.stringify(measured));return measured;
   }
   await patchSettings({hoverDelay:300});
   const defaultHover=await hoverMeasure("#direct","1 media",{label:"default_hover_direct"});results.latency.default_hover_direct=defaultHover;
