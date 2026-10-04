@@ -91,6 +91,7 @@ describe("content script runtime",()=>{
     const b=link("click","https://x.test/click");const ev=new MouseEvent("click",{bubbles:true,cancelable:true,clientX:30,clientY:30});b.dispatchEvent(ev);await tick();
     expect(ev.defaultPrevented).toBe(true);expect(messages.some(x=>x.url?.includes("click"))).toBe(true);
     document.body.dispatchEvent(new MouseEvent("click",{bubbles:true}));
+    document.dispatchEvent(new MouseEvent("click",{bubbles:true}));
   });
 
   it("filters unsupported hover links and disabled site settings",async()=>{
@@ -121,6 +122,29 @@ describe("content script runtime",()=>{
     runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:active.token,url:active.url,result:scan(active.url)});expect(viewer.show).toHaveBeenCalled();
     const newer=link("newer","https://x.test/newer");pointer("pointerover",newer);vi.advanceTimersByTime(21);await tick();
     resolve?.(scan(active.url));await tick();
+  });
+
+  it("clears both hover timers and activates a new link while a pinned scan is active",async()=>{
+    const immediate=link("immediate","https://x.test/immediate");
+    pointer("pointerover",immediate,10,10);
+    immediate.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:document.body}));
+
+    const moving=link("moving-clear","https://x.test/moving-clear");
+    pointer("pointerover",moving,10,10);pointer("pointermove",moving,200,200);
+    moving.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:document.body}));
+    vi.advanceTimersByTime(200);await tick();
+
+    let resolveSlow!:(v:any)=>void;
+    sendImpl=async(msg:any)=>{
+      if(msg.type==="LINKPEEK_SCAN"&&msg.url.includes("pinned-slow"))return await new Promise(r=>{resolveSlow=r});
+      if(msg.type==="LINKPEEK_SCAN")return scan(msg.url);
+      return {ok:true};
+    };
+    const slow=link("pinned-slow","https://x.test/pinned-slow");pointer("pointerover",slow);vi.advanceTimersByTime(21);await tick();
+    viewer.pinned=true;
+    const next=link("pinned-next","https://x.test/pinned-next");pointer("pointerover",next);vi.advanceTimersByTime(21);await tick();
+    expect(messages.some(x=>x.type==="LINKPEEK_CANCEL_SCAN"&&x.url.includes("pinned-slow"))).toBe(true);
+    resolveSlow?.(scan(slow.href));await tick();viewer.pinned=false;
   });
 
   it("honors continue-after-close policies and pinning",async()=>{
