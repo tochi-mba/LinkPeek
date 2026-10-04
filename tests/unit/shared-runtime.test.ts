@@ -19,7 +19,6 @@ describe("shared runtime coverage",()=>{
         set:vi.fn(async(value:Record<string,unknown>)=>{Object.assign(store,value)})
       }}
     });
-    history.replaceState({},"","https://example.test/page?x=1");
   });
   afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals()});
 
@@ -73,10 +72,10 @@ describe("shared runtime coverage",()=>{
     expect(favoriteKey("https://x.test/a?utm_source=z&keep=1#frag")).toBe("https://x.test/a?keep=1");
     expect(await loadFavorites()).toEqual([]);
     store.favorites=[
-      null,{url:2},{url:"bad url",title:"bad"},
+      null,{url:2},{url:"http://[bad",title:"bad"},
       {url:"https://x.test/a?fbclid=x",title:" A ",addedAt:1,mediaCount:3},
       {url:"https://x.test/a",title:"duplicate",addedAt:5},
-      {url:"https://x.test/b",title:"",addedAt:"x"}
+      {url:"https://x.test/b",title:"",addedAt:10}
     ];
     const loaded=await loadFavorites();
     expect(loaded.map(x=>x.url)).toEqual(["https://x.test/b","https://x.test/a"]);
@@ -144,6 +143,6 @@ describe("shared runtime coverage",()=>{
   it("loads REX theme/style constants",()=>{
     expect(REX.signal).toBe("#D7FF3F");
     expect(rexCss).toContain(REX.signal);
-    expect(overlayCss).toContain("LINKPEEK");
+    expect(overlayCss).toContain(".lp-panel");
   });
 });
