@@ -21,7 +21,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: ALLOW_MISSING_DOWNLOADS=1 node scripts/check_site.mjs
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps --no-shell chromium
       - run: timeout 4m npm run test:e2e
       - uses: actions/upload-artifact@v7
         if: failure()
