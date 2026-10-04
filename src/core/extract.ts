@@ -40,7 +40,7 @@ export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<Med
     const srcset=attr(tag,"srcset");let preview=original;
     if(srcset){const choices=srcset.split(",").map(x=>x.trim().split(/\s+/)[0]).filter(Boolean);const optimized=choices.find(x=>/\/optimized\//.test(x));preview=abs(optimized||choices[0]||original,baseUrl)}
     const animated=/\banimated\b/.test(cls)||/\.gif(?:$|\?)/i.test(original);
-    out.push({id:key,type:animated?"gif":"image",originalUrl:canonical,previewUrl:preview,sourceUrl:baseUrl,filename:attr(tag,"alt")||filename(original),width:w,height:h,score:animated?.9:.65,...meta});
+    out.push({id:key,type:animated?"gif":"image",originalUrl:canonical,previewUrl:preview,sourceUrl:baseUrl,filename:attr(tag,"alt")||filename(original),width:w,height:h,score:animated?0.9:0.65,...meta});
   }
   return out;
 }
