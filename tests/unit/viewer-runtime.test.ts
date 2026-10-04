@@ -195,8 +195,15 @@ describe("Viewer runtime",()=>{
 
     preload.isReady.mockReturnValue(true);preload.element.mockReturnValue(undefined);
     v.show(bare);expect(v.panel.querySelector(".lp-image-slot")).toBeTruthy();
+    const decoded=document.createElement("img");preload.element.mockReturnValue(decoded);
+    v.show(bare);expect(decoded.alt).toBe("Preview image");
+
+    v.view="grid";v.show({...bare,items:[item(0)]});
+    expect(v.panel.querySelector(".lp-grid-progress")?.textContent).toContain("0/? posts");
+    v.view="focus";
 
     const full=result([item(0),item(1),item(2),item(3)]);v.show(full);
+    const destroy=vi.fn();v.gifPlayer={init:async()=>{},destroy,key:()=>false};(v as any).render();expect(destroy).toHaveBeenCalled();
     const callbacks=(v.gesture as any).cb;
     callbacks.next();await tick();callbacks.previous();await tick();
     callbacks.next(2);await tick();callbacks.previous(2);await tick();
