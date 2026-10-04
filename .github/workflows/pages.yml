@@ -45,7 +45,7 @@ jobs:
           test -x "$CHROMIUM"
           if [ -n "$LINKPEEK_CRX_KEY_B64" ]; then
             printf '%s' "$LINKPEEK_CRX_KEY_B64" | base64 -d > linkpeek.pem
-            "$CHROMIUM" --no-sandbox --no-sandbox --pack-extension="$GITHUB_WORKSPACE/dist" --pack-extension-key="$GITHUB_WORKSPACE/linkpeek.pem"
+            "$CHROMIUM" --no-sandbox --pack-extension="$GITHUB_WORKSPACE/dist" --pack-extension-key="$GITHUB_WORKSPACE/linkpeek.pem"
           else
             echo "::warning::LINKPEEK_CRX_KEY_B64 is not configured; generating a packaging key for this build. Add the secret for a stable extension ID across releases."
             "$CHROMIUM" --no-sandbox --pack-extension="$GITHUB_WORKSPACE/dist"
