@@ -72,7 +72,7 @@ function onOut(e:PointerEvent){
   }
   currentAnchor=null;
 }
-function clear(){if(hoverTimer)clearTimeout(hoverTimer);if(hoverRearmTimer)clearTimeout(hoverRearmTimer);hoverTimer=undefined;hoverRearmTimer=undefined}
+function clear(){clearTimeout(hoverTimer);clearTimeout(hoverRearmTimer);hoverTimer=undefined;hoverRearmTimer=undefined}
 async function activate(a:HTMLAnchorElement,x:number,y:number){
   clear();if(activeScan)detachOrCancel(activeScan,"switch");
   const id=++requestId,eff=effectiveSettings(settings,a.href),kind=classifyLink(a.href),token=`${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
