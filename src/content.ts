@@ -27,8 +27,14 @@ function onOver(e:PointerEvent){
   hoverTimer=window.setTimeout(()=>activate(a,e.clientX,e.clientY),eff.hoverDelay);
 }
 function onMove(e:PointerEvent){
-  if(!currentAnchor||!hoverTimer)return;
+  if(!currentAnchor)return;
   const eff=effectiveSettings(settings,currentAnchor.href);
+  if(settings.activationMode==="modifier"&&e.altKey&&!hoverTimer){
+    startX=e.clientX;startY=e.clientY;
+    hoverTimer=window.setTimeout(()=>currentAnchor&&activate(currentAnchor,e.clientX,e.clientY),eff.hoverDelay);
+    return;
+  }
+  if(!hoverTimer)return;
   if(Math.hypot(e.clientX-startX,e.clientY-startY)>eff.cancelMovePx){clearTimeout(hoverTimer);hoverTimer=undefined}
 }
 function onOut(e:PointerEvent){
@@ -36,7 +42,8 @@ function onOut(e:PointerEvent){
   const to=e.relatedTarget as Node|null;
   if(to&&viewer.host.contains(to))return;
   clear();
-  if(!viewer.pinned)viewer.closeTimer=window.setTimeout(()=>viewer.close(),effectiveSettings(settings,a.href).closeDelay);
+  if(!viewer.pinned){requestId++;viewer.closeTimer=window.setTimeout(()=>viewer.close(),effectiveSettings(settings,a.href).closeDelay)}
+  currentAnchor=null;
 }
 function clear(){if(hoverTimer)clearTimeout(hoverTimer);hoverTimer=undefined}
 async function activate(a:HTMLAnchorElement,x:number,y:number){
