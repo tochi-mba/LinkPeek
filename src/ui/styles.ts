@@ -10,7 +10,7 @@ export const overlayCss=rexCss+`
 .lp-meta{font:700 11px ui-monospace,monospace;color:${REX.muted}}
 .lp-btn{min-width:36px;height:36px;border:1px solid transparent;border-radius:9px;background:transparent;color:${REX.muted};display:grid;place-items:center}
 .lp-btn:hover,.lp-btn[aria-pressed="true"]{color:${REX.signal};background:${REX.raised};border-color:${REX.line}}
-.lp-stage{position:relative;height:min(var(--lp-stageh,54vh),calc(var(--lp-maxh,70vh) - 92px));min-height:260px;background:#050605;display:grid;place-items:center;overflow:hidden;touch-action:none}
+.lp-stage{position:relative;height:min(var(--lp-stageh,54vh),calc(var(--lp-maxh,70vh) - 92px));min-height:260px;background:#050605;display:grid;place-items:center;overflow:hidden;touch-action:none;cursor:default}.lp-stage.lp-dragging{cursor:grabbing}
 .lp-expanded .lp-stage{height:calc(var(--lp-expandedh,92vh) - 94px);max-height:calc(100vh - 110px);min-height:320px}
 .lp-image,.lp-image-slot{max-width:100%;max-height:100%;object-fit:contain;transform-origin:0 0;will-change:transform;user-select:none;-webkit-user-drag:none}.lp-image-slot{width:100%;height:100%}
 .lp-gif-mount{position:absolute;inset:0;display:grid;place-items:center}
@@ -37,6 +37,7 @@ export const overlayCss=rexCss+`
 @keyframes pulse{to{opacity:.25;transform:scale(.7)}}
 .lp-foot{min-height:44px;display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid ${REX.line};font-size:11px;color:${REX.muted}}
 .lp-count{font-family:ui-monospace,monospace;color:${REX.text};font-weight:700}.lp-spacer{flex:1}.lp-signal{color:${REX.signal}}
+.lp-grid-progress{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid ${REX.line};background:${REX.raised};color:${REX.muted};font:700 10px ui-monospace,monospace}.lp-grid-progress .lp-loading-dot{width:6px;height:6px;flex:none}
 .lp-grid{position:relative;height:min(65vh,640px);min-height:260px;overflow:auto;background:${REX.ink};contain:strict;overscroll-behavior:contain}
 .lp-expanded .lp-grid{height:calc(var(--lp-expandedh,92vh) - 94px);max-height:calc(100vh - 110px)}
 .lp-grid-spacer{width:1px;opacity:0;pointer-events:none}
