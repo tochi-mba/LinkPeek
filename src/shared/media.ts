@@ -10,7 +10,7 @@ export interface ScanResult{
 }
 export function classifyLink(raw:string):LinkKind{
   try{
-    const u=new URL(raw,location.href);
+    const u=new URL(raw,typeof location!=="undefined"?location.href:"https://example.test/");
     if(u.hash&&u.origin===location.origin&&u.pathname===location.pathname&&u.search===location.search)return "anchor";
     if(/\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])/i.test(u.href))return "direct-image";
     if(/\.(?:mp4|webm|mov)(?:$|[?#])/i.test(u.href))return "direct-video";
