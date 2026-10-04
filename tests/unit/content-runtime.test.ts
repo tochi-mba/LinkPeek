@@ -74,8 +74,8 @@ describe("content script runtime",()=>{
   it("supports modifier hover and click activation modes",async()=>{
     const a=link("mod","https://x.test/mod");
     await update({activationMode:"modifier"});
-    pointer("pointerover",a);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.url?.includes("mod"))).toBe(false);
-    pointer("pointermove",a,20,20,{altKey:true});vi.advanceTimersByTime(25);await tick();expect(messages.some(x=>x.url?.includes("mod"))).toBe(true);
+    pointer("pointerover",a);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url?.includes("mod"))).toBe(false);
+    pointer("pointermove",a,20,20,{altKey:true});vi.advanceTimersByTime(25);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url?.includes("mod"))).toBe(true);
     pointer("pointermove",a,21,21,{altKey:false});
     await update({activationMode:"click"});
     const b=link("click","https://x.test/click");const ev=new MouseEvent("click",{bubbles:true,cancelable:true,clientX:30,clientY:30});b.dispatchEvent(ev);await tick();
@@ -87,7 +87,7 @@ describe("content script runtime",()=>{
     for(const [name,url] of [["anchor","#x"],["download","https://x.test/a.zip"],["ignored","mailto:a@b.test"]] as const){
       const a=link(name,url);pointer("pointerover",a);vi.advanceTimersByTime(30);await tick();
     }
-    const before=messages.length;await update({enabled:false});const x=link("disabled","https://x.test/disabled");pointer("pointerover",x);vi.advanceTimersByTime(30);await tick();expect(messages.length).toBe(before);
+    const before=messages.filter(x=>x.type==="LINKPEEK_SCAN").length;await update({enabled:false});const x=link("disabled","https://x.test/disabled");pointer("pointerover",x);vi.advanceTimersByTime(30);await tick();expect(messages.filter(x=>x.type==="LINKPEEK_SCAN").length).toBe(before);
   });
 
   it("handles progressive messages, cancelled/error/throwing scans and stale responses",async()=>{
@@ -96,8 +96,8 @@ describe("content script runtime",()=>{
       if(msg.type!=="LINKPEEK_SCAN")return {ok:true};
       if(msg.url.includes("cancel"))return {cancelled:true};
       if(msg.url.includes("error"))return {error:"bad"};
-      if(msg.url.includes("throw"))throw new Error("boom");
       if(msg.url.includes("stringthrow"))throw "oops";
+      if(msg.url.includes("throw"))throw new Error("boom");
       if(msg.url.includes("slow"))return await new Promise(r=>{resolve=r});
       return scan(msg.url);
     };
