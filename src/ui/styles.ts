@@ -18,6 +18,9 @@ export const overlayCss=rexCss+`
 .lp-gif-surface{min-height:0;display:grid;place-items:center;overflow:hidden;padding:8px 8px 0}
 .lp-gif-canvas{display:block;width:auto;height:auto}
 .lp-gif-preparing,.lp-gif-fallback{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:${REX.muted};font-size:12px;text-align:center}
+.lp-gif-native-prep{position:absolute;inset:0;display:grid;place-items:center;overflow:hidden}
+.lp-gif-native-prep .lp-gif-native{max-width:100%;max-height:100%;object-fit:contain}
+.lp-gif-native-prep .lp-gif-preparing{inset:auto 12px 12px auto;display:block;padding:6px 9px;border:1px solid ${REX.line};border-radius:999px;background:rgba(17,21,18,.86);backdrop-filter:blur(8px);color:${REX.muted};font-size:10px;line-height:1}
 .lp-gif-fallback img{max-width:100%;max-height:calc(100% - 38px)}
 .lp-gif-fallback span{position:absolute;bottom:12px;background:rgba(17,21,18,.9);border:1px solid ${REX.line};border-radius:999px;padding:6px 10px}
 .lp-gif-controls{display:grid;grid-template-columns:32px 38px 32px minmax(80px,1fr) auto auto 34px;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(180deg,rgba(8,10,9,.4),rgba(8,10,9,.97));border-top:1px solid ${REX.line};z-index:4}
