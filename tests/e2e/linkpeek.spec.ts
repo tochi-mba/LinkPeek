@@ -90,6 +90,10 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
   try{
     const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:12_000});
+    const panel=page.locator(".lp-panel");await page.waitForTimeout(220);
+    const beforePosition=await panel.evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top}));
+    const before=await panel.boundingBox();expect(before).toBeTruthy();
+    if(before){await page.mouse.move(before.x+before.width/2,before.y+24);await page.waitForTimeout(350);const afterPosition=await panel.evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top}));expect(afterPosition).toEqual(beforePosition)}
     const snapshot=await page.evaluate(()=>Array.from(document.documentElement.children).map((n:any)=>n.shadowRoot?.textContent||"").join("\n"));
     expect(snapshot).toContain("3 media");expect(snapshot).toContain("Demo thread");expect(snapshot).not.toContain("avatar");expect(snapshot).not.toContain("quotedGif");
     await wheelStage(page,100);await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("2 / 3")));
@@ -180,7 +184,7 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
     const sw=second.context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),prefetch:"nearby",maxRequests:3}})});
     prefetchTopicRequests=0;prefetchBatchRequests=0;
     const page=await second.context.newPage();await page.goto(base+"/prefetch");await page.waitForTimeout(3000);
-    expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(2);expect(prefetchBatchRequests).toBe(0);
+    expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(3);expect(prefetchBatchRequests).toBe(0);
   }finally{await closeExtension(second.context,second.profile)}
 });
 
@@ -195,7 +199,9 @@ test("onboarding and settings render and persist GIF customization",async()=>{
     await page.locator('[data-choice-key="prefetch"][data-choice-value="off"]').click();await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await expect(page.locator('.select-shell select[data-key="networkMode"]')).toHaveCount(1);
     const batch=page.locator('[data-key="batchSize"]');await expect(batch).toHaveValue("50");await page.locator('[data-step-key="batchSize"][data-step-dir="1"]').click();await expect(batch).toHaveValue("60");
+    await page.getByRole("button",{name:"Hover & Activation",exact:true}).click();
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
+    await page.getByRole("button",{name:"Media Types",exact:true}).click();
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
     await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();

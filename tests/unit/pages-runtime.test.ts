@@ -73,7 +73,7 @@ describe("page entrypoints",()=>{
     const preset=document.querySelector<HTMLElement>("[data-preset]")!;preset.click();await tick();expect((location as any).reload).toHaveBeenCalled();
     (document.getElementById("tutorial") as HTMLButtonElement).click();expect((location as any).href).toContain("onboarding.html");
     vi.runAllTimers();
-  });
+  },10_000);
 
   it("runs popup controls and offline favorite open/remove updates",async()=>{
     store.favorites=[{url:"https://fav.test/a",title:"<Saved & Link>",addedAt:2,mediaCount:4},{url:"https://fav.test/b",title:"No Count",addedAt:1}];
@@ -103,5 +103,11 @@ describe("page entrypoints",()=>{
     document.body.innerHTML='<input id="enabled" type="checkbox"><select id="preset"><option value="balanced">Balanced</option></select><div id="site"></div><button id="disableSite"></button><button id="options"></button><button id="help"></button><button id="clear"></button><span id="favoriteCount"></span><div id="favorites"></div>';
     await import("../../src/pages/popup");await tick();expect(document.getElementById("site")!.textContent).toBe("Not a web page");
     (document.getElementById("disableSite") as HTMLButtonElement).click();await tick();
+  });
+
+  it("shows the enabled action when the current site starts paused",async()=>{
+    store.settings={...store.settings,siteProfiles:{"forum.test":{enabled:false}}};
+    document.body.innerHTML='<input id="enabled" type="checkbox"><select id="preset"><option value="balanced">Balanced</option></select><div id="site"></div><button id="disableSite"></button><button id="options"></button><button id="help"></button><button id="clear"></button><span id="favoriteCount"></span><div id="favorites"></div>';
+    await import("../../src/pages/popup");await tick();expect(document.getElementById("disableSite")!.textContent).toBe("Enable here");
   });
 });

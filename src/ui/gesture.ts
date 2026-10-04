@@ -26,17 +26,23 @@ export class GestureController{
     return Math.min(this.settings.maxImagesPerSwipe,Math.max(1,Math.floor(Math.abs(delta)/(this.settings.gestureThreshold*1.8))));
   }
   private onWheel=(e:WheelEvent)=>{
+    const unit=e.deltaMode===WheelEvent.DOM_DELTA_LINE?16:e.deltaMode===WheelEvent.DOM_DELTA_PAGE?Math.max(320,this.el.clientHeight):1;
+    const dx=e.deltaX*unit,dy=e.deltaY*unit;
     if(e.ctrlKey&&this.settings.pinchZoom){
-      e.preventDefault();const factor=Math.exp(-e.deltaY*.004*this.settings.pinchSensitivity);this.cb.zoom(factor,e.offsetX,e.offsetY);return;
+      e.preventDefault();const factor=Math.exp(-dy*.004*this.settings.pinchSensitivity);this.cb.zoom(factor,e.offsetX,e.offsetY);return;
     }
     if(this.cb.isZoomed()&&this.settings.panWhenZoomed){
-      e.preventDefault();this.cb.pan(-e.deltaX*this.settings.panFriction,-e.deltaY*this.settings.panFriction);return;
+      e.preventDefault();this.cb.pan(-dx*this.settings.panFriction,-dy*this.settings.panFriction);return;
     }
-    const horizontal=Math.abs(e.deltaX)>Math.abs(e.deltaY)*1.25;
+    if(this.settings.mouseWheel==="scroll")return;
+    if(this.settings.mouseWheel==="zoom"&&Math.abs(dy)>=Math.abs(dx)){
+      e.preventDefault();this.cb.zoom(Math.exp(-dy*.002*this.settings.pinchSensitivity),e.offsetX,e.offsetY);return;
+    }
+    const horizontal=Math.abs(dx)>Math.abs(dy)*1.25;
     if(horizontal&&this.settings.horizontalGesture==="disabled")return;
     if(!horizontal&&(this.settings.verticalGesture==="disabled"||this.settings.verticalGesture==="scroll"))return;
     e.preventDefault();
-    const now=performance.now();this.accX+=e.deltaX;this.accY+=e.deltaY;
+    const now=performance.now();this.accX+=dx;this.accY+=dy;
     if(this.settings.momentumFiltering&&now<this.lockedUntil)return;
     const threshold=Math.max(12,this.settings.gestureThreshold*(1.2-this.settings.navSensitivity*.4));
     if(horizontal&&Math.abs(this.accX)>=threshold){

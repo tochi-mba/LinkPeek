@@ -81,6 +81,19 @@ describe("Viewer runtime",()=>{
     v.close(true);
   });
 
+  it("keeps a progressive focus view stable and exposes a forgiving pointer bridge",()=>{
+    const {v,preload}=make();
+    expect(v.isOpen).toBe(true);
+    Object.defineProperty(v.panel,"getBoundingClientRect",{configurable:true,value:()=>({left:100,top:100,right:500,bottom:500,width:400,height:400,x:100,y:100,toJSON(){}})});
+    expect(v.containsPoint(120,120)).toBe(true);expect(v.containsPoint(900,900)).toBe(false);expect(v.containsPoint(90,30,{left:10,top:10,right:80,bottom:40} as DOMRect)).toBe(true);
+    v.settings={...v.settings,magneticBridge:false};expect(v.containsPoint(90,30,{left:10,top:10,right:80,bottom:40} as DOMRect)).toBe(false);
+    v.settings={...v.settings,magneticBridge:true};
+    const first=result([item(0)],false);first.postsScanned=undefined;first.totalPosts=undefined;v.show(first);const stage=v.panel.querySelector(".lp-stage");
+    const next=result([item(0),item(1)],false);next.postsScanned=undefined;next.totalPosts=undefined;v.show(next);expect(v.panel.querySelector(".lp-stage")).toBe(stage);expect(preload.reset).toHaveBeenCalled();expect(v.panel.textContent).toContain("0/? posts");
+    const final={...next,complete:true,postsScanned:10};v.show(final);expect(v.panel.querySelector(".lp-stage")).toBe(stage);expect(v.panel.textContent).toContain("Complete");
+    v.close(true);expect(v.isOpen).toBe(false);expect(v.containsPoint(120,120)).toBe(false);
+  });
+
   it("renders focus images, decoded element reuse, errors, empty results and pinned close behavior",async()=>{
     const {v,preload}=make();
     v.show(result([item(0)]));expect(v.panel.querySelector("img.lp-image")).toBeTruthy();
@@ -182,6 +195,12 @@ describe("Viewer runtime",()=>{
     v.gifPlayer={init:async()=>{},destroy:()=>{},key:()=>true};
     expect(v.key(new KeyboardEvent("keydown",{key:"x"}))).toBe(true);
     v.close(true);expect(v.key(new KeyboardEvent("keydown",{key:"x"}))).toBe(false);
+  });
+
+  it("does not capture shortcuts while the page is being edited",()=>{
+    const {v}=make();v.show(result([item(0)]));
+    const input=document.createElement("input");document.body.appendChild(input);let handled=true;input.addEventListener("keydown",e=>handled=v.key(e));input.dispatchEvent(new KeyboardEvent("keydown",{key:"g",bubbles:true}));expect(handled).toBe(false);
+    const editable=document.createElement("div");editable.setAttribute("contenteditable","true");document.body.appendChild(editable);editable.addEventListener("keydown",e=>handled=v.key(e));editable.dispatchEvent(new KeyboardEvent("keydown",{key:"g",bubbles:true}));expect(handled).toBe(false);
   });
   it("covers alternate focus rendering, metadata fallbacks and viewer gesture callbacks",async()=>{
     const {v,preload}=make({showLearningTips:false,quickViewControls:false});
