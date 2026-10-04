@@ -106,7 +106,7 @@ describe("content script runtime",()=>{
     }
     expect(viewer.error).toHaveBeenCalledWith("bad");expect(viewer.error).toHaveBeenCalledWith("boom");expect(viewer.error).toHaveBeenCalledWith("oops");
     const slow=link("slow","https://x.test/slow");pointer("pointerover",slow);vi.advanceTimersByTime(21);await tick();
-    const active=messages.findLast((x:any)=>x.type==="LINKPEEK_SCAN"&&x.url.includes("slow"));
+    const active=[...messages].reverse().find((x:any)=>x.type==="LINKPEEK_SCAN"&&x.url.includes("slow"));
     runtimeListeners[0]({type:"NO"});runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:"bad",url:active.url,result:scan(active.url)});
     runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:active.token,url:active.url,result:scan(active.url)});expect(viewer.show).toHaveBeenCalled();
     const newer=link("newer","https://x.test/newer");pointer("pointerover",newer);vi.advanceTimersByTime(21);await tick();
