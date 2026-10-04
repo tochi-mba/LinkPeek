@@ -42,7 +42,7 @@ export async function prepareGif(url:string,maxMb:number):Promise<PreparedGif>{
     return {frames,width,height};
   })().catch(error=>{preparedGifs.delete(url);throw error});
   preparedGifs.set(url,promise);
-  while(preparedGifs.size>PREPARED_CACHE_MAX){const oldest=preparedGifs.keys().next().value as string|undefined;if(!oldest||oldest===url)break;preparedGifs.delete(oldest)}
+  while(preparedGifs.size>PREPARED_CACHE_MAX){const oldest=preparedGifs.keys().next().value as string;preparedGifs.delete(oldest)}
   return promise;
 }
 
