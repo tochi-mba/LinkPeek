@@ -86,10 +86,11 @@ describe("MediaPreloader",()=>{
     await new Promise(r=>setTimeout(r,0));
 
     const decodeFail={...item(9),previewUrl:"https://x.test/decodefail.jpg"};
-    await p.ensure(decodeFail);expect(p.isReady(decodeFail)).toBe(true);
     const fail={...item(10),previewUrl:"https://x.test/fail.jpg"};
-    await p.ensure(fail);expect(p.isReady(fail)).toBe(false);
-    p.dispose();expect(cancel).toHaveBeenCalled();
+    const q=new MediaPreloader();q.reset([decodeFail,fail],0,{...DEFAULT_SETTINGS,preloadNext:0,preloadPrevious:0,preloadRest:"off",preloadMemoryMb:1024});
+    await q.ensure(decodeFail);expect(q.isReady(decodeFail)).toBe(true);
+    await q.ensure(fail);expect(q.isReady(fail)).toBe(false);
+    q.dispose();p.dispose();expect(cancel).toHaveBeenCalled();
   });
 
   it("uses timeout fallback when idle callbacks are unavailable and evicts outside the memory ring",async()=>{
