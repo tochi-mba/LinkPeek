@@ -147,7 +147,7 @@ export class GifPlayer{
     }
     const frame=this.frames[index];
     this.restoreBeforePrevious=frame.disposalType===3?this.ctx.getImageData(0,0,this.canvas.width,this.canvas.height):null;
-    this.ctx.putImageData(new ImageData(frame.patch,frame.dims.width,frame.dims.height),frame.dims.left,frame.dims.top);
+    this.ctx.putImageData(new ImageData(new Uint8ClampedArray(frame.patch),frame.dims.width,frame.dims.height),frame.dims.left,frame.dims.top);
     this.rendered=index;
   }
   private updateControls(){
