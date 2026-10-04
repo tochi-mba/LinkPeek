@@ -25,6 +25,12 @@ export function canonicalMediaUrl(raw:string){
     const u=new URL(raw);
     u.hash="";
     for(const k of [...u.searchParams.keys()]) if(/^utm_|^(fbclid|gclid)$/i.test(k))u.searchParams.delete(k);
-    return u.href.replace(/\/optimized\/(.+?)_\d+x\d+(?=\.[a-z]+$)/i,"/original/$1");
+    if(u.pathname.includes("/optimized/")){
+      u.pathname=u.pathname
+        .replace("/optimized/","/original/")
+        .replace(/_\d+_\d+x\d+(\.[a-z0-9]+)$/i,"$1")
+        .replace(/_\d+x\d+(\.[a-z0-9]+)$/i,"$1");
+    }
+    return u.href;
   }catch{return raw;}
 }
