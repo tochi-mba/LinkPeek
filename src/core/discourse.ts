@@ -78,7 +78,7 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
     initialProgressTimer=undefined;
     if(progressSent||completed>0)return;
     progressSent=true;lastProgressAt=performance.now();onProgress(initialResult);
-  },60);
+  },55);
   const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
   const compose=(complete=false)=>{
     const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+(b?.length??0),0);
