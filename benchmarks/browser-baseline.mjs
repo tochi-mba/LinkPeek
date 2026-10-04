@@ -133,11 +133,13 @@ try{
     results.ui.grid_1000_render_ms=round(performance.now()-t);results.memory.after_grid_1000=await heap();
   }else{
     results.ui.grid_1000_render_ms=null;results.memory.after_grid_1000=results.memory.after_large_focus;
+    await page.keyboard.press("g");t=performance.now();
+    await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("2 / 1000")));
+    results.ui.gesture_next_media_ms=round(performance.now()-t);
+  }else{
+    results.ui.gesture_next_media_ms=null;
   }
-  await page.keyboard.press("g");t=performance.now();
-  await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
-  await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("2 / 1000")));
-  results.ui.gesture_next_media_ms=round(performance.now()-t);
   await leave();await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_close_gc=await heap();
 
   await patchSettings({gifAutoplay:"never"});await page.reload({waitUntil:"domcontentloaded"});await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
