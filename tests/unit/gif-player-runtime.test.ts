@@ -73,6 +73,7 @@ describe("GIF runtime",()=>{
 
     (p as any).renderFrame(2);
     expect(ctx.clearRect).toHaveBeenCalled();
+    (p as any).applyFrame(0);
     expect(ctx.putImageData).toHaveBeenCalled();
     (p as any).renderFrame(0);
     expect(ctx.clearRect).toHaveBeenCalled();
