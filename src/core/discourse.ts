@@ -66,8 +66,9 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
   const fetched=seed??await fetchTopic(raw,jsonUrl,signal),topic=fetched.topic,initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
   const effectiveMax=settings?.scanScope==="first"?Math.min(maxPosts,50):maxPosts,stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
   const state=initialState(raw,topic,initial,stream,settings,fetched.warning),have=new Set(state.posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
-  const initialResult={...state.result,complete:missing.length===0};onProgress?.(initialResult);if(missing.length===0)return initialResult;
-  let lastProgressAt=performance.now();
+  const initialResult={...state.result,complete:missing.length===0};if(missing.length===0)return initialResult;
+  let initialProgressTimer:ReturnType<typeof setTimeout>|undefined,lastProgressAt=performance.now();
+  if(onProgress)initialProgressTimer=setTimeout(()=>{initialProgressTimer=undefined;lastProgressAt=performance.now();onProgress(initialResult)},75);
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
@@ -87,6 +88,10 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
       if(onProgress&&completed<idBatches.length&&now-lastProgressAt>=120){lastProgressAt=now;onProgress(compose(false))}
     }
   });
-  await Promise.all(workers);ensureNotAborted(signal);
-  const final=compose(true);final.complete=(final.postsScanned??0)>=Math.min(stream.length,effectiveMax);return final;
+  try{
+    await Promise.all(workers);ensureNotAborted(signal);
+    const final=compose(true);final.complete=(final.postsScanned??0)>=Math.min(stream.length,effectiveMax);return final;
+  }finally{
+    if(initialProgressTimer)clearTimeout(initialProgressTimer);
+  }
 }
