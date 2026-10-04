@@ -78,12 +78,13 @@ describe("shared runtime coverage",()=>{
       null,{url:2},{url:"http://[bad",title:"bad"},
       {url:"https://x.test/a?fbclid=x",title:" A ",addedAt:1,mediaCount:3},
       {url:"https://x.test/a",title:"duplicate",addedAt:5},
-      {url:"https://x.test/b",title:"",addedAt:10}
+      {url:"https://x.test/b",title:"",addedAt:10},
+      {url:"https://x.test/e",title:42,addedAt:0,mediaCount:NaN}
     ];
     const loaded=await loadFavorites();
-    expect(loaded.map(x=>x.url)).toEqual(["https://x.test/b","https://x.test/a"]);
+    expect(loaded.map(x=>x.url)).toEqual(["https://x.test/b","https://x.test/a","https://x.test/e"]);
     expect(loaded[0].title).toBe("https://x.test/b");
-    expect(loaded[1].mediaCount).toBe(3);
+    expect(loaded[1].mediaCount).toBe(3);expect(loaded[2].title).toBe("https://x.test/e");expect(loaded[2].mediaCount).toBeUndefined();
     expect(await isFavorite("https://x.test/a#z")).toBe(true);
     const removed=await toggleFavorite({url:"https://x.test/a"});
     expect(removed.saved).toBe(false);
