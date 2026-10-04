@@ -23,6 +23,13 @@ jobs:
       - run: ALLOW_MISSING_DOWNLOADS=1 node scripts/check_site.mjs
       - run: npx playwright install --with-deps --no-shell chromium
       - run: timeout 4m npm run test:e2e
+      - name: Package CRX smoke test
+        run: |
+          set -euxo pipefail
+          CHROMIUM=$(node -e "const {chromium}=require('@playwright/test'); process.stdout.write(chromium.executablePath())")
+          "$CHROMIUM" --pack-extension="$GITHUB_WORKSPACE/dist"
+          test -s dist.crx
+          rm -f dist.crx dist.pem
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
