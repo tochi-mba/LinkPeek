@@ -88,7 +88,9 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
   }
   if(msg?.type==="LINKPEEK_SCAN"){
     (async()=>{
-      const global=await loadSettings(),settings=effectiveSettings(global,msg.url),cached=cachedEntry(msg.url,settings);
+      const global=await loadSettings(),settings=effectiveSettings(global,msg.url);
+      const warm=prefetchTasks.get(msg.url);if(warm)await warm.catch(()=>null);
+      const cached=cachedEntry(msg.url,settings);
       if(cached?.result.complete)return cached.result;
       let task=tasks.get(msg.url);
       if(task?.controller.signal.aborted){tasks.delete(msg.url);task=undefined}
