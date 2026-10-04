@@ -162,6 +162,24 @@ describe("Discourse fallback and scope coverage",()=>{
     expect(r.postsScanned).toBe(1);expect(r.complete).toBe(false);expect(progress[0]).toBe(1);expect(calls.some(x=>x.includes("post_ids"))).toBe(true);
   });
 
+  it("covers zero-id fallback and missing post-stream/default concurrency branches",async()=>{
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response("no",{status:500})));
+    await expect(prefetchDiscourse("https://forum.example/t/zero/0")).rejects.toThrow("HTTP 500");
+
+    const emptySeed={topic:{id:87,title:"No stream"}};
+    const empty=await scanDiscourse("https://forum.example/t/no-stream/87",50,10,undefined,emptySeed);
+    expect(empty.items).toEqual([]);expect(empty.totalPosts).toBe(0);expect(empty.complete).toBe(true);
+
+    const seeded={topic:{id:88,title:"Default concurrency",post_stream:{stream:[1],posts:[]}}};
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+      const url=String(input);
+      if(url.includes("/t/88/posts.json"))return new Response(JSON.stringify({post_stream:{posts:[makePost(1)]}}),{status:200});
+      return new Response("missing",{status:404});
+    }));
+    const one=await scanDiscourse("https://forum.example/t/defaults/88",50,10,undefined,seeded);
+    expect(one.postsScanned).toBe(1);expect(one.complete).toBe(true);
+  });
+
   it("uses supplied seeds, page/first scan scopes, clamps large batches and runs without progress callbacks",async()=>{
     const posts=Array.from({length:3},(_,i)=>makePost(i+1)),seed={topic:{id:86,title:"Seed",post_stream:{stream:[1,2,3,4],posts}}};
     const fetchMock=vi.fn(async(input:RequestInfo|URL)=>{
