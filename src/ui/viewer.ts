@@ -33,13 +33,19 @@ export class Viewer{
     this.panel.addEventListener("mouseleave",()=>{if(!this.pinned)this.closeTimer=window.setTimeout(()=>this.close(),this.settings.closeDelay)});
   }
   key(e:KeyboardEvent){
-    if(!this.root.childElementCount)return false;const k=e.key.toLowerCase();
-    if(e.key==="Escape"){this.close(true);return true} if(k==="g"){this.view=this.view==="grid"?"focus":"grid";this.render();return true}
-    if(k==="p"){this.pinned=!this.pinned;this.render();return true} if(k==="?"||k==="/"){this.help=!this.help;this.render();return true}
-    if(["arrowdown","arrowright"," "].includes(k)){this.move(1);return true}if(["arrowup","arrowleft"].includes(k)){this.move(-1);return true}
-    if(k==="o"){const i=this.result?.items[this.index];if(i)window.open(i.originalUrl,"_blank","noopener");return true}
-    if(k==="d"){const i=this.result?.items[this.index];if(i)chrome.runtime.sendMessage({type:"LINKPEEK_DOWNLOAD",url:i.originalUrl,filename:i.filename});return true}
-    if(k==="0"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();return true}
+    if(!this.root.childElementCount)return false;
+    const hit=(action:string,fallback:string[]=[])=>[...(this.settings.shortcuts[action]??[]),...fallback].some(k=>k.toLowerCase()===e.key.toLowerCase());
+    if(hit("close",["Escape"])){this.close(true);return true}
+    if(hit("grid",["g"])){this.view=this.view==="grid"?"focus":"grid";this.render();return true}
+    if(hit("pin",["p"])){this.pinned=!this.pinned;this.render();return true}
+    if(hit("help",["?","/"])){this.help=!this.help;this.render();return true}
+    if(hit("next",["ArrowDown","ArrowRight"," "])){this.move(1);return true}
+    if(hit("previous",["ArrowUp","ArrowLeft"])){this.move(-1);return true}
+    if(hit("open",["o"])){const i=this.result?.items[this.index];if(i)window.open(i.originalUrl,"_blank","noopener");return true}
+    if(hit("download",["d"])){const i=this.result?.items[this.index];if(i)chrome.runtime.sendMessage({type:"LINKPEEK_DOWNLOAD",url:i.originalUrl,filename:i.filename});return true}
+    if(hit("resetZoom",["0"])){this.zoom=1;this.tx=this.ty=0;this.paintTransform();return true}
+    if(hit("zoomIn",["+","="])){this.applyZoom(1.2,this.stage.clientWidth/2,this.stage.clientHeight/2);return true}
+    if(hit("zoomOut",["-"])){this.applyZoom(1/1.2,this.stage.clientWidth/2,this.stage.clientHeight/2);return true}
     return false;
   }
   move(delta:number){if(!this.result?.items.length)return;const max=this.result.items.length-1;let n=this.index+delta;if(this.settings.loopMode==="wrap")n=(n+this.result.items.length)%this.result.items.length;else n=Math.max(0,Math.min(max,n));if(n!==this.index){this.index=n;if(this.settings.resetZoomPerImage){this.zoom=1;this.tx=this.ty=0}this.render()}}
@@ -47,6 +53,6 @@ export class Viewer{
   pan(dx:number,dy:number){if(this.zoom<=1)return;this.tx+=dx;this.ty+=dy;this.paintTransform()}
   paintTransform(){const img=this.panel.querySelector(".lp-image") as HTMLImageElement|null;if(img)img.style.transform=`translate(${this.tx}px,${this.ty}px) scale(${this.zoom})`}
   toast(text:string){const t=document.createElement("div");t.className="lp-toast";t.textContent=text;this.panel.appendChild(t);setTimeout(()=>t.remove(),650)}
-  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`)}
+  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.opacity=String(this.settings.panelOpacity);if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
   private escape(v:string){return v.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}
 }
