@@ -8,11 +8,17 @@ function uniqueValid(values:number[],length:number){
   for(const n of values){if(n<0||n>=length||seen.has(n))continue;seen.add(n);out.push(n)}
   return out;
 }
-export function buildPreloadPlan(length:number,index:number,settings:Pick<LinkPeekSettings,"preloadNext"|"preloadPrevious"|"preloadRest"|"preloadRestLimit"|"preloadOriginals"|"networkMode"|"loopMode">):PreloadPlan{
+export function buildPreloadPlan(
+  length:number,index:number,
+  settings:Pick<LinkPeekSettings,"preloadNext"|"preloadPrevious"|"preloadRest"|"preloadRestLimit"|"preloadOriginals"|"networkMode"|"loopMode">,
+  direction=-0
+):PreloadPlan{
   if(length<=0)return {priority:[],background:[],originals:[]};
   const dataSaver=settings.networkMode==="data";
-  const ahead=dataSaver?Math.min(1,settings.preloadNext):Math.max(0,settings.preloadNext);
-  const behind=dataSaver?Math.min(1,settings.preloadPrevious):Math.max(0,settings.preloadPrevious);
+  let ahead=dataSaver?Math.min(1,settings.preloadNext):Math.max(0,settings.preloadNext);
+  let behind=dataSaver?Math.min(1,settings.preloadPrevious):Math.max(0,settings.preloadPrevious);
+  if(!dataSaver&&direction>0){ahead=Math.min(length-1,ahead+2);behind=Math.min(behind,1)}
+  else if(!dataSaver&&direction<0){behind=Math.min(length-1,behind+2);ahead=Math.min(ahead,1)}
   const at=(n:number)=>settings.loopMode==="wrap"?((n%length)+length)%length:n;
   const priority:number[]=[];
   for(let d=1;d<=Math.max(ahead,behind);d++){if(d<=ahead)priority.push(at(index+d));if(d<=behind)priority.push(at(index-d))}
@@ -20,57 +26,59 @@ export function buildPreloadPlan(length:number,index:number,settings:Pick<LinkPe
   let background:number[]=[];
   const allowRest=!dataSaver&&settings.preloadRest!=="off"&&(settings.preloadRestLimit<=0||length<=settings.preloadRestLimit);
   if(allowRest){
-    const used=new Set([index,...cleanPriority]);
-    const rest:number[]=[];
-    for(let d=1;d<length;d++){const forward=index+d,back=index-d;if(forward<length&&!used.has(forward)){used.add(forward);rest.push(forward)}if(back>=0&&!used.has(back)){used.add(back);rest.push(back)}}
+    const used=new Set([index,...cleanPriority]),rest:number[]=[];
+    for(let d=1;d<length;d++){
+      const first=direction<0?index-d:index+d,second=direction<0?index+d:index-d;
+      for(const raw of [first,second]){const n=at(raw);if(n>=0&&n<length&&!used.has(n)){used.add(n);rest.push(n)}}
+    }
     background=rest;
   }
   let originals:number[]=[];
-  if(settings.preloadOriginals==="next")originals=uniqueValid([at(index+1)],length).filter(n=>n!==index);
-  else if(settings.preloadOriginals==="three")originals=uniqueValid([at(index+1),at(index+2),at(index+3)],length).filter(n=>n!==index);
-  else if(settings.preloadOriginals==="aggressive")originals=uniqueValid([...cleanPriority,...background],length);
+  if(settings.preloadOriginals==="next")originals=uniqueValid([at(index+(direction<0?-1:1))],length).filter(n=>n!==index);
+  else if(settings.preloadOriginals==="three"){
+    const sign=direction<0?-1:1;originals=uniqueValid([at(index+sign),at(index+2*sign),at(index+3*sign)],length).filter(n=>n!==index);
+  }else if(settings.preloadOriginals==="aggressive")originals=uniqueValid([...cleanPriority,...background],length);
   return {priority:cleanPriority,background,originals};
 }
 
-type Entry={img:HTMLImageElement;promise:Promise<void>;ready:boolean;failed:boolean;lastUsed:number};
+type Entry={img:HTMLImageElement;promise:Promise<void>;ready:boolean;failed:boolean;lastUsed:number;bytes:number};
 type Task={url:string;priority:number;generation:number};
 
 export class MediaPreloader{
-  private entries=new Map<string,Entry>();private queue:Task[]=[];private active=0;private generation=0;private idleHandle:number|undefined;
+  private entries=new Map<string,Entry>();private queue:Task[]=[];private active=0;private generation=0;private idleHandle:number|undefined;private decodedBytes=0;
   private items:MediaItem[]=[];private settings?:LinkPeekSettings;private index=0;
   reset(items:MediaItem[],index:number,settings:LinkPeekSettings){
-    this.items=items;this.settings=settings;this.index=index;this.generation++;this.queue=[];if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
-    this.schedule(index);
-    this.prune();
+    this.items=items;this.settings=settings;this.index=index;this.schedule(index,0);this.prune();
   }
-  schedule(index:number){
-    if(!this.settings||!this.items.length)return;this.index=index;
+  schedule(index:number,direction=0){
+    if(!this.settings||!this.items.length)return;
+    this.index=index;this.generation++;this.queue=[];
+    if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
     const connection=(navigator as Navigator&{connection?:{saveData?:boolean;effectiveType?:string}}).connection;
     const constrained=this.settings.meteredOff&&(connection?.saveData===true||connection?.effectiveType==="slow-2g"||connection?.effectiveType==="2g");
     const effective=constrained?{...this.settings,networkMode:"data" as const,preloadRest:"off" as const}:this.settings;
-    const gen=this.generation,plan=buildPreloadPlan(this.items.length,index,effective);
+    const gen=this.generation,plan=buildPreloadPlan(this.items.length,index,effective,direction);
     for(const n of plan.priority)this.enqueuePreview(this.items[n],0,gen);
     for(const n of plan.originals)this.enqueueOriginal(this.items[n],1,gen);
     this.pump();
     if(plan.background.length){
-      const run=()=>{this.idleHandle=undefined;for(const n of plan.background)this.enqueuePreview(this.items[n],3,gen);this.pump()};
+      const run=()=>{if(gen!==this.generation)return;this.idleHandle=undefined;for(const n of plan.background)this.enqueuePreview(this.items[n],3,gen);this.pump()};
       if(effective.preloadRest==="all")run();
       else if(typeof window.requestIdleCallback==="function")this.idleHandle=window.requestIdleCallback(run,{timeout:1200});
       else window.setTimeout(run,180);
     }
   }
   async ensure(item:MediaItem){
-    if(item.type==="gif"){
-      void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});
-      return;
-    }
+    if(item.type==="gif"){void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});return}
     const entry=this.load(item.previewUrl,0,this.generation);await entry.promise;
   }
   isReady(item:MediaItem){return item.type==="gif"||this.entries.get(item.previewUrl)?.ready===true}
-  element(item:MediaItem){
-    const entry=this.entries.get(item.previewUrl);if(!entry?.ready)return undefined;entry.lastUsed=performance.now();return entry.img
+  element(item:MediaItem){const entry=this.entries.get(item.previewUrl);if(!entry?.ready)return undefined;entry.lastUsed=performance.now();return entry.img}
+  dispose(){
+    this.generation++;this.queue=[];this.items=[];
+    if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
+    this.entries.clear();this.decodedBytes=0;
   }
-  dispose(){this.generation++;this.queue=[];this.items=[];if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}this.entries.clear()}
   private enqueuePreview(item:MediaItem,priority:number,generation:number){
     if(item.type==="gif"){void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});return}
     this.enqueue(item.previewUrl,priority,generation);
@@ -81,14 +89,22 @@ export class MediaPreloader{
     this.enqueue(item.originalUrl,priority,generation);
   }
   private enqueue(url:string,priority:number,generation:number){
-    if(this.entries.has(url)||this.queue.some(t=>t.url===url))return;this.queue.push({url,priority,generation});this.queue.sort((a,b)=>a.priority-b.priority);
+    if(this.entries.has(url)||this.queue.some(t=>t.url===url))return;
+    this.queue.push({url,priority,generation});this.queue.sort((a,b)=>a.priority-b.priority);
   }
   private load(url:string,priority:number,generation:number){
     const existing=this.entries.get(url);if(existing){existing.lastUsed=performance.now();return existing}
     const img=new Image();img.decoding="async";(img as HTMLImageElement&{fetchPriority?:"high"|"low"|"auto"}).fetchPriority=priority===0?"high":"low";
-    const entry:Entry={img,promise:Promise.resolve(),ready:false,failed:false,lastUsed:performance.now()};
+    const entry:Entry={img,promise:Promise.resolve(),ready:false,failed:false,lastUsed:performance.now(),bytes:0};
     entry.promise=new Promise<void>(resolve=>{
-      const done=async(ok:boolean)=>{entry.failed=!ok;if(ok){try{await img.decode()}catch{}entry.ready=true}resolve()};
+      const done=async(ok:boolean)=>{
+        entry.failed=!ok;
+        if(ok){
+          try{await img.decode()}catch{}
+          entry.ready=true;entry.bytes=Math.max(0,(img.naturalWidth||0)*(img.naturalHeight||0)*4);this.decodedBytes+=entry.bytes;this.prune();
+        }
+        resolve();
+      };
       img.addEventListener("load",()=>void done(true),{once:true});img.addEventListener("error",()=>void done(false),{once:true});img.src=url;
     });
     this.entries.set(url,entry);return entry;
@@ -100,11 +116,25 @@ export class MediaPreloader{
       this.load(task.url,task.priority,task.generation).promise.finally(()=>{this.active--;this.pump()});
     }
   }
+  private keepUrls(){
+    const keep=new Set<string>(),length=this.items.length;if(!length)return keep;
+    const at=(n:number)=>this.settings?.loopMode==="wrap"?((n%length)+length)%length:n;
+    const behind=(this.settings?.preloadPrevious??2)+2,ahead=(this.settings?.preloadNext??4)+2;
+    for(let d=-behind;d<=ahead;d++){
+      const n=at(this.index+d);if(n<0||n>=length)continue;const item=this.items[n];keep.add(item.previewUrl);keep.add(item.originalUrl);
+    }
+    return keep;
+  }
+  private deleteEntry(url:string){
+    const entry=this.entries.get(url);if(!entry)return;this.entries.delete(url);this.decodedBytes=Math.max(0,this.decodedBytes-entry.bytes);
+  }
   private prune(){
-    const max=Math.max(24,(this.settings?.preloadRestLimit??120)+12);if(this.entries.size<=max)return;
-    const keep=new Set<string>();
-    for(const item of this.items.slice(Math.max(0,this.index-(this.settings?.preloadPrevious??2)-3),this.index+(this.settings?.preloadNext??4)+4)){keep.add(item.previewUrl);keep.add(item.originalUrl)}
-    const candidates=[...this.entries.entries()].filter(([url])=>!keep.has(url)).sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
-    for(const [url] of candidates){if(this.entries.size<=max)break;this.entries.delete(url)}
+    if(!this.settings)return;
+    const countMax=Math.max(24,this.settings.preloadRestLimit+12),byteMax=Math.max(32,this.settings.preloadMemoryMb)*1024*1024;
+    if(this.entries.size<=countMax&&this.decodedBytes<=byteMax)return;
+    const keep=this.keepUrls(),candidates=[...this.entries.entries()].filter(([url])=>!keep.has(url)).sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
+    for(const [url] of candidates){
+      if(this.entries.size<=countMax&&this.decodedBytes<=byteMax)break;this.deleteEntry(url);
+    }
   }
 }
