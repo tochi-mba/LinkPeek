@@ -28,4 +28,5 @@ await build({
 });
 
 await cp("public", out, { recursive: true });
+await cp("src/pages/base.css", resolve(out, "base.css"));
 console.log("Built LinkPeek extension to dist/");
