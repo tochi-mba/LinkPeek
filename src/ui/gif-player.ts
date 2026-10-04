@@ -6,6 +6,9 @@ type DecodedFrame={
   patch:Uint8ClampedArray;delay:number;disposalType:number;
 };
 type BinaryResponse={base64?:string;mime?:string;bytes?:number;error?:string};
+export type PreparedGif={frames:DecodedFrame[];width:number;height:number};
+const preparedGifs=new Map<string,Promise<PreparedGif>>();
+const PREPARED_CACHE_MAX=3;
 
 export function gifFrameDelay(frame:Pick<DecodedFrame,"delay">){return Math.max(20,Number(frame.delay)||100)}
 export function gifDuration(frames:Pick<DecodedFrame,"delay">[]){return frames.reduce((n,f)=>n+gifFrameDelay(f),0)}
@@ -24,6 +27,24 @@ function decodeBase64(value:string){
   for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
   return bytes;
 }
+export function clearPreparedGifCache(){preparedGifs.clear()}
+export async function prepareGif(url:string,maxMb:number):Promise<PreparedGif>{
+  const existing=preparedGifs.get(url);
+  if(existing){preparedGifs.delete(url);preparedGifs.set(url,existing);return existing}
+  const promise=(async()=>{
+    const response=await chrome.runtime.sendMessage({type:"LINKPEEK_FETCH_BINARY",url,maxMb}) as BinaryResponse;
+    if(response?.error||!response?.base64)throw new Error(response?.error||"GIF data unavailable");
+    const parsed=parseGIF(decodeBase64(response.base64).buffer) as any;
+    const frames=decompressFrames(parsed,true) as DecodedFrame[];
+    if(!frames.length)throw new Error("No GIF frames found");
+    const width=Number(parsed?.lsd?.width)||Math.max(...frames.map(f=>f.dims.left+f.dims.width));
+    const height=Number(parsed?.lsd?.height)||Math.max(...frames.map(f=>f.dims.top+f.dims.height));
+    return {frames,width,height};
+  })().catch(error=>{preparedGifs.delete(url);throw error});
+  preparedGifs.set(url,promise);
+  while(preparedGifs.size>PREPARED_CACHE_MAX){const oldest=preparedGifs.keys().next().value as string|undefined;if(!oldest||oldest===url)break;preparedGifs.delete(oldest)}
+  return promise;
+}
 
 export class GifPlayer{
   private mount:HTMLElement;private canvas?:HTMLCanvasElement;private ctx?:CanvasRenderingContext2D;
@@ -35,17 +56,12 @@ export class GifPlayer{
     this.loop=settings.gifLoop;this.speed=settings.gifDefaultSpeed;
   }
   async init(){
-    this.mount.innerHTML='<div class="lp-gif-preparing"><span class="lp-loading-dot"></span><span>Preparing GIF frame controls…</span></div>';
+    this.mount.innerHTML=`<div class="lp-gif-native-prep"><img class="lp-image lp-gif-native" src="${this.escape(this.url)}" alt="Animated GIF"><span class="lp-gif-preparing">Preparing frame controls…</span></div>`;
     try{
-      const response=await chrome.runtime.sendMessage({type:"LINKPEEK_FETCH_BINARY",url:this.url,maxMb:this.settings.gifDecodeMaxMb}) as BinaryResponse;
-      if(response?.error||!response?.base64)throw new Error(response?.error||"GIF data unavailable");
+      const prepared=await prepareGif(this.url,this.settings.gifDecodeMaxMb);
       if(this.destroyed)return;
-      const parsed=parseGIF(decodeBase64(response.base64).buffer) as any;
-      this.frames=decompressFrames(parsed,true) as DecodedFrame[];
-      if(!this.frames.length)throw new Error("No GIF frames found");
-      const width=Number(parsed?.lsd?.width)||Math.max(...this.frames.map(f=>f.dims.left+f.dims.width));
-      const height=Number(parsed?.lsd?.height)||Math.max(...this.frames.map(f=>f.dims.top+f.dims.height));
-      this.build(width,height);
+      this.frames=prepared.frames;
+      this.build(prepared.width,prepared.height);
       this.renderFrame(0);this.updateControls();
       if(this.settings.gifAutoplay!=="never")this.play();
       if(this.settings.gifPauseWhenHidden)document.addEventListener("visibilitychange",this.onVisibility);
