@@ -42,7 +42,7 @@ function demoTopic(){
     <img src="${base}/media/anim.gif" data-base62-sha1="animatedGif" width="480" height="372" class="animated" alt="Animated fixture">
     <img class="avatar" src="${base}/media/avatar.png" width="48" height="48">
     <img class="emoji" src="${base}/media/emoji.png" width="20" height="20">
-  </div>`}]}}};
+  </div>`}]}};
 }
 
 test.beforeAll(async()=>{
