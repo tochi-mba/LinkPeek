@@ -43,7 +43,7 @@ async function fetchBinary(urlRaw:string,maxMb:number){
   const pending=binaryTasks.get(urlRaw);if(pending)return pending;
   const task=(async()=>{
     const url=new URL(urlRaw);if(!/^https?:$/.test(url.protocol))throw new Error("Unsupported media URL");
-    const maxBytes=Math.max(1,Math.min(100,Number(maxMb)||32))*1024*1024;
+    const maxBytes=Math.max(1,Math.min(100,Number(maxMb)))*1024*1024;
     const response=await fetch(url.href,{credentials:"include",redirect:"follow"});if(!response.ok)throw new Error(`HTTP ${response.status} for media`);
     const announced=Number(response.headers.get("content-length")||0);if(announced>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
     const buffer=await response.arrayBuffer();if(buffer.byteLength>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
