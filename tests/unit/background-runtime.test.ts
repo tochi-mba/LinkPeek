@@ -201,10 +201,11 @@ describe("background service worker",()=>{
     resolve(new Response(new Uint8Array([1]).buffer,{status:200}));
     expect((await a).value.mime).toBe("application/octet-stream");expect((await b).value.bytes).toBe(1);
 
-    const big=new Uint8Array(34*1024*1024).buffer;
-    fetchMock.mockResolvedValueOnce(new Response(big,{status:200,headers:{"content-type":"image/gif"}}));
+    const fakeBig={byteLength:34*1024*1024,length:1,0:1};
+    const bigResponse=()=>({ok:true,status:200,headers:{get:(k:string)=>k==="content-type"?"image/gif":null},arrayBuffer:async()=>fakeBig} as any);
+    fetchMock.mockResolvedValueOnce(bigResponse());
     await send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/big1.gif",maxMb:40});
-    fetchMock.mockResolvedValueOnce(new Response(big,{status:200,headers:{"content-type":"image/gif"}}));
+    fetchMock.mockResolvedValueOnce(bigResponse());
     await send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/big2.gif",maxMb:40});
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
