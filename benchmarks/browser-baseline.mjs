@@ -156,8 +156,11 @@ try{
 
     requestCount=0;responseBytes=0;t=performance.now();
     await page.keyboard.press("g");
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>{
+      const count=n.shadowRoot?.querySelectorAll(".lp-thumb").length??0;return count>0&&count<100;
+    }),null,{timeout:15000});
     results.ui.grid_1000_render_ms=round(performance.now()-t);
+    results.ui.grid_1000_rendered_thumbs=await page.evaluate(()=>Math.max(...Array.from(document.documentElement.children).map(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length??0)));
     await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_grid_1000=await heap();
     await page.waitForTimeout(1200);
     results.network.grid_1000={requests:requestCount,response_bytes:responseBytes};
