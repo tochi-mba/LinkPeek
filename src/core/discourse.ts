@@ -38,7 +38,7 @@ function fromPosts(posts:DPost[],topicUrl:string,settings?:LinkPeekSettings){
   }return items;
 }
 function resultFromItems(raw:string,topic:DTopic,items:MediaItem[],postsScanned:number,totalPosts:number,settings?:LinkPeekSettings,complete=false,warning?:string):ScanResult{
-  const d=settings?.dedupe===false?{items,duplicates:0}:dedupeMedia(items);
+  const d=dedupeMedia(items);
   return {url:raw,kind:"discourse",title:topic.title,items:d.items,complete,postsScanned,totalPosts,diagnostics:{adapter:"Discourse",ignored:0,duplicates:d.duplicates,warnings:warning?[warning]:[]}};
 }
 function initialState(raw:string,topic:DTopic,posts:DPost[],stream:number[],settings?:LinkPeekSettings,warning?:string){
