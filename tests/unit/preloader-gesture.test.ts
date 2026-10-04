@@ -134,6 +134,12 @@ describe("MediaPreloader",()=>{
     (r as any).entries=entries;(r as any).decodedBytes=0;(r as any).prune();expect((r as any).entries.size).toBe(24);
   });
 
+  it("covers dispose with and without a pending idle handle",()=>{
+    const cancel=vi.fn();Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:cancel});
+    const none=new MediaPreloader();none.dispose();expect(cancel).not.toHaveBeenCalled();
+    const pending:any=new MediaPreloader();pending.idleHandle=77;pending.dispose();expect(cancel).toHaveBeenCalledWith(77);
+  });
+
   it("uses timeout fallback when idle callbacks are unavailable and evicts outside the memory ring",async()=>{
     Object.defineProperty(window,"requestIdleCallback",{configurable:true,value:undefined});
     const timeout=vi.spyOn(window,"setTimeout").mockImplementation(((cb:any)=>{cb();return 1}) as any);
