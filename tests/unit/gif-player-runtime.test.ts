@@ -170,4 +170,39 @@ describe("GIF runtime",()=>{
     (p as any).canvas=document.createElement("canvas");(p as any).patchCanvas=undefined;(p as any).applyFrame(0);
     p.destroy();
   });
+  it("covers default notice, string failures, Space playback and scheduler/control edge branches",async()=>{
+    const makeStage=()=>{const s=document.createElement("div");s.innerHTML='<div class="lp-gif-mount"></div>';document.body.appendChild(s);return s};
+
+    clearPreparedGifCache();
+    send.mockRejectedValueOnce("string failure");
+    const noNotice=new GifPlayer(makeStage(),"https://x/string-fail.gif",DEFAULT_SETTINGS);
+    await noNotice.init();
+    expect((noNotice as any).mount.textContent).toContain("frame controls unavailable");
+
+    clearPreparedGifCache();
+    const p=new GifPlayer(makeStage(),"https://x/branches.gif",{...DEFAULT_SETTINGS,gifAutoplay:"never",gifLoop:true});
+    await p.init();
+    expect(p.key(new KeyboardEvent("keydown",{key:" "}))).toBe(true);
+    p.pause();
+
+    const speed=(p as any).speedSelect as HTMLSelectElement;
+    speed.value="";speed.dispatchEvent(new Event("change"));expect((p as any).speed).toBe(1);
+
+    (p as any).speedSelect=undefined;(p as any).playing=false;(p as any).changeSpeed(1);
+    (p as any).playing=true;(p as any).changeSpeed(-1);
+
+    (p as any).timer=123;(p as any).playing=false;(p as any).destroyed=false;(p as any).schedule();
+    (p as any).timer=undefined;(p as any).playing=true;(p as any).destroyed=true;(p as any).schedule();
+
+    (p as any).destroyed=false;(p as any).playing=true;(p as any).frame=0;(p as any).loop=true;(p as any).schedule();
+    (p as any).playing=false;vi.advanceTimersToNextTimer();
+
+    (p as any).playing=true;(p as any).frame=(p as any).frames.length-1;(p as any).loop=true;(p as any).schedule();
+    vi.advanceTimersToNextTimer();expect((p as any).frame).toBe(0);
+
+    (p as any).playing=true;(p as any).frame=(p as any).frames.length-1;(p as any).loop=false;(p as any).schedule();
+    vi.advanceTimersToNextTimer();expect((p as any).playing).toBe(false);
+    p.destroy();
+  });
+
 });
