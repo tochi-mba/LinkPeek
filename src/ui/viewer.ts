@@ -1,4 +1,5 @@
 import type {MediaItem,ScanResult} from "../shared/media";
+import {uniqueMediaItems} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {overlayCss} from "./styles";
 import {GestureController} from "./gesture";
@@ -13,7 +14,10 @@ export class Viewer{
   onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
   openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.expanded=settings.startExpanded;this.gridThumbSize=settings.thumbnailSize;this.view=settings.defaultView==="grid"||settings.defaultView==="masonry"?"grid":"focus";this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
-  show(result:ScanResult){this.result=result;this.index=Math.min(this.index,Math.max(0,result.items.length-1));this.render()}
+  show(result:ScanResult){
+    const unique=uniqueMediaItems(result.items),diagnostics=result.diagnostics?{...result.diagnostics,duplicates:result.diagnostics.duplicates+unique.duplicates}:result.diagnostics;
+    this.result={...result,items:unique.items,diagnostics};this.index=Math.min(this.index,Math.max(0,unique.items.length-1));this.render()
+  }
   error(message:string){this.panel.innerHTML=this.shell("Couldn’t preview",`<div class="lp-error"><strong>Preview unavailable</strong><span>${this.escape(message)}</span></div>`,"");this.bind()}
   close(force=false){if(this.pinned&&!force)return;this.renderVersion++;this.navigationVersion++;this.desiredIndex=null;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.preloader.dispose();this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
   private render(){
