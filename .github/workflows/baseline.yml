@@ -31,7 +31,7 @@ jobs:
           START=$(date +%s%3N)
           npm install
           END=$(date +%s%3N)
-          echo "{"npm_install_ms":$((END-START))}" > baseline/install.json
+          node -e "const fs=require('fs');fs.writeFileSync('baseline/install.json',JSON.stringify({npm_install_ms:Number(process.argv[1])},null,2))" "$((END-START))"
 
       - name: Build, bundle, and microbench baseline
         run: node scripts/collect-baseline.mjs
