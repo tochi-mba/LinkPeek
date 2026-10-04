@@ -103,17 +103,14 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
-  let cursor=0,completed=0;
+  let cursor=0;
   const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
   const workers=Array.from({length:concurrency},async()=>{
     while(true){
       signal?.throwIfAborted();
       const index=cursor++;if(index>=idBatches.length)return;
       const batch=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index],signal);
-      posts.push(...batch);completed++;
-      if(onProgress&&(completed%concurrency===0||completed===idBatches.length)){
-        onProgress(makeResult(raw,topic,posts,stream,settings,false,fetched.warning));
-      }
+      posts.push(...batch);
     }
   });
   await Promise.all(workers);
