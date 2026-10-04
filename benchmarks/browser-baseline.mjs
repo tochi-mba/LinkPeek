@@ -18,7 +18,7 @@ function topic(id,count,images=2){
   const posts=Array.from({length:Math.min(20,count)},(_,i)=>post(i+1,images));
   return {id,title:`Thread ${count}`,post_stream:{stream:Array.from({length:count},(_,i)=>i+1),posts}};
 }
-const topics=new Map([[101,topic(101,20)],[102,topic(102,100)],[103,topic(103,500)]]);
+const topics=new Map([[101,topic(101,20)],[102,topic(102,100)],[103,topic(103,500)]]);for(let id=201;id<=212;id++)topics.set(id,topic(id,100));
 function send(res,body,type="text/html",status=200){
   const b=Buffer.isBuffer(body)?body:Buffer.from(String(body));responseBytes+=b.byteLength;res.statusCode=status;res.setHeader("content-type",type);res.setHeader("content-length",String(b.byteLength));res.end(b);
 }
@@ -35,6 +35,10 @@ const server=createServer((req,res)=>{
       <a id="fallback" href="${base}/t/fallback/104">Fallback</a>
       <a id="gif" href="${base}/media/perf.gif">GIF</a>
     </body>`);return;
+  }
+  if(path==="/prefetch"){
+    const links=Array.from({length:12},(_,i)=>`<a href="${base}/t/prefetch-${i}/${201+i}">Topic ${i}</a>`).join("<br>");
+    send(res,`<!doctype html><body>${links}</body>`);return;
   }
   if(path==="/generic"||path==="/generic-large"){
     const count=path==="/generic-large"?1000:200;
@@ -130,18 +134,29 @@ try{
   results.memory.after_large_focus=await heap();
   if(gridSource.ok){
     t=performance.now();
+    await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("2 / 1000")));
+    results.ui.gesture_clean_next_media_ms=round(performance.now()-t);
+    await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:-100,bubbles:true,cancelable:true}))});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("1 / 1000")));
+
+    requestCount=0;responseBytes=0;t=performance.now();
     await page.keyboard.press("g");
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
     results.ui.grid_1000_render_ms=round(performance.now()-t);
     results.memory.after_grid_1000=await heap();
+    await page.waitForTimeout(1200);
+    results.network.grid_1000={requests:requestCount,response_bytes:responseBytes};
     await page.keyboard.press("g");
     t=performance.now();
     await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("2 / 1000")));
-    results.ui.gesture_next_media_ms=round(performance.now()-t);
+    results.ui.gesture_after_grid_ms=round(performance.now()-t);
   }else{
     results.ui.grid_1000_render_ms=null;
-    results.ui.gesture_next_media_ms=null;
+    results.ui.gesture_clean_next_media_ms=null;
+    results.ui.gesture_after_grid_ms=null;
+    results.network.grid_1000={requests:0,response_bytes:0};
     results.memory.after_grid_1000=results.memory.after_large_focus;
   }
   await leave();await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_close_gc=await heap();
@@ -151,6 +166,11 @@ try{
   results.latency.gif_hover_to_controls_ms=round(performance.now()-t);results.memory.after_gif_decode=await heap();
   const timeline=page.locator(".lp-gif-timeline");t=performance.now();for(let i=0;i<20;i++)await page.locator(".lp-gif-next").click();results.ui.gif_20_frame_steps_ms=round(performance.now()-t);
   await leave();
+
+  await patchSettings({prefetch:"nearby",maxRequests:3});
+  requestCount=0;responseBytes=0;const prefetchPage=await context.newPage();t=performance.now();await prefetchPage.goto(`${base}/prefetch`);await prefetchPage.waitForTimeout(3500);
+  results.network.default_nearby_prefetch_12_threads={requests:requestCount,response_bytes:responseBytes,window_ms:round(performance.now()-t)};
+  await prefetchPage.close();
 
   for(const [name,path,ready] of [["options","options.html",'#search'],["popup","popup.html",'#enabled'],["onboarding","onboarding.html",'.screen.active']]){
     const p=await context.newPage(),start=performance.now();await p.goto(`chrome-extension://${extensionId}/${path}`);await p.locator(ready).waitFor();results.ui[`${name}_startup_ms`]=round(performance.now()-start);
