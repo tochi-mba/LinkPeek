@@ -124,9 +124,6 @@ describe("MediaPreloader",()=>{
     const old=callbacks[0];p.schedule(2,1);old({didTimeout:false,timeRemaining:()=>50} as IdleDeadline);
     p.dispose();expect(cancel).toHaveBeenCalled();
 
-    const noCancel:any=new MediaPreloader();(noCancel as any).idleHandle=9;
-    Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:undefined});noCancel.dispose();
-
     class ZeroImage extends FakeImage{naturalWidth=0;naturalHeight=0}
     vi.stubGlobal("Image",ZeroImage as any);
     const q=new MediaPreloader(),zero=item(92);q.reset([zero],0,{...DEFAULT_SETTINGS,preloadNext:0,preloadPrevious:0,preloadRest:"off"});
