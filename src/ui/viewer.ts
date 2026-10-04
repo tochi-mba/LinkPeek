@@ -2,6 +2,7 @@ import type {MediaItem,ScanResult} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {overlayCss} from "./styles";
 import {GestureController} from "./gesture";
+import {MediaPreloader} from "./media-preloader";
 
 type GifPlayerLike={init:()=>Promise<void>;destroy:()=>void;key:(e:KeyboardEvent)=>boolean};
 
@@ -9,15 +10,16 @@ export class Viewer{
   host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
   panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
   index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;
+  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
-  openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.panel.className="lp-panel";this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
+  openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.expanded=settings.startExpanded;this.gridThumbSize=settings.thumbnailSize;this.view=settings.defaultView==="grid"||settings.defaultView==="masonry"?"grid":"focus";this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
   show(result:ScanResult){this.result=result;this.index=Math.min(this.index,Math.max(0,result.items.length-1));this.render()}
   error(message:string){this.panel.innerHTML=this.shell("Couldn’t preview",`<div class="lp-error"><strong>Preview unavailable</strong><span>${this.escape(message)}</span></div>`,"");this.bind()}
-  close(force=false){if(this.pinned&&!force)return;this.renderVersion++;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
+  close(force=false){if(this.pinned&&!force)return;this.renderVersion++;this.navigationVersion++;this.desiredIndex=null;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.preloader.dispose();this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
   private render(){
     if(!this.result)return;
     const version=++this.renderVersion;
+    this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;
     this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;
     const item=this.result.items[this.index];
     const media=item?.type==="gif"?`<div class="lp-gif-mount"></div>`:`<img class="lp-image" src="${item?this.escape(item.previewUrl):""}" alt="${item?this.escape(item.filename||"Preview image"):""}">`;
@@ -26,6 +28,7 @@ export class Viewer{
     const progress=this.result.complete?"Complete":`${this.result.postsScanned??0}/${this.result.totalPosts??"?"} posts`;
     this.panel.innerHTML=this.shell(this.result.title||new URL(this.result.url).hostname,body,`${this.result.items.length} media · ${progress}`);
     this.bind();
+    this.preloader.reset(this.result.items,this.index,this.settings);
     if(this.view==="grid"){this.setupVirtualGrid();return}
     if(item){
       this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{
@@ -49,12 +52,12 @@ export class Viewer{
       this.toast(error instanceof Error?error.message:"GIF controls unavailable");
     }
   }
-  private shell(title:string,body:string,status:string){return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span><button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button><button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span><span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
+  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Show more images" aria-label="Show more images">−</button><button class="lp-btn lp-grid-bigger" title="Make thumbnails bigger" aria-label="Make thumbnails bigger">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}<button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button>${expand}<button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
   private grid(){return `<div class="lp-grid" data-total="${this.result!.items.length}" role="grid" aria-label="Media grid"><div class="lp-grid-spacer"></div><div class="lp-grid-window"></div></div>`}
   private setupVirtualGrid(){
     const grid=this.panel.querySelector(".lp-grid") as HTMLDivElement|null,windowEl=this.panel.querySelector(".lp-grid-window") as HTMLDivElement|null,spacer=this.panel.querySelector(".lp-grid-spacer") as HTMLDivElement|null;
     if(!grid||!windowEl||!spacer||!this.result)return;
-    const items=this.result.items,gap=6,pad=8,cell=Math.max(64,this.settings.thumbnailSize||96),overscan=2;
+    const items=this.result.items,gap=6,pad=8,cell=Math.max(48,this.gridThumbSize||96),overscan=2;
     let raf=0,lastStart=-1,lastEnd=-1,lastCols=-1;
     const renderWindow=()=>{
       raf=0;
@@ -87,6 +90,9 @@ export class Viewer{
     this.panel.querySelector(".lp-close")?.addEventListener("click",()=>this.close(true));
     this.panel.querySelector(".lp-pin")?.addEventListener("click",()=>{this.pinned=!this.pinned;this.render()});
     this.panel.querySelector(".lp-gridbtn")?.addEventListener("click",()=>{this.view=this.view==="grid"?"focus":"grid";this.render()});
+    this.panel.querySelector(".lp-expandbtn")?.addEventListener("click",()=>{this.expanded=!this.expanded;this.render()});
+    this.panel.querySelector(".lp-grid-more")?.addEventListener("click",()=>{this.gridThumbSize=Math.max(48,this.gridThumbSize-16);this.render();this.toast(`${this.gridThumbSize}px tiles`)});
+    this.panel.querySelector(".lp-grid-bigger")?.addEventListener("click",()=>{this.gridThumbSize=Math.min(320,this.gridThumbSize+16);this.render();this.toast(`${this.gridThumbSize}px tiles`)});
     this.panel.querySelector(".lp-helpbtn")?.addEventListener("click",()=>{this.help=!this.help;this.render()});
     this.panel.addEventListener("mouseenter",()=>{if(this.closeTimer)clearTimeout(this.closeTimer)});
     this.panel.addEventListener("mouseleave",()=>{if(!this.pinned)this.closeTimer=window.setTimeout(()=>this.close(),this.settings.closeDelay)});
@@ -107,13 +113,14 @@ export class Viewer{
     if(hit("zoomOut",["-"])){this.applyZoom(1/1.2,this.stage.clientWidth/2,this.stage.clientHeight/2);return true}
     return false;
   }
-  move(delta:number){if(!this.result?.items.length)return;const max=this.result.items.length-1;let n=this.index+delta;if(this.settings.loopMode==="wrap")n=(n+this.result.items.length)%this.result.items.length;else n=Math.max(0,Math.min(max,n));if(n!==this.index){this.index=n;if(this.settings.resetZoomPerImage){this.zoom=1;this.tx=this.ty=0}this.render()}}
+  move(delta:number){void this.navigate(delta)}
+  private async navigate(delta:number){if(!this.result?.items.length)return;const items=this.result.items,max=items.length-1,base=this.desiredIndex??this.index;let n=base+delta;if(this.settings.loopMode==="wrap")n=(n+items.length)%items.length;else n=Math.max(0,Math.min(max,n));if(n===base)return;this.desiredIndex=n;const version=++this.navigationVersion;this.preloader.schedule(n);await this.preloader.ensure(items[n]);if(version!==this.navigationVersion||this.desiredIndex!==n||!this.result)return;this.index=n;this.desiredIndex=null;if(this.settings.resetZoomPerImage){this.zoom=1;this.tx=this.ty=0}this.render()}
   quickZoom(x:number,y:number){if(this.zoom>1.01&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}const target=Math.max(1,this.settings.doubleClickZoom);this.applyZoom(target/this.zoom,x,y)}
   applyZoom(factor:number,x:number,y:number){const old=this.zoom;this.zoom=Math.max(this.settings.minZoom,Math.min(this.settings.maxZoom,this.zoom*factor));if(old===this.zoom&&factor>1&&old>1){this.zoom=1;this.tx=this.ty=0}else{const ratio=this.zoom/old;this.tx=x-(x-this.tx)*ratio;this.ty=y-(y-this.ty)*ratio}this.paintTransform();this.toast(`${Math.round(this.zoom*100)}%`)}
   pan(dx:number,dy:number){if(this.zoom<=1&&this.settings.verticalGesture!=="pan")return;this.tx+=dx;this.ty+=dy;this.paintTransform()}
   onDoubleClick(x:number,y:number){if(this.settings.doubleClick==="next"){this.move(1);return}if(this.settings.doubleClick==="fullscreen"){if(document.fullscreenElement)void document.exitFullscreen();else void this.panel.requestFullscreen?.();return}if(this.zoom>1&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}this.applyZoom(this.settings.doubleClickZoom,x,y)}
   paintTransform(){const img=this.panel.querySelector(".lp-image") as HTMLElement|null;if(img)img.style.transform=`translate(${this.tx}px,${this.ty}px) scale(${this.zoom})`}
   toast(text:string){const t=document.createElement("div");t.className="lp-toast";t.textContent=text;this.panel.appendChild(t);setTimeout(()=>t.remove(),650)}
-  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.setProperty("--lp-thumb",`${this.settings.thumbnailSize}px`);this.panel.style.opacity=String(this.settings.panelOpacity);this.panel.style.background=`rgba(17,21,18,${Math.max(.1,1-this.settings.transparency)})`;this.panel.style.backdropFilter=`blur(${this.settings.blur}px)`;if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
+  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.setProperty("--lp-stageh",`${this.settings.focusHeightVh}vh`);this.panel.style.setProperty("--lp-expandedw",`${this.settings.expandedWidthVw}vw`);this.panel.style.setProperty("--lp-expandedh",`${this.settings.expandedHeightVh}vh`);this.panel.style.setProperty("--lp-thumb",`${this.gridThumbSize}px`);this.panel.style.opacity=String(this.settings.panelOpacity);this.panel.style.background=`rgba(17,21,18,${Math.max(.1,1-this.settings.transparency)})`;this.panel.style.backdropFilter=`blur(${this.settings.blur}px)`;if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
   private escape(v:string){return v.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}
 }
