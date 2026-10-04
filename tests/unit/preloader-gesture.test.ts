@@ -12,7 +12,7 @@ const item=(n:number,type:"image"|"gif"="image"):MediaItem=>({
 class FakeImage extends EventTarget{
   decoding="";fetchPriority="";naturalWidth=4000;naturalHeight=4000;_src="";
   decode=vi.fn(async()=>{if(this._src.includes("decodefail"))throw new Error("decode")});
-  set src(value:string){this._src=value;queueMicrotask(()=>this.dispatchEvent(new Event(value.includes("fail")?"error":"load")))}
+  set src(value:string){this._src=value;queueMicrotask(()=>this.dispatchEvent(new Event(value.includes("/fail.")?"error":"load")))}
   get src(){return this._src}
 }
 
