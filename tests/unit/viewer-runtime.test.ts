@@ -137,6 +137,7 @@ describe("Viewer runtime",()=>{
     Object.defineProperty(grid,"clientWidth",{configurable:true,value:500});Object.defineProperty(grid,"clientHeight",{configurable:true,value:300});
     (v as any).setupVirtualGrid();
     expect(v.panel.querySelectorAll(".lp-thumb").length).toBeGreaterThan(0);
+    grid.dispatchEvent(new Event("scroll"));grid.dispatchEvent(new Event("scroll"));grid.dispatchEvent(new MouseEvent("click",{bubbles:true}));
     const thumb=v.panel.querySelector(".lp-thumb") as HTMLButtonElement;thumb.click();expect(v.view).toBe("focus");
     v.view="grid";(v as any).render();
     (v as any).result=undefined;(v as any).setupVirtualGrid();
@@ -182,4 +183,99 @@ describe("Viewer runtime",()=>{
     expect(v.key(new KeyboardEvent("keydown",{key:"x"}))).toBe(true);
     v.close(true);expect(v.key(new KeyboardEvent("keydown",{key:"x"}))).toBe(false);
   });
+  it("covers alternate focus rendering, metadata fallbacks and viewer gesture callbacks",async()=>{
+    const {v,preload}=make({showLearningTips:false,quickViewControls:false});
+    (v as any).render();
+    const bare:ScanResult={
+      url:"https://bare.test/path",kind:"generic",
+      items:[{...item(0),filename:undefined}],complete:false
+    };
+    v.show(bare);expect(v.panel.textContent).toContain("bare.test");expect(v.panel.querySelector(".lp-tip")).toBeNull();
+    expect(v.panel.querySelector(".lp-expandbtn")).toBeNull();
+
+    preload.isReady.mockReturnValue(true);preload.element.mockReturnValue(undefined);
+    v.show(bare);expect(v.panel.querySelector(".lp-image-slot")).toBeTruthy();
+
+    const full=result([item(0),item(1),item(2),item(3)]);v.show(full);
+    const callbacks=(v.gesture as any).cb;
+    callbacks.next();await tick();callbacks.previous();await tick();
+    callbacks.next(2);await tick();callbacks.previous(2);await tick();
+    callbacks.scrub(1);await tick();callbacks.scrub(-1);await tick();
+    callbacks.pan(3,4);callbacks.zoom(1.1,10,10);callbacks.doubleClick(10,10);
+    expect(typeof callbacks.isZoomed()).toBe("boolean");
+
+    v.show({...bare,items:[]});
+    expect(v.key(new KeyboardEvent("keydown",{key:"o"}))).toBe(true);
+    expect(v.key(new KeyboardEvent("keydown",{key:"d"}))).toBe(true);
+    v.paintTransform();
+
+    const dismissed=vi.fn();v.onDismiss=dismissed;v.close(true);expect(dismissed).toHaveBeenCalled();
+
+    const masonry=make({defaultView:"masonry",quickViewControls:false}).v;
+    expect(masonry.view).toBe("grid");masonry.close(true);
+  });
+
+  it("covers shortcut fallbacks, close/next/previous keys and fullscreen without request support",async()=>{
+    const {v}=make();v.show(result([item(0),item(1)]));
+    v.settings.shortcuts={};
+    expect(v.key(new KeyboardEvent("keydown",{key:"ArrowDown"}))).toBe(true);await tick();
+    expect(v.key(new KeyboardEvent("keydown",{key:"ArrowUp"}))).toBe(true);await tick();
+    v.settings.doubleClick="fullscreen";(v.panel as any).requestFullscreen=undefined;v.onDoubleClick(1,1);
+    expect(v.key(new KeyboardEvent("keydown",{key:"Escape"}))).toBe(true);
+    expect(v.root.childElementCount).toBe(0);
+  });
+
+  it("covers favorite refresh races, title fallback and no-result guards",async()=>{
+    const {v}=make();
+    store.favorites=[{url:"https://forum.test/t/a/1",title:"Saved",addedAt:1}];
+    v.show(result([item(0)]));await tick();await tick();
+    expect(v.panel.querySelector(".lp-favorite")?.getAttribute("aria-pressed")).toBe("true");
+
+    (chrome.storage.local.get as any).mockRejectedValueOnce(new Error("read"));
+    await (v as any).refreshFavorite();
+
+    let releaseGet!:(value:any)=>void;
+    (chrome.storage.local.get as any).mockImplementationOnce(()=>new Promise(r=>{releaseGet=r}));
+    const staleVersion=(v as any).refreshFavorite();(v as any).favoriteVersion++;
+    releaseGet({favorites:[]});await staleVersion;
+
+    let releaseGet2!:(value:any)=>void;
+    (chrome.storage.local.get as any).mockImplementationOnce(()=>new Promise(r=>{releaseGet2=r}));
+    const staleUrl=(v as any).refreshFavorite();(v as any).result={...v.result!,url:"https://changed.test/"};
+    releaseGet2({favorites:[{url:"https://forum.test/t/a/1",title:"Saved",addedAt:1}]});await staleUrl;
+
+    v.show({...result([item(0)],true,"https://titleless.test/a"),title:undefined});
+    let releaseSet!:(value?:any)=>void;
+    (chrome.storage.local.set as any).mockImplementationOnce(()=>new Promise(r=>{releaseSet=r}));
+    const pending=(v as any).toggleFavorite();await tick();
+    (v as any).result={...v.result!,url:"https://other.test/"};
+    releaseSet();await pending;
+
+    v.close(true);await (v as any).refreshFavorite();await (v as any).toggleFavorite();
+  });
+
+  it("covers GIF non-Error fallback, missing mount and warmup rejection",async()=>{
+    const {v}=make({preloadNext:1,preloadPrevious:1});
+    v.show(result([item(0,"gif")]));
+    (v as any).gifModulePromise=Promise.resolve({GifPlayer:class{constructor(){throw "string boom"}},prepareGif:vi.fn(async()=>{})});
+    await (v as any).mountGif(v.result!.items[0],(v as any).renderVersion);
+    expect(v.panel.textContent).toContain("Native GIF playback");
+
+    v.stage.innerHTML="";
+    await (v as any).mountGif(v.result!.items[0],(v as any).renderVersion);
+
+    (v as any).gifModulePromise=Promise.reject(new Error("warm failed"));
+    await (v as any).warmGifNeighborhood();
+    v.close(true);
+  });
+
+  it("covers active close-timer clearing and zero pointer gap positioning",()=>{
+    const {v}=make({pointerGap:0});
+    v.show(result([item(0)]));
+    const clear=vi.spyOn(window,"clearTimeout");v.closeTimer=123;
+    v.panel.dispatchEvent(new MouseEvent("mouseenter"));expect(clear).toHaveBeenCalledWith(123);
+    (v as any).position(10,10);expect(v.panel.style.left).toBe("10px");
+    v.close(true);
+  });
+
 });
