@@ -5,6 +5,7 @@ import type {LinkPeekSettings} from "../shared/settings";
 export type DPost={id:number;post_number:number;username?:string;cooked?:string;post_url?:string};
 export type DTopic={id:number;title?:string;post_stream?:{posts?:DPost[];stream?:number[]}};
 export type DiscourseSeed={topic:DTopic;warning?:string};
+export type DiscourseScanHooks={signal?:AbortSignal;onProgress?:(result:ScanResult)=>void};
 
 function topicJsonUrl(raw:string){
   const u=new URL(raw),parts=u.pathname.split("/").filter(Boolean),t=parts.indexOf("t");
@@ -12,12 +13,12 @@ function topicJsonUrl(raw:string){
   const idIndex=parts.findIndex((p,i)=>i>t&&/^\d+$/.test(p));if(idIndex<0)return null;
   u.pathname="/"+parts.slice(0,idIndex+1).join("/")+".json";u.search="";u.hash="";return u;
 }
-async function fetchText(url:string){
-  const r=await fetch(url,{credentials:"include",redirect:"follow"});
+async function fetchText(url:string,signal?:AbortSignal){
+  const r=await fetch(url,{credentials:"include",redirect:"follow",signal});
   if(!r.ok)throw new Error(`HTTP ${r.status} for ${url}`);
   return r.text();
 }
-async function fetchJson(url:string){return JSON.parse(await fetchText(url))}
+async function fetchJson(url:string,signal?:AbortSignal){return JSON.parse(await fetchText(url,signal))}
 export function parsePreloadedDiscourseTopic(html:string,topicId:number):DTopic|null{
   const script=/<script\b[^>]*id=["']data-preloaded["'][^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
   if(!script)return null;
@@ -29,12 +30,13 @@ export function parsePreloadedDiscourseTopic(html:string,topicId:number):DTopic|
   }catch{}
   return null;
 }
-async function fetchTopic(raw:string,jsonUrl:URL):Promise<DiscourseSeed>{
-  try{return {topic:await fetchJson(jsonUrl.href) as DTopic}}
+async function fetchTopic(raw:string,jsonUrl:URL,signal?:AbortSignal):Promise<DiscourseSeed>{
+  try{return {topic:await fetchJson(jsonUrl.href,signal) as DTopic}}
   catch(primaryError){
+    if(signal?.aborted)throw primaryError;
     const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)?.[1]);
     if(!id)throw primaryError;
-    const html=await fetchText(raw);
+    const html=await fetchText(raw,signal);
     const fallback=parsePreloadedDiscourseTopic(html,id);
     if(!fallback)throw primaryError;
     return {topic:fallback,warning:"Used embedded Discourse topic data after the JSON endpoint was unavailable."};
@@ -60,47 +62,61 @@ function makeResult(raw:string,topic:DTopic,posts:DPost[],stream:number[],settin
     diagnostics:{adapter:"Discourse",ignored:0,duplicates:d.duplicates,warnings:warning?[warning]:[]}
   };
 }
-export async function prefetchDiscourse(raw:string,settings?:LinkPeekSettings):Promise<{result:ScanResult;seed:DiscourseSeed}>{
+export async function prefetchDiscourse(raw:string,settings?:LinkPeekSettings,signal?:AbortSignal):Promise<{result:ScanResult;seed:DiscourseSeed}>{
   const jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
-  const seed=await fetchTopic(raw,jsonUrl),topic=seed.topic;
+  signal?.throwIfAborted();
+  const seed=await fetchTopic(raw,jsonUrl,signal),topic=seed.topic;
   const initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
   const effectiveMax=settings?.scanScope==="first"?Math.min(settings.maxPosts,50):settings?.maxPosts??2000;
   const stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
   const result=makeResult(raw,topic,initial,stream,settings,initial.length>=stream.length,seed.warning);
   return {result,seed};
 }
-async function fetchBatch(topicId:number,origin:string,ids:number[]):Promise<DPost[]>{
+async function fetchBatch(topicId:number,origin:string,ids:number[],signal?:AbortSignal):Promise<DPost[]>{
+  signal?.throwIfAborted();
   const u=new URL(`/t/${topicId}/posts.json`,origin);
   ids.forEach(id=>u.searchParams.append("post_ids[]",String(id)));
   try{
-    const data=await fetchJson(u.href) as {post_stream?:{posts?:DPost[]}};
+    const data=await fetchJson(u.href,signal) as {post_stream?:{posts?:DPost[]}};
     return data.post_stream?.posts??[];
-  }catch{
+  }catch(error){
+    if(signal?.aborted)throw error;
     const recovered:DPost[]=[];
     for(const id of ids){
-      try{recovered.push(await fetchJson(new URL(`/posts/${id}.json`,origin).href) as DPost)}catch{}
+      signal?.throwIfAborted();
+      try{recovered.push(await fetchJson(new URL(`/posts/${id}.json`,origin).href,signal) as DPost)}
+      catch(inner){if(signal?.aborted)throw inner}
     }
     return recovered;
   }
 }
-export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settings?:LinkPeekSettings,seed?:DiscourseSeed):Promise<ScanResult>{
-  const jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
-  const fetched=seed??await fetchTopic(raw,jsonUrl),topic=fetched.topic;
+export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settings?:LinkPeekSettings,seed?:DiscourseSeed,hooks:DiscourseScanHooks={}):Promise<ScanResult>{
+  const {signal,onProgress}=hooks,jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");
+  signal?.throwIfAborted();
+  const fetched=seed??await fetchTopic(raw,jsonUrl,signal),topic=fetched.topic;
   const initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
   const effectiveMax=settings?.scanScope==="first"?Math.min(maxPosts,50):maxPosts;
   const stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
   const posts=[...initial],have=new Set(posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
-  const size=Math.max(1,Math.min(100,batchSize||50)),batches:DPost[][]=[],idBatches:number[][]=[];
+  onProgress?.(makeResult(raw,topic,posts,stream,settings,missing.length===0,fetched.warning));
+  if(missing.length===0)return makeResult(raw,topic,posts,stream,settings,true,fetched.warning);
+
+  const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
-  let cursor=0;
+  let cursor=0,completed=0;
   const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
   const workers=Array.from({length:concurrency},async()=>{
     while(true){
+      signal?.throwIfAborted();
       const index=cursor++;if(index>=idBatches.length)return;
-      batches[index]=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index]);
+      const batch=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index],signal);
+      posts.push(...batch);completed++;
+      if(onProgress&&(completed%concurrency===0||completed===idBatches.length)){
+        onProgress(makeResult(raw,topic,posts,stream,settings,false,fetched.warning));
+      }
     }
   });
   await Promise.all(workers);
-  for(const batch of batches)if(batch)posts.push(...batch);
-  return makeResult(raw,topic,posts,stream,settings,posts.length>=Math.min(stream.length,effectiveMax),fetched.warning);
+  signal?.throwIfAborted();
+  return makeResult(raw,topic,posts,stream,settings,true,fetched.warning);
 }
