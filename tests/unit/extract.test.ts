@@ -75,4 +75,14 @@ describe("media extraction",()=>{
     const d=dedupeMedia([item,{...item,originalUrl:"https://mirror.example/different.jpeg",score:.2}]);
     expect(d.items).toHaveLength(1);expect(d.duplicates).toBe(1);
   });
+  it("covers filename root fallback and GIF lightbox classification",()=>{
+    const base="https://forum.example/t/topic/1";
+    const items=extractMediaFromHtml(
+      '<a class="lightbox" href="/animated.gif"><img src="/animated-preview.gif" width="500" height="400"></a><img src="https://root-media.test/" width="500" height="400">',
+      base,{}, {minWidth:0,minHeight:0}
+    );
+    expect(items.find(x=>x.originalUrl.endsWith("/animated.gif"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl==="https://root-media.test/")?.filename).toBe("media");
+  });
+
 });
