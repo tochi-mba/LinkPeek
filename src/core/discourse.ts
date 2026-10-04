@@ -63,7 +63,8 @@ async function fetchBatch(topicId:number,origin:string,ids:number[],signal?:Abor
 }
 export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settings?:LinkPeekSettings,seed?:DiscourseSeed,hooks:DiscourseScanHooks={}):Promise<ScanResult>{
   const {signal,onProgress}=hooks,jsonUrl=topicJsonUrl(raw);if(!jsonUrl)throw new Error("Not a Discourse topic URL");ensureNotAborted(signal);
-  const fetched=seed??await fetchTopic(raw,jsonUrl,signal),topic=fetched.topic,initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
+  const topicFetchStarted=performance.now(),fetched=seed??await fetchTopic(raw,jsonUrl,signal),topicFetchMs=seed?Infinity:performance.now()-topicFetchStarted;
+  const topic=fetched.topic,initial=topic.post_stream?.posts??[],allStream=topic.post_stream?.stream??[];
   const effectiveMax=settings?.scanScope==="first"?Math.min(maxPosts,50):maxPosts,stream=(settings?.scanScope==="page"?initial.map(p=>p.id):allStream).slice(0,effectiveMax);
   const state=initialState(raw,topic,initial,stream,settings,fetched.warning),have=new Set(state.posts.map(p=>p.id)),missing=stream.filter(id=>!have.has(id));
   const initialResult={...state.result,complete:missing.length===0};if(missing.length===0)return initialResult;
@@ -74,7 +75,9 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
   let cursor=0,completed=0,progressSent=false,lastProgressAt=performance.now();
   const batchesStartedAt=performance.now();
   let initialProgressTimer:ReturnType<typeof setTimeout>|undefined;
-  if(onProgress)initialProgressTimer=setTimeout(()=>{
+  if(onProgress&&(seed||topicFetchMs>=25)){
+    progressSent=true;lastProgressAt=performance.now();onProgress(initialResult);
+  }else if(onProgress)initialProgressTimer=setTimeout(()=>{
     initialProgressTimer=undefined;
     if(progressSent||completed>0)return;
     progressSent=true;lastProgressAt=performance.now();onProgress(initialResult);
