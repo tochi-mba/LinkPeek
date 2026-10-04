@@ -1,5 +1,5 @@
 import type {MediaItem} from "../shared/media";
-import {canonicalMediaUrl} from "../shared/media";
+import {canonicalMediaUrl,uniqueMediaItems} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 
 const attr=(tag:string,name:string)=>new RegExp(`\\b${name}=["']([^"']+)["']`,"i").exec(tag)?.[1];
@@ -48,8 +48,4 @@ export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<Med
   }
   return out;
 }
-export function dedupeMedia(items:MediaItem[]):{items:MediaItem[];duplicates:number}{
-  const map=new Map<string,MediaItem>();let duplicates=0;
-  for(const item of items){const key=item.id.startsWith("upload:")?item.id:canonicalMediaUrl(item.originalUrl),prev=map.get(key);if(prev){duplicates++;if(item.score>prev.score)map.set(key,item)}else map.set(key,item)}
-  return {items:[...map.values()],duplicates};
-}
+export function dedupeMedia(items:MediaItem[]):{items:MediaItem[];duplicates:number}{return uniqueMediaItems(items)}
