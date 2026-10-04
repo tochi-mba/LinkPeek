@@ -8,14 +8,15 @@ function uniqueValid(values:number[],length:number){
   for(const n of values){if(n<0||n>=length||seen.has(n))continue;seen.add(n);out.push(n)}
   return out;
 }
-export function buildPreloadPlan(length:number,index:number,settings:Pick<LinkPeekSettings,"preloadNext"|"preloadPrevious"|"preloadRest"|"preloadRestLimit"|"preloadOriginals"|"networkMode">):PreloadPlan{
+export function buildPreloadPlan(length:number,index:number,settings:Pick<LinkPeekSettings,"preloadNext"|"preloadPrevious"|"preloadRest"|"preloadRestLimit"|"preloadOriginals"|"networkMode"|"loopMode">):PreloadPlan{
   if(length<=0)return {priority:[],background:[],originals:[]};
   const dataSaver=settings.networkMode==="data";
   const ahead=dataSaver?Math.min(1,settings.preloadNext):Math.max(0,settings.preloadNext);
   const behind=dataSaver?Math.min(1,settings.preloadPrevious):Math.max(0,settings.preloadPrevious);
+  const at=(n:number)=>settings.loopMode==="wrap"?((n%length)+length)%length:n;
   const priority:number[]=[];
-  for(let d=1;d<=Math.max(ahead,behind);d++){if(d<=ahead)priority.push(index+d);if(d<=behind)priority.push(index-d)}
-  const cleanPriority=uniqueValid(priority,length);
+  for(let d=1;d<=Math.max(ahead,behind);d++){if(d<=ahead)priority.push(at(index+d));if(d<=behind)priority.push(at(index-d))}
+  const cleanPriority=uniqueValid(priority,length).filter(n=>n!==index);
   let background:number[]=[];
   const allowRest=!dataSaver&&settings.preloadRest!=="off"&&(settings.preloadRestLimit<=0||length<=settings.preloadRestLimit);
   if(allowRest){
@@ -25,8 +26,8 @@ export function buildPreloadPlan(length:number,index:number,settings:Pick<LinkPe
     background=rest;
   }
   let originals:number[]=[];
-  if(settings.preloadOriginals==="next")originals=uniqueValid([index+1],length);
-  else if(settings.preloadOriginals==="three")originals=uniqueValid([index+1,index+2,index+3],length);
+  if(settings.preloadOriginals==="next")originals=uniqueValid([at(index+1)],length).filter(n=>n!==index);
+  else if(settings.preloadOriginals==="three")originals=uniqueValid([at(index+1),at(index+2),at(index+3)],length).filter(n=>n!==index);
   else if(settings.preloadOriginals==="aggressive")originals=uniqueValid([...cleanPriority,...background],length);
   return {priority:cleanPriority,background,originals};
 }
