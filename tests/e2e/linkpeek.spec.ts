@@ -190,9 +190,14 @@ test("onboarding and settings render and persist GIF customization",async()=>{
     const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;const page=await context.newPage();
     await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
     await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();await expect(page.getByRole("heading",{name:"Gestures",exact:true})).toBeVisible();
+    await page.getByRole("button",{name:"Prefetch & Performance",exact:true}).click();
+    const prefetch=page.locator('[data-choice-key="prefetch"]');await expect(prefetch).toHaveCount(4);await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Nearby");
+    await page.locator('[data-choice-key="prefetch"][data-choice-value="off"]').click();await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
+    await expect(page.locator('.select-shell select[data-key="networkMode"]')).toHaveCount(1);
+    const batch=page.locator('[data-key="batchSize"]');await expect(batch).toHaveValue("50");await page.locator('[data-step-key="batchSize"][data-step-dir="1"]').click();await expect(batch).toHaveValue("60");
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
-    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");
+    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
   }finally{await closeExtension(context,profile)}
 });
