@@ -191,4 +191,32 @@ describe("Discourse fallback and scope coverage",()=>{
     r=await scanDiscourse("https://forum.example/t/seed/86",-5,2,{...DEFAULT_SETTINGS,scanScope:"first",maxRequests:1,minWidth:0,minHeight:0},seed);
     expect(r.totalPosts).toBe(2);expect(r.complete).toBe(true);
   });
+  it("uses default concurrency and tolerates missing post-stream fields",async()=>{
+    const fetchMock=vi.fn(async(input:RequestInfo|URL)=>{
+      const u=new URL(String(input)),ids=u.searchParams.getAll("post_ids[]").map(Number);
+      return new Response(JSON.stringify({post_stream:{posts:ids.map(makePost)}}),{status:200});
+    });vi.stubGlobal("fetch",fetchMock);
+    const missingPosts={topic:{id:90,title:"Missing posts",post_stream:{stream:[1]}}};
+    const a=await scanDiscourse("https://forum.example/t/missing-posts/90",50,10,undefined,missingPosts);
+    expect(a.postsScanned).toBe(1);expect(a.complete).toBe(true);
+    const missingStream={topic:{id:91,title:"Missing stream",post_stream:{posts:[makePost(1)]}}};
+    const b=await scanDiscourse("https://forum.example/t/missing-stream/91",50,10,undefined,missingStream);
+    expect(b.totalPosts).toBe(0);expect(b.items).toHaveLength(1);
+    const noStream={topic:{id:92,title:"No stream"}};
+    const d=await scanDiscourse("https://forum.example/t/no-stream/92",50,10,undefined,noStream);
+    expect(d.totalPosts).toBe(0);expect(d.items).toEqual([]);
+  });
+
+  it("composes progressive results while another batch slot is still pending",async()=>{
+    const seed={topic:{id:93,title:"Partial",post_stream:{stream:[1,2,3],posts:[makePost(1)]}}};
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{
+      const u=new URL(String(input)),ids=u.searchParams.getAll("post_ids[]").map(Number),id=ids[0];
+      await new Promise(r=>setTimeout(r,id===2?140:300));
+      return new Response(JSON.stringify({post_stream:{posts:ids.map(makePost)}}),{status:200});
+    }));
+    const progress:number[]=[];
+    const r=await scanDiscourse("https://forum.example/t/partial/93",1,10,{...DEFAULT_SETTINGS,maxRequests:2,minWidth:0,minHeight:0},seed,{onProgress:x=>progress.push(x.postsScanned??0)});
+    expect(progress).toContain(2);expect(r.postsScanned).toBe(3);expect(r.items).toHaveLength(3);
+  });
+
 });
