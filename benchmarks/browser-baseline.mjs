@@ -18,7 +18,9 @@ function topic(id,count,images=2){
   const posts=Array.from({length:Math.min(20,count)},(_,i)=>post(i+1,images));
   return {id,title:`Thread ${count}`,post_stream:{stream:Array.from({length:count},(_,i)=>i+1),posts}};
 }
-const topics=new Map([[101,topic(101,20)],[102,topic(102,100)],[103,topic(103,500)]]);for(let id=201;id<=212;id++)topics.set(id,topic(id,100));
+const topics=new Map([[101,topic(101,20)],[102,topic(102,100)],[103,topic(103,500)],[105,topic(105,500)],[106,topic(106,500)]]);
+const topicDelay=id=>id===105?50:id===106?100:0;
+const sendTopic=(id,res,body,type="application/json",status=200)=>{const delay=topicDelay(id);if(delay)setTimeout(()=>send(res,body,type,status),delay);else send(res,body,type,status)};for(let id=201;id<=212;id++)topics.set(id,topic(id,100));
 function send(res,body,type="text/html",status=200){
   const b=Buffer.isBuffer(body)?body:Buffer.from(String(body));responseBytes+=b.byteLength;res.statusCode=status;res.setHeader("content-type",type);res.setHeader("content-length",String(b.byteLength));res.end(b);
 }
@@ -32,6 +34,8 @@ const server=createServer((req,res)=>{
       <a id="small" href="${base}/t/small/101">Small</a>
       <a id="medium" href="${base}/t/medium/102">Medium</a>
       <a id="large" href="${base}/t/large/103">Large</a>
+      <a id="slow50" href="${base}/t/slow50/105">Slow 50ms</a>
+      <a id="slow100" href="${base}/t/slow100/106">Slow 100ms</a>
       <a id="fallback" href="${base}/t/fallback/104">Fallback</a>
       <a id="gif" href="${base}/media/perf.gif">GIF</a>
     </body>`);return;
@@ -47,12 +51,12 @@ const server=createServer((req,res)=>{
   const topicJson=/\/t\/[^/]+\/(\d+)\.json$/.exec(path);
   if(topicJson){
     const id=Number(topicJson[1]);if(id===104){send(res,"blocked","text/plain",403);return}
-    send(res,JSON.stringify(topics.get(id)),"application/json");return;
+    sendTopic(id,res,JSON.stringify(topics.get(id)),"application/json");return;
   }
   const postsJson=/\/t\/(\d+)\/posts\.json$/.exec(path);
   if(postsJson){
     const ids=u.searchParams.getAll("post_ids[]").map(Number);
-    send(res,JSON.stringify({post_stream:{posts:ids.map(id=>post(id,2))}}),"application/json");return;
+    const topicId=Number(postsJson[1]);sendTopic(topicId,res,JSON.stringify({post_stream:{posts:ids.map(id=>post(id,2))}}),"application/json");return;
   }
   if(path==="/t/fallback/104"){
     const posts=Array.from({length:100},(_,i)=>post(i+1,2)),t={id:104,title:"Fallback 100",post_stream:{stream:posts.map(p=>p.id),posts}};
@@ -120,7 +124,8 @@ try{
   for(const [name,selector,expected] of [
     ["direct","#direct","1 media"],["generic_200","#generic","200 media"],["generic_1000","#generic-large","1000 media"],
     ["discourse_20_posts","#small","40 media"],["discourse_100_posts","#medium","200 media"],
-    ["discourse_500_posts","#large","1000 media"],["discourse_fallback_100_posts","#fallback","200 media"]
+    ["discourse_500_posts","#large","1000 media"],["discourse_500_posts_rtt50","#slow50","1000 media"],
+    ["discourse_500_posts_rtt100","#slow100","1000 media"],["discourse_fallback_100_posts","#fallback","200 media"]
   ]){
     const r=await hoverMeasure(selector,expected,{label:name});results.latency[name]=r;results.network[name]={requests:r.requests,response_bytes:r.response_bytes};
   }
