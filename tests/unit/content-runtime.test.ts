@@ -81,6 +81,12 @@ describe("content script runtime",()=>{
     a.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:document.body}));vi.advanceTimersByTime(11);expect(viewer.close).toHaveBeenCalled();
   });
 
+  it("ignores clicks while activation mode is hover",async()=>{
+    const a=link("hover-click","https://x.test/hover-click");
+    const ev=new MouseEvent("click",{bubbles:true,cancelable:true,clientX:10,clientY:10});a.dispatchEvent(ev);await tick();
+    expect(ev.defaultPrevented).toBe(false);expect(messages.some(x=>x.url?.includes("hover-click"))).toBe(false);
+  });
+
   it("supports modifier hover and click activation modes",async()=>{
     const a=link("mod","https://x.test/mod");
     await update({activationMode:"modifier"});
