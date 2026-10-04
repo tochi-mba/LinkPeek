@@ -13,7 +13,10 @@ export function gifTimeAtFrame(frames:Pick<DecodedFrame,"delay">[],index:number)
   return frames.slice(0,Math.max(0,index)).reduce((n,f)=>n+gifFrameDelay(f),0);
 }
 export function formatMediaTime(ms:number){
-  const total=Math.max(0,ms)/1000,minutes=Math.floor(total/60),seconds=Math.floor(total%60),hundredths=Math.floor((total%1)*100);
+  const totalMs=Math.max(0,Math.round(ms));
+  const minutes=Math.floor(totalMs/60_000);
+  const seconds=Math.floor((totalMs%60_000)/1_000);
+  const hundredths=Math.floor((totalMs%1_000)/10);
   return `${minutes}:${String(seconds).padStart(2,"0")}.${String(hundredths).padStart(2,"0")}`;
 }
 function decodeBase64(value:string){
