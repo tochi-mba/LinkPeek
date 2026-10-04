@@ -49,7 +49,7 @@ function demoTopic(){
 
 test.beforeAll(async()=>{
   server=createServer((req,res)=>{
-    const path=req.url||"/";
+    const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
       res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a></body></html>`);return;
@@ -60,7 +60,7 @@ test.beforeAll(async()=>{
     if(path==="/t/demo/123.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(demoTopic()));return}
     if(path==="/t/large/789.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(789)));return}
     if(path==="/t/789/posts.json"){
-      const ids=new URL(path+req.url!.slice(path.length),base).searchParams.getAll("post_ids[]").map(Number);
+      const ids=requestUrl.searchParams.getAll("post_ids[]").map(Number);
       setTimeout(()=>{res.setHeader("content-type","application/json");res.end(JSON.stringify({post_stream:{posts:ids.map(perfPost)}}))},250);return;
     }
     if(path==="/t/slow/790.json"){setTimeout(()=>{if(!res.writableEnded){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(790))) }},400);return}
