@@ -61,7 +61,7 @@ export class MediaPreloader{
   }
   async ensure(item:MediaItem){
     if(item.type==="gif"){
-      await chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});
+      void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});
       return;
     }
     const entry=this.load(item.previewUrl,0,this.generation);await entry.promise;
