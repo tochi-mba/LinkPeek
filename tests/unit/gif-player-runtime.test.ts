@@ -85,6 +85,7 @@ describe("GIF runtime",()=>{
     stage.querySelector<HTMLButtonElement>(".lp-gif-toggle")!.click();
     stage.querySelector<HTMLButtonElement>(".lp-gif-loop")!.click();
     const speed=stage.querySelector(".lp-gif-speed") as HTMLSelectElement;speed.value="2";speed.dispatchEvent(new Event("change"));
+    speed.value="";speed.dispatchEvent(new Event("change"));expect((p as any).speed).toBe(1);
     const wheel=new WheelEvent("wheel",{deltaX:10,deltaY:2,cancelable:true,bubbles:true});timeline.dispatchEvent(wheel);
     const wheelY=new WheelEvent("wheel",{deltaX:0,deltaY:-10,cancelable:true,bubbles:true});timeline.dispatchEvent(wheelY);
     stage.querySelector(".lp-gif-controls")!.dispatchEvent(new MouseEvent("dblclick",{bubbles:true}));
@@ -96,6 +97,7 @@ describe("GIF runtime",()=>{
     const p=new GifPlayer(stage,"https://x/a.gif",{...DEFAULT_SETTINGS,gifAutoplay:"never",gifLoop:false},vi.fn());
     expect(p.key(new KeyboardEvent("keydown",{key:" "}))).toBe(false);
     await p.init();
+    expect(p.key(new KeyboardEvent("keydown",{key:" "}))).toBe(true);
     expect(p.key(new KeyboardEvent("keydown",{key:","}))).toBe(true);
     expect(p.key(new KeyboardEvent("keydown",{key:"."}))).toBe(true);
     expect(p.key(new KeyboardEvent("keydown",{key:"["}))).toBe(true);
@@ -110,6 +112,36 @@ describe("GIF runtime",()=>{
 
     (p as any).playing=true;Object.defineProperty(document,"hidden",{configurable:true,value:true});document.dispatchEvent(new Event("visibilitychange"));
     Object.defineProperty(document,"hidden",{configurable:true,value:false});document.dispatchEvent(new Event("visibilitychange"));
+    p.destroy();
+  });
+
+  it("covers default notice, destroyed-error and scheduler guard/end branches",async()=>{
+    const makeStage=()=>{const s=document.createElement("div");s.innerHTML='<div class="lp-gif-mount"></div>';document.body.appendChild(s);return s};
+
+    clearPreparedGifCache();send.mockRejectedValueOnce(new Error("default notice"));
+    const noNotice=new GifPlayer(makeStage(),"https://x/default-notice.gif",{...DEFAULT_SETTINGS,gifAutoplay:"never"});
+    await noNotice.init();expect(document.body.textContent).toContain("frame controls unavailable");
+
+    clearPreparedGifCache();let rejectSlow!:(e:any)=>void;send.mockImplementationOnce(()=>new Promise((_r,reject)=>{rejectSlow=reject}));
+    const destroyed=new GifPlayer(makeStage(),"https://x/destroy-error.gif",{...DEFAULT_SETTINGS,gifAutoplay:"never"},vi.fn());
+    const pending=destroyed.init();destroyed.destroy();rejectSlow(new Error("late fail"));await pending;
+    expect((destroyed as any).frames).toHaveLength(0);
+
+    clearPreparedGifCache();send.mockResolvedValue({base64:btoa("abc"),mime:"image/gif",bytes:3});
+    const p=new GifPlayer(makeStage(),"https://x/schedule.gif",{...DEFAULT_SETTINGS,gifAutoplay:"never",gifLoop:true},vi.fn());
+    await p.init();
+
+    (p as any).speedSelect=undefined;(p as any).playing=false;(p as any).changeSpeed(1);
+    (p as any).schedule();
+    (p as any).playing=true;(p as any).destroyed=true;(p as any).schedule();
+    (p as any).destroyed=false;(p as any).playing=true;(p as any).frame=0;(p as any).schedule();
+    (p as any).playing=false;vi.advanceTimersByTime(1000);
+
+    (p as any).playing=true;(p as any).loop=true;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersByTime(1000);
+    expect((p as any).frame).toBe(0);
+
+    (p as any).playing=true;(p as any).loop=false;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersByTime(1000);
+    expect((p as any).playing).toBe(false);
     p.destroy();
   });
 
