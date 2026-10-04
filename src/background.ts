@@ -89,11 +89,13 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
       const globalSettings=await loadSettings(),settings=effectiveSettings(globalSettings,msg.url),cached=getCached(msg.url,settings);
       if(cached)return cached;
       let task=tasks.get(msg.url);
+      if(task?.controller.signal.aborted){tasks.delete(msg.url);task=undefined}
       if(!task){
         const controller=new AbortController();
         task={controller,consumers:new Map(),promise:Promise.resolve(null as unknown as ScanResult)};
         tasks.set(msg.url,task);addConsumer(task,msg,sender);
-        task.promise=runScan(msg.url,msg.kind,settings,task).finally(()=>tasks.delete(msg.url));
+        const created=task;
+        task.promise=runScan(msg.url,msg.kind,settings,task).finally(()=>{if(tasks.get(msg.url)===created)tasks.delete(msg.url)});
       }else addConsumer(task,msg,sender);
       return task.promise;
     })().then(sendResponse).catch((e:Error)=>sendResponse(e.name==="AbortError"?{cancelled:true}:{error:e.message}));
