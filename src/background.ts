@@ -55,7 +55,7 @@ async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task
     const onProgress=settings.progressiveScan?(progress:ScanResult)=>{
       if(progressStarted){broadcast(task,url,progress);return}
       pendingProgress=progress;
-      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;if(pendingProgress)broadcast(task,url,pendingProgress)},65);
+      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;if(pendingProgress)broadcast(task,url,pendingProgress)},60);
     }:undefined;
     try{
       result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{signal:task.controller.signal,onProgress});
