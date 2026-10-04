@@ -50,13 +50,15 @@ describe("background service worker",()=>{
 
   function send(msg:any,sender:any={tab:{id:3},frameId:2}){
     return new Promise<{ret:any,value:any}>(resolve=>{
-      let settled=false;const ret=message(msg,sender,(value:any)=>{settled=true;resolve({ret,value})});
+      let settled=false,ret:any;
+      const respond=(value:any)=>{settled=true;resolve({ret,value})};
+      ret=message(msg,sender,respond);
       if(ret!==true&&!settled)resolve({ret,value:undefined});
     });
   }
 
   it("handles install and non-install lifecycle",async()=>{
-    await installed({reason:"install"});expect(store.settings).toBe(DEFAULT_SETTINGS);expect(created[0].url).toContain("onboarding.html");
+    await installed({reason:"install"});expect(store.settings).toEqual(DEFAULT_SETTINGS);expect(created[0].url).toContain("onboarding.html");
     const before=created.length;await installed({reason:"update"});expect(created).toHaveLength(before);
   });
 
@@ -76,8 +78,13 @@ describe("background service worker",()=>{
     r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/page",kind:"generic",token:"p"});expect(r.value.kind).toBe("generic");
     await send({type:"LINKPEEK_SCAN",url:"https://x.test/page",kind:"generic",token:"p2"});expect(mocks.scanGeneric).toHaveBeenCalledTimes(1);
 
+    mocks.scanDiscourse.mockImplementationOnce(async(url:string,_b:number,_m:number,_s:any,_seed:any,hooks:any)=>{
+      hooks?.onProgress?.({...direct(url,"discourse"),complete:false,postsScanned:1,totalPosts:2});
+      await new Promise(r=>setTimeout(r,70));
+      return {...direct(url,"discourse"),complete:true,postsScanned:2,totalPosts:2};
+    });
     r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/a/7",kind:"discourse",token:"d"});
-    expect(r.value.complete).toBe(true);await new Promise(r=>setTimeout(r,70));expect(sent.length).toBeGreaterThan(0);
+    expect(r.value.complete).toBe(true);expect(sent.length).toBeGreaterThan(0);
     sent=[];await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/no-tab/8",kind:"discourse"},{});await new Promise(r=>setTimeout(r,70));expect(sent).toHaveLength(0);
   });
 
