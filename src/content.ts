@@ -5,11 +5,13 @@ import {Viewer} from "./ui/viewer";
 type ActiveScan={url:string;token:string;settings:LinkPeekSettings};
 
 let settings:LinkPeekSettings;const viewer=new Viewer();
-let hoverTimer:number|undefined,currentAnchor:HTMLAnchorElement|null=null,requestId=0,startX=0,startY=0,lastPointerX=innerWidth/2,lastPointerY=innerHeight/2;
+let hoverTimer:number|undefined,hoverRearmTimer:number|undefined,currentAnchor:HTMLAnchorElement|null=null,requestId=0,startX=0,startY=0,lastPointerX=innerWidth/2,lastPointerY=innerHeight/2;
 let activeScan:ActiveScan|undefined;const prefetched=new Set<string>();
 
 async function boot(){
   settings=await loadSettings();
+  const storedView=await chrome.storage.local.get("viewerState");
+  viewer.restoreViewerState(storedView.viewerState as {view?:"focus"|"grid";gridThumbSize?:number;expanded?:boolean}|undefined);
   chrome.storage.onChanged.addListener(async()=>{settings=await loadSettings()});
   chrome.runtime.onMessage.addListener(msg=>{
     if(msg?.type!=="LINKPEEK_SCAN_PROGRESS"||!activeScan||msg.token!==activeScan.token||msg.url!==activeScan.url)return;
@@ -33,23 +35,36 @@ function detachOrCancel(scan:ActiveScan,reason:"switch"|"out"){
   }
   cancelScan(scan);
 }
+function armHover(a:HTMLAnchorElement,x:number,y:number,delay?:number){
+  const eff=effectiveSettings(settings,a.href);if(!eff.enabled)return;const kind=classifyLink(a.href);if(["anchor","download","ignored"].includes(kind))return;
+  clear();startX=x;startY=y;hoverTimer=window.setTimeout(()=>{hoverTimer=undefined;if(currentAnchor===a)activate(a,lastPointerX,lastPointerY)},delay??eff.hoverDelay);
+}
 function onOver(e:PointerEvent){
   lastPointerX=e.clientX;lastPointerY=e.clientY;if(settings.activationMode==="click")return;
-  const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a||a===currentAnchor)return;
+  const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a)return;
+  if(a===currentAnchor){if(!hoverTimer&&!activeScan&&settings.activationMode!=="modifier")armHover(a,e.clientX,e.clientY);return}
   if(activeScan&&!viewer.pinned)detachOrCancel(activeScan,"switch");
-  currentAnchor=a;startX=e.clientX;startY=e.clientY;if(settings.activationMode==="modifier"&&!e.altKey)return;clear();
-  const eff=effectiveSettings(settings,a.href);if(!eff.enabled)return;const kind=classifyLink(a.href);if(["anchor","download","ignored"].includes(kind))return;
-  hoverTimer=window.setTimeout(()=>activate(a,e.clientX,e.clientY),eff.hoverDelay);
+  currentAnchor=a;if(settings.activationMode==="modifier"&&!e.altKey)return;armHover(a,e.clientX,e.clientY);
 }
 function onMove(e:PointerEvent){
   lastPointerX=e.clientX;lastPointerY=e.clientY;if(!currentAnchor)return;
   const eff=effectiveSettings(settings,currentAnchor.href);
-  if(settings.activationMode==="modifier"&&e.altKey&&!hoverTimer){startX=e.clientX;startY=e.clientY;hoverTimer=window.setTimeout(()=>currentAnchor&&activate(currentAnchor,e.clientX,e.clientY),eff.hoverDelay);return}
-  if(!hoverTimer)return;if(Math.hypot(e.clientX-startX,e.clientY-startY)>eff.cancelMovePx){clearTimeout(hoverTimer);hoverTimer=undefined}
+  if(settings.activationMode==="modifier"){
+    if(!e.altKey){clear();return}
+    if(!hoverTimer){armHover(currentAnchor,e.clientX,e.clientY);return}
+  }
+  if(hoverTimer&&Math.hypot(e.clientX-startX,e.clientY-startY)>eff.cancelMovePx){
+    clearTimeout(hoverTimer);hoverTimer=undefined;
+  }
+  if(!hoverTimer&&!activeScan&&settings.activationMode!=="click"){
+    if(hoverRearmTimer)clearTimeout(hoverRearmTimer);
+    const anchor=currentAnchor,x=e.clientX,y=e.clientY;
+    hoverRearmTimer=window.setTimeout(()=>{hoverRearmTimer=undefined;if(currentAnchor===anchor)armHover(anchor,x,y,Math.min(160,eff.hoverDelay))},90);
+  }
 }
 function onOut(e:PointerEvent){
   const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a||a!==currentAnchor)return;
-  const to=e.relatedTarget as Node|null;if(to&&viewer.host.contains(to))return;clear();
+  const to=e.relatedTarget as Node|null;if(to&&(a.contains(to)||viewer.host.contains(to)))return;clear();
   if(!viewer.pinned){
     requestId++;
     if(activeScan)detachOrCancel(activeScan,"out");
@@ -57,7 +72,7 @@ function onOut(e:PointerEvent){
   }
   currentAnchor=null;
 }
-function clear(){if(hoverTimer)clearTimeout(hoverTimer);hoverTimer=undefined}
+function clear(){clearTimeout(hoverTimer);clearTimeout(hoverRearmTimer);hoverTimer=undefined;hoverRearmTimer=undefined}
 async function activate(a:HTMLAnchorElement,x:number,y:number){
   clear();if(activeScan)detachOrCancel(activeScan,"switch");
   const id=++requestId,eff=effectiveSettings(settings,a.href),kind=classifyLink(a.href),token=`${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;

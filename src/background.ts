@@ -9,6 +9,8 @@ type ScanTask={controller:AbortController;consumers:Map<string,Consumer>;promise
 
 const cache=new Map<string,CacheEntry>();let cacheBytes=0;
 const tasks=new Map<string,ScanTask>(),prefetchTasks=new Map<string,Promise<ScanResult|null>>();
+type BinaryEntry={at:number;base64:string;mime:string;bytes:number};
+const binaryCache=new Map<string,BinaryEntry>(),binaryTasks=new Map<string,Promise<BinaryEntry>>();let binaryBytes=0;
 
 function bytesToBase64(buffer:ArrayBuffer){
   const bytes=new Uint8Array(buffer);let binary="";const size=0x8000;
@@ -32,8 +34,25 @@ function putCache(url:string,result:ScanResult,settings:LinkPeekSettings,discour
   if(bytes>limit)return;
   cache.set(url,{at:Date.now(),bytes,result,discourseSeed});cacheBytes+=bytes;
   while(cacheBytes>limit&&cache.size){
-    const oldest=cache.keys().next().value as string|undefined;if(!oldest)break;removeCache(oldest);
+    const oldest=cache.keys().next().value as string;removeCache(oldest);
   }
+}
+function removeBinary(url:string){const entry=binaryCache.get(url);if(!entry)return;binaryCache.delete(url);binaryBytes=Math.max(0,binaryBytes-entry.bytes)}
+async function fetchBinary(urlRaw:string,maxMb:number){
+  const existing=binaryCache.get(urlRaw);if(existing){binaryCache.delete(urlRaw);binaryCache.set(urlRaw,existing);return existing}
+  const pending=binaryTasks.get(urlRaw);if(pending)return pending;
+  const task=(async()=>{
+    const url=new URL(urlRaw);if(!/^https?:$/.test(url.protocol))throw new Error("Unsupported media URL");
+    const maxBytes=Math.max(1,Math.min(100,Number(maxMb)))*1024*1024;
+    const response=await fetch(url.href,{credentials:"include",redirect:"follow"});if(!response.ok)throw new Error(`HTTP ${response.status} for media`);
+    const announced=Number(response.headers.get("content-length")||0);if(announced>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
+    const buffer=await response.arrayBuffer();if(buffer.byteLength>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
+    const entry:BinaryEntry={at:Date.now(),base64:bytesToBase64(buffer),mime:response.headers.get("content-type")||"application/octet-stream",bytes:buffer.byteLength};
+    const limit=64*1024*1024;removeBinary(urlRaw);binaryCache.set(urlRaw,entry);binaryBytes+=entry.bytes;
+    while(binaryBytes>limit&&binaryCache.size){const oldest=binaryCache.keys().next().value as string;removeBinary(oldest)}
+    return entry;
+  })().finally(()=>binaryTasks.delete(urlRaw));
+  binaryTasks.set(urlRaw,task);return task;
 }
 function directResult(url:string):ScanResult{
   return {url,kind:"direct-image",items:[{id:url,type:/\.gif/i.test(url)?"gif":"image",originalUrl:url,previewUrl:url,sourceUrl:url,score:1}],complete:true,diagnostics:{adapter:"Direct media",ignored:0,duplicates:0,warnings:[]}};
@@ -55,7 +74,7 @@ async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task
     const onProgress=settings.progressiveScan?(progress:ScanResult)=>{
       if(progressStarted){broadcast(task,url,progress);return}
       pendingProgress=progress;
-      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;if(pendingProgress)broadcast(task,url,pendingProgress)},60);
+      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;broadcast(task,url,pendingProgress!)},60);
     }:undefined;
     try{
       result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{signal:task.controller.signal,onProgress});
@@ -115,18 +134,13 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
     }
     sendResponse({ok:true});return;
   }
-  if(msg?.type==="LINKPEEK_FETCH_BINARY"){
-    (async()=>{
-      const url=new URL(msg.url);if(!/^https?:$/.test(url.protocol))throw new Error("Unsupported media URL");
-      const maxBytes=Math.max(1,Math.min(100,Number(msg.maxMb)||32))*1024*1024;
-      const response=await fetch(url.href,{credentials:"include",redirect:"follow"});if(!response.ok)throw new Error(`HTTP ${response.status} for media`);
-      const announced=Number(response.headers.get("content-length")||0);if(announced>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
-      const buffer=await response.arrayBuffer();if(buffer.byteLength>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
-      return {base64:bytesToBase64(buffer),mime:response.headers.get("content-type")||"application/octet-stream",bytes:buffer.byteLength};
-    })().then(sendResponse).catch((e:Error)=>sendResponse({error:e.message}));
+  if(msg?.type==="LINKPEEK_FETCH_BINARY"||msg?.type==="LINKPEEK_PREFETCH_BINARY"){
+    fetchBinary(msg.url,Number(msg.maxMb)||32)
+      .then(entry=>sendResponse(msg.type==="LINKPEEK_PREFETCH_BINARY"?{ok:true,bytes:entry.bytes}:entry))
+      .catch((e:Error)=>sendResponse({error:e.message}));
     return true;
   }
-  if(msg?.type==="LINKPEEK_CLEAR_CACHE"){cache.clear();cacheBytes=0;sendResponse({ok:true});return;}
+  if(msg?.type==="LINKPEEK_CLEAR_CACHE"){cache.clear();cacheBytes=0;binaryCache.clear();binaryBytes=0;sendResponse({ok:true});return;}
   if(msg?.type==="LINKPEEK_OPEN_OPTIONS"){chrome.runtime.openOptionsPage();sendResponse({ok:true});return;}
   if(msg?.type==="LINKPEEK_DOWNLOAD"){
     chrome.downloads.download({url:msg.url,filename:msg.filename,saveAs:false}).then(id=>sendResponse({id})).catch((e:Error)=>sendResponse({error:e.message}));

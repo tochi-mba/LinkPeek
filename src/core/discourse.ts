@@ -26,7 +26,7 @@ export function parsePreloadedDiscourseTopic(html:string,topicId:number):DTopic|
 async function fetchTopic(raw:string,jsonUrl:URL,signal?:AbortSignal):Promise<DiscourseSeed>{
   try{return {topic:await fetchJson(jsonUrl.href,signal) as DTopic}}
   catch(primaryError){
-    if(signal?.aborted)throw primaryError;const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)?.[1]);if(!id)throw primaryError;
+    if(signal?.aborted)throw primaryError;const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)![1]);
     const html=await fetchText(raw,signal),fallback=parsePreloadedDiscourseTopic(html,id);if(!fallback)throw primaryError;
     return {topic:fallback,warning:"Used embedded Discourse topic data after the JSON endpoint was unavailable."};
   }
@@ -38,7 +38,7 @@ function fromPosts(posts:DPost[],topicUrl:string,settings?:LinkPeekSettings){
   }return items;
 }
 function resultFromItems(raw:string,topic:DTopic,items:MediaItem[],postsScanned:number,totalPosts:number,settings?:LinkPeekSettings,complete=false,warning?:string):ScanResult{
-  const d=settings?.dedupe===false?{items,duplicates:0}:dedupeMedia(items);
+  const d=dedupeMedia(items);
   return {url:raw,kind:"discourse",title:topic.title,items:d.items,complete,postsScanned,totalPosts,diagnostics:{adapter:"Discourse",ignored:0,duplicates:d.duplicates,warnings:warning?[warning]:[]}};
 }
 function initialState(raw:string,topic:DTopic,posts:DPost[],stream:number[],settings?:LinkPeekSettings,warning?:string){
@@ -71,12 +71,12 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
-  const batchPosts:Array<DPost[]|undefined>=new Array(idBatches.length),batchItems:Array<MediaItem[]|undefined>=new Array(idBatches.length);
+  const batchPosts:Array<DPost[]>=Array.from({length:idBatches.length},()=>[]),batchItems:Array<MediaItem[]>=Array.from({length:idBatches.length},()=>[]);
   let cursor=0,completed=0;
-  const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
+  const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length));
   const compose=(complete=false)=>{
-    const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+(b?.length??0),0);
-    const items=[...state.items,...batchItems.flatMap(x=>x??[])];
+    const postsScanned=state.posts.length+batchPosts.reduce((n,b)=>n+b.length,0);
+    const items=[...state.items,...batchItems.flat()];
     return resultFromItems(raw,topic,items,postsScanned,stream.length,settings,complete,fetched.warning);
   };
   const workers=Array.from({length:concurrency},async()=>{
@@ -88,5 +88,5 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
     }
   });
   await Promise.all(workers);ensureNotAborted(signal);
-  const final=compose(true);final.complete=(final.postsScanned??0)>=Math.min(stream.length,effectiveMax);return final;
+  const final=compose(true);final.complete=final.postsScanned!>=Math.min(stream.length,effectiveMax);return final;
 }

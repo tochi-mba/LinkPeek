@@ -1,5 +1,5 @@
 import type {MediaItem} from "../shared/media";
-import {canonicalMediaUrl} from "../shared/media";
+import {canonicalMediaUrl,uniqueMediaItems} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 
 const attr=(tag:string,name:string)=>new RegExp(`\\b${name}=["']([^"']+)["']`,"i").exec(tag)?.[1];
@@ -9,7 +9,7 @@ type ExtractOptions=Pick<LinkPeekSettings,"includeImages"|"includeGif"|"includeW
 const defaults:ExtractOptions={includeImages:true,includeGif:true,includeWebp:true,includeAvif:true,includeSvg:false,includeAvatars:false,includeEmoji:false,minWidth:120,minHeight:120,quotedDuplicates:"hide"};
 
 function allowed(url:string,o:ExtractOptions){
-  const ext=(new URL(url,"https://example.test").pathname.split(".").pop()||"").toLowerCase();
+  const ext=new URL(url,"https://example.test").pathname.split(".").pop()!.toLowerCase();
   if(ext==="gif")return o.includeGif;if(ext==="webp")return o.includeWebp;if(ext==="avif")return o.includeAvif;if(ext==="svg")return o.includeSvg;
   return o.includeImages;
 }
@@ -24,7 +24,7 @@ export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<Med
   const o={...defaults,...options},source=o.quotedDuplicates==="show"?html:withoutQuotedBlocks(html),out:MediaItem[]=[];const seen=new Set<string>();
   const lightbox=/<a\b[^>]*class=["'][^"']*\blightbox\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi;let m:RegExpExecArray|null;
   while((m=lightbox.exec(source))){
-    const block=m[0],open=block.match(/^<a\b[^>]*>/i)?.[0]??"",href=attr(open,"href");if(!href)continue;
+    const block=m[0],open=block.match(/^<a\b[^>]*>/i)![0],href=attr(open,"href");if(!href)continue;
     const img=block.match(/<img\b[^>]*>/i)?.[0]??"",preview=attr(img,"src")||href,original=abs(href,baseUrl);if(!allowed(original,o))continue;
     const canonical=canonicalMediaUrl(original),key=mediaId(img,canonical);if(seen.has(key)||seen.has(canonical))continue;
     const w=Number(attr(img,"width")||0)||undefined,h=Number(attr(img,"height")||0)||undefined;if((w&&w<o.minWidth)||(h&&h<o.minHeight))continue;seen.add(key);seen.add(canonical);
@@ -48,8 +48,4 @@ export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<Med
   }
   return out;
 }
-export function dedupeMedia(items:MediaItem[]):{items:MediaItem[];duplicates:number}{
-  const map=new Map<string,MediaItem>();let duplicates=0;
-  for(const item of items){const key=item.id.startsWith("upload:")?item.id:canonicalMediaUrl(item.originalUrl),prev=map.get(key);if(prev){duplicates++;if(item.score>prev.score)map.set(key,item)}else map.set(key,item)}
-  return {items:[...map.values()],duplicates};
-}
+export function dedupeMedia(items:MediaItem[]):{items:MediaItem[];duplicates:number}{return uniqueMediaItems(items)}

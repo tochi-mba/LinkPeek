@@ -30,9 +30,59 @@ describe("media extraction",()=>{
     const marked=extractMediaFromHtml(quote,"https://forum.example/t/topic/1",{}, {quotedDuplicates:"mark"});
     expect(marked).toHaveLength(2);expect(marked.find(x=>x.id==="upload:quoted")?.quoted).toBe(true);
   });
+  it("covers lightbox and image fallback branches exhaustively",()=>{
+    const base="https://forum.example/t/topic/1";
+    const source=`
+      <a class="lightbox"><img src="/ignored.jpg"></a>
+      <a class="lightbox" href="/no-img.jpg"></a>
+      <a class="lightbox" href="/vector.svg"><img src="/vector.svg" width="500" height="500"></a>
+      <a class="lightbox" href="/tiny-w.jpg"><img src="/tiny-w.jpg" width="20" height="500"></a>
+      <a class="lightbox" href="/tiny-h.jpg"><img src="/tiny-h.jpg" width="500" height="20"></a>
+      <a class="lightbox" href="/alt.jpg"><img src="/alt-preview.jpg" alt="Alt name"></a>
+      <a class="lightbox" href="https://x.test/%E0%A4%A"><img src="https://x.test/%E0%A4%A" width="500" height="500"></a>
+      <a class="lightbox" href="/dup.jpg"><img src="/dup.jpg" width="500" height="500"></a>
+      <a class="lightbox" href="/dup.jpg"><img src="/dup.jpg" width="500" height="500"></a>
+      <img src="/plain.jpg" width="500" height="500" srcset="/regular.jpg 1x">
+      <img src="/empty-srcset.jpg" width="500" height="500" srcset=", ">
+      <img src="/anim-class.jpg" class="animated" width="500" height="500">
+      <a class="lightbox" href="/lightbox.gif"><img src="/lightbox-preview.gif" width="500" height="500"></a>
+      <img src="https://x.test/" width="500" height="500">
+      <img src="https://x.test/file." width="500" height="500">
+      <img src="/tiny-height.jpg" width="500" height="20">
+      <img src="/dup.jpg" width="500" height="500">
+    `;
+    const items=extractMediaFromHtml(source,base,{}, {includeSvg:false,minWidth:120,minHeight:120});
+    expect(items.some(x=>x.originalUrl.endsWith("/no-img.jpg"))).toBe(true);
+    expect(items.find(x=>x.originalUrl.endsWith("/alt.jpg"))?.filename).toBe("Alt name");
+    expect(items.find(x=>x.originalUrl.includes("%E0%A4%A"))?.filename).toBe("media");
+    expect(items.filter(x=>x.originalUrl.endsWith("/dup.jpg"))).toHaveLength(1);
+    expect(items.find(x=>x.originalUrl.endsWith("/plain.jpg"))?.previewUrl).toBe("https://forum.example/regular.jpg");
+    expect(items.find(x=>x.originalUrl.endsWith("/empty-srcset.jpg"))?.previewUrl).toBe("https://forum.example/empty-srcset.jpg");
+    expect(items.find(x=>x.originalUrl.endsWith("/anim-class.jpg"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl.endsWith("/lightbox.gif"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl==="https://x.test/")?.filename).toBe("media");
+    expect(items.some(x=>x.originalUrl.includes("file."))).toBe(true);
+    expect(items.some(x=>x.originalUrl.includes("vector.svg"))).toBe(false);
+    expect(items.some(x=>x.originalUrl.includes("tiny-w")||x.originalUrl.includes("tiny-h"))).toBe(false);
+
+    const invalid=extractMediaFromHtml('<img src="relative.jpg" width="500" height="500">',"not a valid base");
+    expect(invalid[0]?.originalUrl).toBe("relative.jpg");
+    expect(extractMediaFromHtml("<p>none</p>",base,{}, {quotedDuplicates:"mark"})).toEqual([]);
+  });
+
   it("deduplicates canonical URLs and stable Discourse upload IDs",()=>{
     const item=extractMediaFromHtml(html,"https://forum.example/t/topic/1")[0];
     const d=dedupeMedia([item,{...item,originalUrl:"https://mirror.example/different.jpeg",score:.2}]);
     expect(d.items).toHaveLength(1);expect(d.duplicates).toBe(1);
   });
+  it("covers filename root fallback and GIF lightbox classification",()=>{
+    const base="https://forum.example/t/topic/1";
+    const items=extractMediaFromHtml(
+      '<a class="lightbox" href="/animated.gif"><img src="/animated-preview.gif" width="500" height="400"></a><img src="https://root-media.test/" width="500" height="400">',
+      base,{}, {minWidth:0,minHeight:0}
+    );
+    expect(items.find(x=>x.originalUrl.endsWith("/animated.gif"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl==="https://root-media.test/")?.filename).toBe("media");
+  });
+
 });
