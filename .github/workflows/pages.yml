@@ -22,8 +22,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm install
       - run: npm run check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - name: Package CRX
         env:
           LINKPEEK_CRX_KEY_B64: ${{ secrets.LINKPEEK_CRX_KEY_B64 }}
