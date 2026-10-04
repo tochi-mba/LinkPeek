@@ -51,10 +51,15 @@ function broadcast(task:ScanTask,url:string,result:ScanResult){
 async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task:ScanTask,seed?:DiscourseSeed){
   let result:ScanResult;
   if(kind==="discourse"){
-    result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{
-      signal:task.controller.signal,
-      onProgress:settings.progressiveScan?(progress)=>broadcast(task,url,progress):undefined
-    });
+    let progressTimer:ReturnType<typeof setTimeout>|undefined,pendingProgress:ScanResult|undefined,progressStarted=false;
+    const onProgress=settings.progressiveScan?(progress:ScanResult)=>{
+      if(progressStarted){broadcast(task,url,progress);return}
+      pendingProgress=progress;
+      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;if(pendingProgress)broadcast(task,url,pendingProgress)},70);
+    }:undefined;
+    try{
+      result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{signal:task.controller.signal,onProgress});
+    }finally{if(progressTimer)clearTimeout(progressTimer)}
   }else if(kind==="direct-image")result=directResult(url);
   else result=await scanGeneric(url,settings,task.controller.signal);
   if(settings.cacheThreads)putCache(url,result,settings);
