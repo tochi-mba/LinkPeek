@@ -65,7 +65,9 @@ describe("background service worker",()=>{
   it("handles shallow prefetch variants, cached reuse and prefetch errors",async()=>{
     let r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/a.jpg",kind:"direct-image"});expect(r.value.kind).toBe("direct-image");
     await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/a.jpg",kind:"direct-image"});
-    r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/page",kind:"generic"});expect(r.value).toBeNull();
+    r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/page",kind:"generic"});expect(r.value.kind).toBe("generic");
+    r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/video.mp4",kind:"direct-video"});expect(r.value).toBeNull();
+    mocks.scanGeneric.mockRejectedValueOnce(new Error("generic prefetch failed"));r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/broken",kind:"generic"});expect(r.value.error).toBe("generic prefetch failed");
     r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/t/a/1",kind:"discourse"});expect(r.value.kind).toBe("discourse");
     await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/t/a/1",kind:"discourse"});expect(mocks.prefetchDiscourse).toHaveBeenCalledTimes(1);
     mocks.prefetchDiscourse.mockRejectedValueOnce(new Error("prefetch failed"));

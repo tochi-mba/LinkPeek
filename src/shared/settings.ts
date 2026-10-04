@@ -53,7 +53,7 @@ export const DEFAULT_SETTINGS:LinkPeekSettings={
   panWhenZoomed:true,panFriction:.85,edgeResistance:true,edgeNext:true,edgeDwell:120,resetZoomPerImage:true,rememberZoom:false,
   includeImages:true,includeGif:true,includeWebp:true,includeAvif:true,includeSvg:false,includeVideoThumbs:true,includeAvatars:false,includeEmoji:false,minWidth:200,minHeight:160,minBytes:0,
   preferVersion:"original",thumbQuality:"auto",relevanceStrength:.7,dedupe:true,quotedDuplicates:"hide",perceptualHash:false,scanScope:"whole",maxPosts:2000,progressiveScan:true,prioritizeLinkedPost:true,fetchDirection:"linked",
-  continueAfterClose:"brief",cacheThreads:true,prefetch:"nearby",prefetchRadius:1,idlePrefetch:true,maxRequests:3,batchSize:50,networkMode:"adaptive",meteredOff:true,cacheMinutes:60,maxCacheMb:250,preloadNext:4,preloadPrevious:2,preloadConcurrency:4,preloadMemoryMb:192,preloadRest:"idle",preloadRestLimit:120,preloadOriginals:"next",
+  continueAfterClose:"brief",cacheThreads:true,prefetch:"nearby",prefetchRadius:1,idlePrefetch:true,maxRequests:2,batchSize:50,networkMode:"adaptive",meteredOff:true,cacheMinutes:60,maxCacheMb:64,preloadNext:2,preloadPrevious:1,preloadConcurrency:3,preloadMemoryMb:64,preloadRest:"off",preloadRestLimit:60,preloadOriginals:"never",
   gifAutoplay:"focus",gifLoop:true,gifDefaultSpeed:1,gifPauseWhenHidden:true,gifDecodeMaxMb:32,gifControls:"always",gifScrubWheel:true,gifFrameStepKeyboard:true,videoAutoplay:false,videoMuted:true,videoLoopShort:true,theme:"rex",customAccent:"#D7FF3F",blur:16,transparency:.08,imageBackground:"black",thumbnailShape:"ratio",thumbnailSize:120,density:"comfortable",
   labels:"both",scrollbar:"minimal",motion:"full",shortcuts:{next:["ArrowDown","ArrowRight"],previous:["ArrowUp","ArrowLeft"],close:["Escape"],pin:["p"],grid:["g"],focus:["f"],favorite:["b"],open:["o"],help:["?","/"],zoomIn:["+","="],zoomOut:["-"],resetZoom:["0"],download:["d"]},
   mouseWheel:"navigate",ctrlWheel:"zoom",middleClick:"original",siteProfiles:{},stripTracking:true,referrerPolicy:"same-origin",clearCache:"close",
@@ -62,15 +62,19 @@ export const DEFAULT_SETTINGS:LinkPeekSettings={
   customIgnoreSelectors:["header img","nav img",".avatar",".emoji",".badge"],customPreferredSelectors:[".cooked .lightbox","article img","main img"],onboardingComplete:false,showLearningTips:true,preset:"balanced"
 };
 export const PRESETS:Record<string,Partial<LinkPeekSettings>>={
-  balanced:{hoverDelay:300,prefetch:"nearby",defaultView:"focus",motion:"full"},
-  minimal:{hoverDelay:500,prefetch:"off",panelSize:"small",showAuthor:false,showLearningTips:false,motion:"reduced"},
-  fast:{hoverDelay:120,prefetch:"visible",maxRequests:5,preloadNext:7,preloadPrevious:3,preloadConcurrency:6,preloadRest:"all",preloadRestLimit:240,networkMode:"aggressive"},
+  balanced:{hoverDelay:300,prefetch:"nearby",maxRequests:2,preloadNext:2,preloadPrevious:1,preloadConcurrency:3,preloadRest:"off",preloadOriginals:"never",defaultView:"focus",motion:"full"},
+  minimal:{hoverDelay:500,prefetch:"off",panelSize:"small",showAuthor:false,showLearningTips:false,maxRequests:1,preloadNext:1,preloadPrevious:0,preloadConcurrency:1,preloadMemoryMb:32,preloadRest:"off",preloadOriginals:"never",networkMode:"data",motion:"reduced"},
+  fast:{hoverDelay:120,prefetch:"visible",maxRequests:4,preloadNext:5,preloadPrevious:2,preloadConcurrency:4,preloadMemoryMb:128,preloadRest:"idle",preloadRestLimit:40,preloadOriginals:"never",networkMode:"aggressive"},
   touchpad:{hoverDelay:220,verticalGesture:"navigate",horizontalGesture:"scrub",pinchZoom:true,doubleClick:"zoom",gestureThreshold:48,navSensitivity:.7},
   manual:{activationMode:"modifier",prefetch:"off",hoverDelay:0}
 };
+export function migrateSettings(raw:Partial<LinkPeekSettings>){
+  const legacyBalanced=JSON.stringify([raw.maxRequests,raw.maxCacheMb,raw.preloadNext,raw.preloadPrevious,raw.preloadConcurrency,raw.preloadMemoryMb,raw.preloadRest,raw.preloadRestLimit,raw.preloadOriginals])==='[3,250,4,2,4,192,"idle",120,"next"]';
+  return legacyBalanced?{...raw,maxRequests:2,maxCacheMb:64,preloadNext:2,preloadPrevious:1,preloadConcurrency:3,preloadMemoryMb:64,preloadRest:"off" as const,preloadRestLimit:60,preloadOriginals:"never" as const}:raw;
+}
 export async function loadSettings():Promise<LinkPeekSettings>{
   const stored=await chrome.storage.local.get("settings");
-  const raw=(stored.settings??{}) as Partial<LinkPeekSettings>;
+  const raw=migrateSettings((stored.settings??{}) as Partial<LinkPeekSettings>);
   return {...DEFAULT_SETTINGS,...raw,shortcuts:{...DEFAULT_SETTINGS.shortcuts,...(raw.shortcuts??{})},siteProfiles:raw.siteProfiles??{}} as LinkPeekSettings;
 }
 export async function saveSettings(settings:LinkPeekSettings){await chrome.storage.local.set({settings});}

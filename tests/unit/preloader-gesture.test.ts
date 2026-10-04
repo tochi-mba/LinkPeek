@@ -29,6 +29,7 @@ describe("preload planning",()=>{
     expect(wrap.priority).toEqual([1,4,2,3]);expect(wrap.originals).toEqual([1]);expect(wrap.background).toEqual([]);
     const forward=buildPreloadPlan(8,3,{...base,preloadRest:"all"},1);
     expect(forward.priority.slice(0,3)).toEqual([4,2,5]);expect(forward.originals).toEqual([4]);
+    expect(buildPreloadPlan(8,3,{...base,preloadRest:"all"},-1).originals).toEqual([2]);
     const backward=buildPreloadPlan(8,3,{...base,preloadOriginals:"three",preloadRest:"all"},-1);
     expect(backward.priority[0]).toBe(4);expect(backward.originals).toEqual([2,1,0]);
     const forwardThree=buildPreloadPlan(8,3,{...base,preloadOriginals:"three",preloadRest:"all"},1);
@@ -43,6 +44,7 @@ describe("preload planning",()=>{
     expect(noRest.background).toEqual([]);expect(noRest.originals).toEqual([]);
     const stop=buildPreloadPlan(4,0,{...base,loopMode:"stop"},0);
     expect(stop.priority).toEqual([1,2]);expect(stop.originals).toEqual([1]);
+    expect(buildPreloadPlan(1,0,base).originals).toEqual([]);
   });
 });
 
@@ -56,7 +58,7 @@ describe("MediaPreloader",()=>{
   });
   afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals()});
 
-  it("preloads, decodes, reuses elements, warms GIFs and disposes",async()=>{
+  it("preloads, decodes, reuses image and GIF previews and disposes",async()=>{
     const p=new MediaPreloader();
     p.schedule(0);
     const items=[item(0),item(1),item(2,"gif"),item(3)];
@@ -67,9 +69,10 @@ describe("MediaPreloader",()=>{
     expect(p.isReady(items[1])).toBe(true);
     expect(p.element(items[1])).toBeTruthy();
     expect(p.element(item(99))).toBeUndefined();
-    await p.ensure(items[2]);expect(sent.some(x=>x.type==="LINKPEEK_PREFETCH_BINARY")).toBe(true);
+    await p.ensure(items[2]);expect(sent.some(x=>x.type==="LINKPEEK_PREFETCH_BINARY")).toBe(false);
     expect(p.isReady(items[2])).toBe(true);
     p.schedule(1,1);p.schedule(0,-1);
+    const originals=new MediaPreloader();originals.reset([item(0),item(1)],0,{...settings,preloadOriginals:"next"});await new Promise(r=>setTimeout(r,0));originals.dispose();
     p.dispose();expect(p.element(items[1])).toBeUndefined();
   });
 
@@ -97,7 +100,7 @@ describe("MediaPreloader",()=>{
 
   it("covers stale idle work, default settings fallbacks and internal eviction guards",async()=>{
     const p=new MediaPreloader();
-    await p.ensure(item(90,"gif"));expect(sent.at(-1)?.maxMb).toBe(32);
+    await p.ensure(item(90,"gif"));expect(sent).toHaveLength(0);
     (p as any).pump();(p as any).prune();expect((p as any).keepUrls(DEFAULT_SETTINGS).size).toBe(0);(p as any).deleteEntry("missing");
 
     (p as any).items=[item(0),item(1)];
@@ -105,7 +108,8 @@ describe("MediaPreloader",()=>{
     expect((p as any).keepUrls((p as any).settings).size).toBeGreaterThan(0);
     (p as any).enqueueOriginal({...item(0),originalUrl:""},0,0);
     (p as any).enqueueOriginal({...item(0),originalUrl:item(0).previewUrl},0,0);
-    (p as any).settings=undefined;(p as any).enqueuePreview(item(91,"gif"),0,0);await Promise.resolve();expect(sent.at(-1)?.maxMb).toBe(32);
+    (p as any).settings=undefined;(p as any).enqueuePreview(item(91,"gif"),0,0);(p as any).enqueueOriginal(item(91,"gif"),0,0);await Promise.resolve();expect(sent).toHaveLength(0);
+    (p as any).settings={...DEFAULT_SETTINGS,preloadOriginals:"aggressive"};(p as any).enqueueOriginal(item(91,"gif"),0,0);(p as any).enqueueOriginal(item(1),0,0);
 
     (p as any).settings={...DEFAULT_SETTINGS,preloadConcurrency:2};(p as any).generation=2;
     (p as any).queue=[{url:"https://x.test/stale.jpg",priority:0,generation:1}];(p as any).pump();expect((p as any).queue).toHaveLength(0);
@@ -177,6 +181,15 @@ describe("GestureController",()=>{
     cb.isZoomed.mockReturnValue(false);settings.horizontalGesture="disabled";wheel(100,1);expect(cb.scrub).not.toHaveBeenCalled();
     settings.verticalGesture="disabled";wheel(0,100);expect(cb.next).not.toHaveBeenCalled();
     settings.verticalGesture="scroll";wheel(0,100);expect(cb.next).not.toHaveBeenCalled();
+    g.destroy();
+  });
+
+  it("normalizes line/page wheels and honors explicit mouse-wheel modes",()=>{
+    const g=new GestureController(el,cb,settings);
+    settings.mouseWheel="scroll";wheel(0,100);expect(cb.next).not.toHaveBeenCalled();
+    settings.mouseWheel="zoom";wheel(0,100);expect(cb.zoom).toHaveBeenCalled();
+    settings.mouseWheel="navigate";wheel(3,0,{deltaMode:WheelEvent.DOM_DELTA_LINE});expect(cb.scrub).toHaveBeenCalled();
+    wheel(0,1,{deltaMode:WheelEvent.DOM_DELTA_PAGE});expect(cb.next).toHaveBeenCalled();
     g.destroy();
   });
 

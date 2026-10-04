@@ -95,17 +95,19 @@ function render(filter=""){
   const q=filter.trim().toLowerCase();$("nav").innerHTML=categories.map(([name])=>`<button data-jump="${name}">${name}</button>`).join("");
   $("sections").innerHTML=categories.map(([name,keys])=>{
     const visible=keys.filter(k=>!q||name.toLowerCase().includes(q)||title(k).toLowerCase().includes(q)||(descriptions[k]||"").toLowerCase().includes(q));if(!visible.length)return "";
-    return `<section class="section card" data-section="${name}"><div class="section-head"><h2>${name}</h2>${categoryModified(keys)?'<span class="modified" title="Modified"></span>':""}<span class="spacer"></span><button class="reset" data-reset-section="${name}">Reset section ↺</button></div>${visible.map(k=>`<label class="field"><span><strong>${title(k)}</strong><small>${descriptions[k]||""}</small></span><span class="field-control">${control(k,(state as any)[k])}${!same((state as any)[k],(DEFAULT_SETTINGS as any)[k])?`<button class="reset" data-reset="${k}">↺</button>`:""}</span></label>`).join("")}</section>`;
+    const open=q||["General","Hover & Activation","Gestures","Prefetch & Performance"].includes(name);
+    return `<details class="section card" data-section="${name}" ${open?"open":""}><summary class="section-head"><h2>${name}</h2>${categoryModified(keys)?'<span class="modified" title="Modified"></span>':""}<span class="spacer"></span><span class="section-count">${visible.length}</span></summary><div class="section-body">${visible.map(k=>`<label class="field"><span><strong>${title(k)}</strong><small>${descriptions[k]||""}</small></span><span class="field-control">${control(k,(state as any)[k])}<button class="reset" data-reset="${k}" ${same((state as any)[k],(DEFAULT_SETTINGS as any)[k])?"hidden":""}>↺</button></span></label>`).join("")}<button class="reset section-reset" data-reset-section="${name}">Reset this section ↺</button></div></details>`;
   }).join("");
   bind();
 }
 function bind(){
   document.querySelectorAll<HTMLElement>("[data-choice-key]").forEach(el=>el.addEventListener("click",async()=>{
-    const key=el.dataset.choiceKey!,v=el.dataset.choiceValue!;(state as any)[key]=v;if(key!=="preset")state.preset="custom";await persist();render(($("search") as HTMLInputElement).value);
+    const key=el.dataset.choiceKey!,v=el.dataset.choiceValue!;(state as any)[key]=v;if(key!=="preset")state.preset="custom";
+    el.parentElement?.querySelectorAll<HTMLElement>("[data-choice-key]").forEach(x=>{const active=x===el;x.classList.toggle("active",active);x.setAttribute("aria-pressed",String(active))});el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same((state as any)[key],(DEFAULT_SETTINGS as any)[key]));await persist();
   }));
   document.querySelectorAll<HTMLElement>("[data-step-key]").forEach(el=>el.addEventListener("click",async()=>{
     const key=el.dataset.stepKey!,dir=Number(el.dataset.stepDir||0),meta=numberMeta[key]??{},current=Number((state as any)[key]),step=meta.step??1;
-    const next=Math.min(meta.max??Infinity,Math.max(meta.min??-Infinity,current+dir*step));(state as any)[key]=next;state.preset="custom";await persist();render(($("search") as HTMLInputElement).value);
+    const next=Math.min(meta.max??Infinity,Math.max(meta.min??-Infinity,current+dir*step));(state as any)[key]=next;state.preset="custom";const input=el.parentElement?.querySelector<HTMLInputElement>(`[data-key="${key}"]`);if(input)input.value=String(next);el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same(next,(DEFAULT_SETTINGS as any)[key]));await persist();
   }));
   document.querySelectorAll<HTMLElement>("[data-key]").forEach(el=>el.addEventListener("change",async()=>{
     const key=el.dataset.key!;let v:any;
@@ -114,13 +116,13 @@ function bind(){
     else if(el instanceof HTMLInputElement&&el.type==="range")v=Number(el.value);
     else if(el instanceof HTMLTextAreaElement){try{v=JSON.parse(el.value)}catch{el.style.borderColor="var(--live)";return}}
     else v=(el as HTMLInputElement|HTMLSelectElement).value;
-    (state as any)[key]=v;if(key!=="preset")state.preset="custom";await persist();render(($("search") as HTMLInputElement).value);
+    (state as any)[key]=v;if(key!=="preset")state.preset="custom";el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same(v,(DEFAULT_SETTINGS as any)[key]));await persist();
   }));
   document.querySelectorAll<HTMLElement>("[data-reset]").forEach(b=>b.addEventListener("click",async()=>{const k=b.dataset.reset!;(state as any)[k]=(DEFAULT_SETTINGS as any)[k];await persist();render(($("search") as HTMLInputElement).value)}));
   document.querySelectorAll<HTMLElement>("[data-reset-section]").forEach(b=>b.addEventListener("click",async()=>{const cat=categories.find(x=>x[0]===b.dataset.resetSection);cat?.[1].forEach(k=>(state as any)[k]=(DEFAULT_SETTINGS as any)[k]);await persist();render(($("search") as HTMLInputElement).value)}));
-  document.querySelectorAll<HTMLElement>("[data-jump]").forEach(b=>b.addEventListener("click",()=>document.querySelector(`[data-section="${b.dataset.jump}"]`)?.scrollIntoView({behavior:"smooth"})));
+  document.querySelectorAll<HTMLElement>("[data-jump]").forEach(b=>b.addEventListener("click",()=>{const section=document.querySelector<HTMLDetailsElement>(`[data-section="${b.dataset.jump}"]`);if(section){section.open=true;section.scrollIntoView({behavior:"smooth"})}}));
 }
 async function persist(){await saveSettings(state);$("saved").textContent="Saved";setTimeout(()=>$("saved").textContent="",900)}
-(async()=>{state=await loadSettings();$("presets").innerHTML=Object.keys(PRESETS).map(p=>`<button class="button ${state.preset===p?"active":""}" data-preset="${p}">${title(p)}</button>`).join("");document.querySelectorAll<HTMLElement>("[data-preset]").forEach(b=>b.onclick=async()=>{const p=b.dataset.preset!;state={...state,...PRESETS[p],preset:p as LinkPeekSettings["preset"]};await persist();location.reload()});render()})();
+(async()=>{state=await loadSettings();const presetLabels:Record<string,string>={balanced:"Balanced",minimal:"Data saver",fast:"Fast",touchpad:"Touchpad",manual:"Manual"};$("presets").innerHTML=Object.keys(PRESETS).map(p=>`<button class="button ${state.preset===p?"active":""}" data-preset="${p}">${presetLabels[p]}</button>`).join("");document.querySelectorAll<HTMLElement>("[data-preset]").forEach(b=>b.onclick=async()=>{const p=b.dataset.preset!;state={...state,...PRESETS[p],preset:p as LinkPeekSettings["preset"]};await persist();location.reload()});render()})();
 $("search").addEventListener("input",e=>render((e.target as HTMLInputElement).value));
 $("tutorial").addEventListener("click",()=>location.href=chrome.runtime.getURL("onboarding.html"));

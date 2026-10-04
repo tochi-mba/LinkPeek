@@ -88,6 +88,9 @@ async function shallowPrefetch(url:string,kind:string,settings:LinkPeekSettings)
   const existing=cachedEntry(url,settings);if(existing)return existing.result;
   if(kind!=="discourse"){
     if(kind==="direct-image"){const result=directResult(url);putCache(url,result,settings);return result}
+    if(kind==="generic"){
+      const result=await scanGeneric(url,{...settings,preferVersion:"displayed",progressiveScan:false});putCache(url,result,settings);return result;
+    }
     return null;
   }
   const pending=prefetchTasks.get(url);if(pending)return pending;

@@ -8,7 +8,7 @@ The extension stores settings, presets, shortcut mappings and per-site profiles 
 
 ## Network requests
 
-When a user intentionally previews a link, or when enabled prefetch selects a nearby link, LinkPeek requests that destination directly. On Discourse it may request the topic JSON and additional post JSON needed to cover the thread. Media previews load from the site's media hosts.
+When a user intentionally previews a link, or when enabled prefetch selects a nearby link, LinkPeek requests that destination directly. Balanced mode can warm up to three preview thumbnails from each selected nearby link before hover. Requests are bounded by the configured concurrency and memory limits. On Discourse it may request the topic JSON; additional post batches are fetched when the preview opens. Media previews load from the site's media hosts.
 
 LinkPeek does not send those destinations to REX Technologies.
 

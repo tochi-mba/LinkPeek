@@ -69,7 +69,6 @@ export class MediaPreloader{
     }
   }
   async ensure(item:MediaItem){
-    if(item.type==="gif"){void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});return}
     const entry=this.load(item.previewUrl,0,this.generation);await entry.promise;
   }
   isReady(item:MediaItem){return item.type==="gif"||this.entries.get(item.previewUrl)?.ready===true}
@@ -80,7 +79,6 @@ export class MediaPreloader{
     this.entries.clear();this.decodedBytes=0;
   }
   private enqueuePreview(item:MediaItem,priority:number,generation:number){
-    if(item.type==="gif"){void chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH_BINARY",url:item.originalUrl,maxMb:this.settings?.gifDecodeMaxMb??32}).catch(()=>{});return}
     this.enqueue(item.previewUrl,priority,generation);
   }
   private enqueueOriginal(item:MediaItem,priority:number,generation:number){
