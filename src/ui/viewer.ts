@@ -105,7 +105,7 @@ export class Viewer{
   private setupVirtualGrid(){
     const grid=this.panel.querySelector(".lp-grid") as HTMLDivElement|null,windowEl=this.panel.querySelector(".lp-grid-window") as HTMLDivElement|null,spacer=this.panel.querySelector(".lp-grid-spacer") as HTMLDivElement|null;
     if(!grid||!windowEl||!spacer||!this.result)return;
-    const items=this.result.items,gap=6,pad=8,cell=Math.max(48,this.gridThumbSize||96),overscan=2;
+    const items=this.result.items,gap=6,pad=8,cell=Math.max(48,this.gridThumbSize),overscan=2;
     let raf=0,lastStart=-1,lastEnd=-1,lastCols=-1;
     const renderWindow=()=>{
       raf=0;
