@@ -12,7 +12,7 @@ const item=(n:number,type:"image"|"gif"="image"):MediaItem=>({
 class FakeImage extends EventTarget{
   decoding="";fetchPriority="";naturalWidth=4000;naturalHeight=4000;_src="";
   decode=vi.fn(async()=>{if(this._src.includes("decodefail"))throw new Error("decode")});
-  set src(value:string){this._src=value;queueMicrotask(()=>this.dispatchEvent(new Event(value.includes("/fail.")?"error":"load")))}
+  set src(value:string){this._src=value;if(value.includes("zero")){this.naturalWidth=0;this.naturalHeight=0}queueMicrotask(()=>this.dispatchEvent(new Event(value.includes("/fail.")?"error":"load")))}
   get src(){return this._src}
 }
 
@@ -141,6 +141,57 @@ describe("MediaPreloader",()=>{
     p.dispose();
   });
 });
+
+
+  it("covers constrained variants, stale idle work, public defaults and private eviction guards",async()=>{
+    const gifs:any[]=[];
+    (chrome.runtime.sendMessage as any).mockImplementation(async(msg:any)=>{gifs.push(msg);return {ok:true}});
+    const p:any=new MediaPreloader();
+
+    await p.ensure(item(50,"gif"));expect(gifs.at(-1).maxMb).toBe(32);
+    p.pump();p.prune();expect(p.keepUrls(DEFAULT_SETTINGS).size).toBe(0);
+    p.deleteEntry("missing");
+
+    const items=[item(0),item(1),item(2),item(3)];
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:false,effectiveType:"slow-2g"}});
+    p.reset(items,0,{...DEFAULT_SETTINGS,meteredOff:true,preloadRest:"all",preloadNext:2,preloadPrevious:2});
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:false,effectiveType:"2g"}});
+    p.reset(items,0,{...DEFAULT_SETTINGS,meteredOff:true,preloadRest:"all",preloadNext:2,preloadPrevious:2});
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:true,effectiveType:"4g"}});
+    p.reset(items,0,{...DEFAULT_SETTINGS,meteredOff:false,preloadRest:"off",preloadNext:1,preloadPrevious:1});
+
+    const idleCallbacks:IdleRequestCallback[]=[];
+    Object.defineProperty(window,"requestIdleCallback",{configurable:true,value:vi.fn((cb:IdleRequestCallback)=>{idleCallbacks.push(cb);return idleCallbacks.length})});
+    Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:vi.fn()});
+    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadNext:0,preloadPrevious:0});
+    p.schedule(2,1);expect(idleCallbacks.length).toBeGreaterThanOrEqual(2);
+    idleCallbacks[0]({didTimeout:false,timeRemaining:()=>50} as IdleDeadline);
+
+    p.settings={...DEFAULT_SETTINGS,preloadOriginals:"next"};
+    p.enqueueOriginal({...item(8),originalUrl:""},1,p.generation);
+    const same=item(9);same.originalUrl=same.previewUrl;p.enqueueOriginal(same,1,p.generation);
+    p.enqueueOriginal(item(10,"gif"),1,p.generation);
+    p.settings={...DEFAULT_SETTINGS,preloadOriginals:"aggressive"};p.enqueueOriginal(item(11,"gif"),1,p.generation);
+
+    p.queue=[{url:"https://x.test/stale.jpg",priority:0,generation:-1}];p.active=0;p.generation=2;p.pump();
+
+    p.items=items;p.index=0;p.settings={...DEFAULT_SETTINGS,loopMode:"stop",preloadPrevious:2,preloadNext:1,preloadRestLimit:0,preloadMemoryMb:32};
+    const keep=p.keepUrls(p.settings);expect(keep.has(items[0].previewUrl)).toBe(true);
+
+    p.entries=new Map();p.decodedBytes=0;
+    for(let i=0;i<26;i++)p.entries.set(`https://evict.test/${i}.jpg`,{img:new FakeImage(),promise:Promise.resolve(),ready:true,failed:false,lastUsed:i,bytes:1024});
+    p.prune();expect(p.entries.size).toBeLessThanOrEqual(24);
+
+    const zero={...item(60),previewUrl:"https://x.test/zero.jpg"};const q=new MediaPreloader();
+    q.reset([zero],0,{...DEFAULT_SETTINGS,preloadNext:0,preloadPrevious:0,preloadRest:"off"});
+    await q.ensure(zero);expect(q.isReady(zero)).toBe(true);
+    q.dispose();p.dispose();
+  });
+
+  it("covers positive three-original planning",()=>{
+    const base={...DEFAULT_SETTINGS,preloadNext:2,preloadPrevious:2,preloadRest:"off" as const,preloadRestLimit:20,preloadOriginals:"three" as const,networkMode:"adaptive" as const,loopMode:"wrap" as const};
+    expect(buildPreloadPlan(8,3,base,1).originals).toEqual([4,5,6]);
+  });
 
 describe("GestureController",()=>{
   let el:HTMLElement,cb:any,settings:any;
