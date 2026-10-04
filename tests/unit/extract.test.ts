@@ -45,6 +45,9 @@ describe("media extraction",()=>{
       <img src="/plain.jpg" width="500" height="500" srcset="/regular.jpg 1x">
       <img src="/empty-srcset.jpg" width="500" height="500" srcset=", ">
       <img src="/anim-class.jpg" class="animated" width="500" height="500">
+      <a class="lightbox" href="/lightbox.gif"><img src="/lightbox-preview.gif" width="500" height="500"></a>
+      <img src="https://x.test/" width="500" height="500">
+      <img src="https://x.test/file." width="500" height="500">
       <img src="/tiny-height.jpg" width="500" height="20">
       <img src="/dup.jpg" width="500" height="500">
     `;
@@ -56,6 +59,9 @@ describe("media extraction",()=>{
     expect(items.find(x=>x.originalUrl.endsWith("/plain.jpg"))?.previewUrl).toBe("https://forum.example/regular.jpg");
     expect(items.find(x=>x.originalUrl.endsWith("/empty-srcset.jpg"))?.previewUrl).toBe("https://forum.example/empty-srcset.jpg");
     expect(items.find(x=>x.originalUrl.endsWith("/anim-class.jpg"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl.endsWith("/lightbox.gif"))?.type).toBe("gif");
+    expect(items.find(x=>x.originalUrl==="https://x.test/")?.filename).toBe("media");
+    expect(items.some(x=>x.originalUrl.includes("file."))).toBe(true);
     expect(items.some(x=>x.originalUrl.includes("vector.svg"))).toBe(false);
     expect(items.some(x=>x.originalUrl.includes("tiny-w")||x.originalUrl.includes("tiny-h"))).toBe(false);
 
