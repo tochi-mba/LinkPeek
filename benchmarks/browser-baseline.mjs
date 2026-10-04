@@ -28,6 +28,7 @@ const server=createServer((req,res)=>{
     send(res,`<!doctype html><body>
       <a id="direct" href="${base}/media/direct.png">Direct</a>
       <a id="generic" href="${base}/generic">Generic</a>
+      <a id="generic-large" href="${base}/generic-large">Generic large</a>
       <a id="small" href="${base}/t/small/101">Small</a>
       <a id="medium" href="${base}/t/medium/102">Medium</a>
       <a id="large" href="${base}/t/large/103">Large</a>
@@ -35,8 +36,9 @@ const server=createServer((req,res)=>{
       <a id="gif" href="${base}/media/perf.gif">GIF</a>
     </body>`);return;
   }
-  if(path==="/generic"){
-    let h="<title>Generic perf</title><main>";for(let i=0;i<200;i++)h+=`<img src="${base}/media/g-${i}.png" width="800" height="600">`;send(res,h+"</main>");return;
+  if(path==="/generic"||path==="/generic-large"){
+    const count=path==="/generic-large"?1000:200;
+    let h="<title>Generic perf</title><main>";for(let i=0;i<count;i++)h+=`<img src="${base}/media/g-${i}.png" width="800" height="600">`;send(res,h+"</main>");return;
   }
   const topicJson=/\/t\/[^/]+\/(\d+)\.json$/.exec(path);
   if(topicJson){
