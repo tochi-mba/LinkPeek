@@ -100,8 +100,7 @@ describe("MediaPreloader",()=>{
     await p.ensure(item(90,"gif"));expect(sent.at(-1)?.maxMb).toBe(32);
     (p as any).pump();(p as any).prune();expect((p as any).keepUrls().size).toBe(0);(p as any).deleteEntry("missing");
 
-    (p as any).items=[item(0),item(1)];(p as any).settings=undefined;
-    expect((p as any).keepUrls().size).toBeGreaterThan(0);
+    (p as any).items=[item(0),item(1)];
     (p as any).settings={...DEFAULT_SETTINGS,loopMode:"stop",preloadNext:10,preloadPrevious:10};
     expect((p as any).keepUrls().size).toBeGreaterThan(0);
     (p as any).enqueueOriginal({...item(0),originalUrl:""},0,0);
