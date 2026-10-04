@@ -1,0 +1,50 @@
+name: Build extension and deploy Pages
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Package CRX
+        env:
+          LINKPEEK_CRX_KEY_B64: ${{ secrets.LINKPEEK_CRX_KEY_B64 }}
+        run: |
+          set -euxo pipefail
+          if [ -n "$LINKPEEK_CRX_KEY_B64" ]; then
+            printf '%s' "$LINKPEEK_CRX_KEY_B64" | base64 -d > linkpeek.pem
+            google-chrome --pack-extension="$GITHUB_WORKSPACE/dist" --pack-extension-key="$GITHUB_WORKSPACE/linkpeek.pem"
+          else
+            echo "::warning::LINKPEEK_CRX_KEY_B64 is not configured; generating a packaging key for this build. Add the secret for a stable extension ID across releases."
+            google-chrome --pack-extension="$GITHUB_WORKSPACE/dist"
+          fi
+          mkdir -p site/downloads
+          mv dist.crx site/downloads/LinkPeek.crx
+          rm -f dist.pem linkpeek.pem
+          sha256sum site/downloads/LinkPeek.crx > site/downloads/LinkPeek.crx.sha256
+      - run: node scripts/check_site.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
