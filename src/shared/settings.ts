@@ -70,7 +70,8 @@ export const PRESETS:Record<string,Partial<LinkPeekSettings>>={
 };
 export async function loadSettings():Promise<LinkPeekSettings>{
   const stored=await chrome.storage.local.get("settings");
-  return {...DEFAULT_SETTINGS,...(stored.settings??{}),shortcuts:{...DEFAULT_SETTINGS.shortcuts,...(stored.settings?.shortcuts??{})},siteProfiles:stored.settings?.siteProfiles??{}} as LinkPeekSettings;
+  const raw=(stored.settings??{}) as Partial<LinkPeekSettings>;
+  return {...DEFAULT_SETTINGS,...raw,shortcuts:{...DEFAULT_SETTINGS.shortcuts,...(raw.shortcuts??{})},siteProfiles:raw.siteProfiles??{}} as LinkPeekSettings;
 }
 export async function saveSettings(settings:LinkPeekSettings){await chrome.storage.local.set({settings});}
 export function effectiveSettings(settings:LinkPeekSettings,url:string){
