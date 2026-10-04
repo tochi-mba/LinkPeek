@@ -37,7 +37,7 @@ test.beforeAll(async()=>{
     }
     if(path==="/t/demo/123.json"){
       res.setHeader("content-type","application/json");
-      res.end(JSON.stringify({id:123,title:"Demo thread",post_stream:{stream:[1],posts:[{id:1,post_number:1,username:"rex",cooked:`<div class="cooked"><a class="lightbox" href="${base}/media/original.jpg" title="Original"><img src="${base}/media/preview.jpg" width="690" height="388"></a><img class="avatar" src="${base}/media/avatar.png" width="48" height="48"></div>`}]}}));return;
+      res.end(JSON.stringify({id:123,title:"Demo thread",post_stream:{stream:[1],posts:[{id:1,post_number:1,username:"rex",cooked:`<div class="cooked"><a class="lightbox" href="${base}/media/original-1.jpg" title="Original one"><img src="${base}/media/preview-1.jpg" width="690" height="388"></a><a class="lightbox" href="${base}/media/original-2.jpg" title="Original two"><img src="${base}/media/preview-2.jpg" width="690" height="388"></a><img class="avatar" src="${base}/media/avatar.png" width="48" height="48"></div>`}]}}));return;
     }
     if(path.startsWith("/media/")){res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
     res.statusCode=404;res.end("not found");
@@ -54,9 +54,17 @@ test("hovering a Discourse link opens a filtered whole-thread media viewer",asyn
     await page.locator("#topic").hover();
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:12_000});
     const snapshot=await page.evaluate(()=>Array.from(document.documentElement.children).map((n:any)=>n.shadowRoot?.textContent||"").join("\n"));
-    expect(snapshot).toContain("1 media");
+    expect(snapshot).toContain("2 media");
     expect(snapshot).toContain("Demo thread");
     expect(snapshot).not.toContain("avatar");
+    await page.evaluate(()=>{
+      const host=Array.from(document.documentElement.children).find((n:any)=>n.shadowRoot?.querySelector(".lp-stage")) as any;
+      host.shadowRoot.querySelector(".lp-stage").dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}));
+    });
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("2 / 2")));
+    await page.keyboard.press("g");
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.querySelector(".lp-grid")));
+    await page.keyboard.press("g");
     await page.keyboard.press("?");
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("One-hand controls")));
   }finally{await closeExtension(context,profile)}
@@ -68,6 +76,11 @@ test("onboarding and settings pages render",async()=>{
     const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;
     const page=await context.newPage();
     await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
-    await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();await expect(page.getByText("Gestures",{exact:true})).toBeVisible();
+    await page.goto(`chrome-extension://${id}/options.html`);
+    await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();
+    await expect(page.getByText("Gestures",{exact:true})).toBeVisible();
+    const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
+    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");
+    await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
   }finally{await closeExtension(context,profile)}
 });
