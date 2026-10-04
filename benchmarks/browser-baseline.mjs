@@ -79,7 +79,13 @@ try{
   results.memory.page_idle=await heap();
 
   async function patchSettings(patch){await sw.evaluate(async p=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),...p}})},patch);await page.waitForTimeout(80)}
-  async function leave(){await page.keyboard.press("Escape").catch(()=>{});await page.evaluate(()=>document.dispatchEvent(new PointerEvent("pointerout",{bubbles:true,relatedTarget:document.body}))).catch(()=>{});await page.waitForTimeout(60)}
+  async function leave(){
+    await page.evaluate(()=>{
+      for(const a of document.querySelectorAll("a[href]"))a.dispatchEvent(new PointerEvent("pointerout",{bubbles:true,relatedTarget:document.body}));
+    }).catch(()=>{});
+    await page.keyboard.press("Escape").catch(()=>{});
+    await page.waitForTimeout(60);
+  }
   async function hoverMeasure(selector,expected,{resetNet=true,label=selector}={}){
     console.log("BASELINE_CASE_START",label,expected);await leave();if(resetNet){requestCount=0;responseBytes=0}
     const target=page.locator(selector),box=await target.boundingBox();if(!box)throw new Error(`No benchmark target for ${selector}`);
@@ -100,9 +106,10 @@ try{
     const r=await hoverMeasure(selector,expected,{label:name});results.latency[name]=r;results.network[name]={requests:r.requests,response_bytes:r.response_bytes};
   }
 
-  await leave();requestCount=0;responseBytes=0;
-  let t=performance.now();await page.locator("#large").hover();await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("1000 media")),{},{timeout:10000});
-  results.latency.discourse_500_posts_cache_hit_ms=round(performance.now()-t);results.network.discourse_500_posts_cache_hit={requests:requestCount,response_bytes:responseBytes};
+  const cacheHit=await hoverMeasure("#large","1000 media");
+  results.latency.discourse_500_posts_cache_hit_ms=cacheHit.result_ms;
+  results.network.discourse_500_posts_cache_hit={requests:cacheHit.requests,response_bytes:cacheHit.response_bytes};
+  let t=performance.now();
 
   results.memory.after_large_focus=await heap();
   t=performance.now();await page.keyboard.press("g");await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
