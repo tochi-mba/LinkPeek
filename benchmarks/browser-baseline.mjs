@@ -83,10 +83,10 @@ try{
   async function hoverMeasure(selector,expected,{resetNet=true}={}){
     await leave();if(resetNet){requestCount=0;responseBytes=0}
     const t=performance.now();await page.locator(selector).hover();
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("Finding posted media")));
-    const loading=performance.now()-t;
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-panel")));
+    const panel=performance.now()-t;
     await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes(exp)),expected,{timeout:30000});
-    return {loading_ms:round(loading),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes};
+    return {panel_ms:round(panel),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes};
   }
   await patchSettings({hoverDelay:300});
   const defaultHover=await hoverMeasure("#direct","1 media");results.latency.default_hover_direct=defaultHover;
