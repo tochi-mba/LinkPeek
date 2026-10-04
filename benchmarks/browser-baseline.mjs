@@ -156,8 +156,9 @@ try{
 
     requestCount=0;responseBytes=0;t=performance.now();
     await page.keyboard.press("g");
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector('.lp-grid[data-total="1000"]')&&n.shadowRoot.querySelectorAll(".lp-thumb").length>0),null,{timeout:15000});
     results.ui.grid_1000_render_ms=round(performance.now()-t);
+    results.ui.grid_1000_dom_nodes=await page.evaluate(()=>Array.from(document.documentElement.children).reduce((m,n)=>Math.max(m,n.shadowRoot?.querySelectorAll(".lp-thumb").length||0),0));
     await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_grid_1000=await heap();
     await page.waitForTimeout(1200);
     results.network.grid_1000={requests:requestCount,response_bytes:responseBytes};
