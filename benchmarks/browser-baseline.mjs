@@ -138,8 +138,8 @@ try{
   results.network.discourse_20_posts_cache_hit={requests:cacheHit.requests,response_bytes:cacheHit.response_bytes};
   let t=performance.now();
 
-  const gridSource=await hoverMeasure("#generic-large","1000 media",{label:"generic_1000_grid_source"});
-  results.memory.after_large_focus=await heap();
+  const gridSource=await hoverMeasure("#generic-large","1000 media",{label:"generic_1000_grid_source",beforeStart:async()=>{await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.before_large_focus=await heap()}});
+  await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_large_focus=await heap();
   if(gridSource.ok){
     t=performance.now();
     await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
@@ -176,8 +176,9 @@ try{
   await leave();await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_close_gc=await heap();
 
   await patchSettings({gifAutoplay:"never"});await page.reload({waitUntil:"domcontentloaded"});await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
+  await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.before_gif_decode=await heap();
   t=performance.now();await page.locator("#gif").hover();await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-gif-controls")),null,{timeout:10000});
-  results.latency.gif_hover_to_controls_ms=round(performance.now()-t);results.memory.after_gif_decode=await heap();
+  results.latency.gif_hover_to_controls_ms=round(performance.now()-t);await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_gif_decode=await heap();
   const timeline=page.locator(".lp-gif-timeline");t=performance.now();for(let i=0;i<20;i++)await page.locator(".lp-gif-next").click();results.ui.gif_20_frame_steps_ms=round(performance.now()-t);
   await leave();
 
@@ -192,10 +193,11 @@ try{
     await p.close();
   }
   results.memory.deltas={
-    large_focus_used:results.memory.after_large_focus.usedSize-results.memory.page_idle.usedSize,
-    grid_1000_used:results.memory.after_grid_1000.usedSize-results.memory.page_idle.usedSize,
-    after_close_gc_used:results.memory.after_close_gc.usedSize-results.memory.page_idle.usedSize,
-    gif_decode_used:results.memory.after_gif_decode.usedSize-results.memory.page_idle.usedSize
+    large_focus_used:results.memory.after_large_focus.usedSize-results.memory.before_large_focus.usedSize,
+    grid_1000_incremental_used:results.memory.after_grid_1000.usedSize-results.memory.after_large_focus.usedSize,
+    grid_1000_total_used:results.memory.after_grid_1000.usedSize-results.memory.before_large_focus.usedSize,
+    after_close_gc_used:results.memory.after_close_gc.usedSize-results.memory.before_large_focus.usedSize,
+    gif_decode_used:results.memory.after_gif_decode.usedSize-results.memory.before_gif_decode.usedSize
   };
   await mkdir(resolve(outPath,".."),{recursive:true}).catch(()=>{});
   await writeFile(outPath,JSON.stringify(results,null,2));
