@@ -1,6 +1,6 @@
 # Releasing LinkPeek
 
-LinkPeek is distributed from the project GitHub Pages site as a browser-installable `LinkPeek.crx`.
+LinkPeek is distributed from the project GitHub Pages site as a signed `LinkPeek.crx` package. Self-hosted Chromium CRXs must be installed from the browser's Extensions page rather than opened directly from the downloads folder.
 
 ## Release gate
 
@@ -47,3 +47,17 @@ https://tochi-mba.github.io/LinkPeek/
 ```
 
 GitHub Pages must be configured to use **GitHub Actions** as its publishing source.
+
+
+## Helium / Chromium installation behavior
+
+Opening or double-clicking a self-hosted CRX can fail with `CRX_REQUIRED_PROOF_MISSING`. That error is the Chromium proof requirement for direct/off-store installation; changing the local signing key does not add Chrome Web Store proof.
+
+The supported LinkPeek install flow is:
+
+1. Download `LinkPeek.crx` from the project site.
+2. Open `chrome://extensions`.
+3. Enable Developer mode.
+4. Drag the CRX onto the Extensions page and approve the prompt.
+
+The public site must not tell users to open/double-click the CRX directly.

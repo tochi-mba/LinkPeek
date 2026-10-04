@@ -26,7 +26,16 @@ The project site publishes the packaged extension itself:
 
 **https://tochi-mba.github.io/LinkPeek/**
 
-The primary download is `LinkPeek.crx`, not a source ZIP. Chromium-family browsers decide whether an off-store CRX may be installed directly; when a browser blocks that path it will require its own sideload/developer flow.
+The primary download is `LinkPeek.crx`, not a source ZIP.
+
+For Helium and other Chromium-family browsers, **do not double-click/open a self-hosted CRX directly**. Chromium may reject that path with `CRX_REQUIRED_PROOF_MISSING` because the package does not carry Chrome Web Store proof. Instead:
+
+1. Download `LinkPeek.crx`.
+2. Open `chrome://extensions`.
+3. Enable Developer mode.
+4. Drag `LinkPeek.crx` onto the Extensions page and approve the install prompt.
+
+A true one-click install from a normal web page requires distribution through a browser extension store that supplies the required store proof.
 
 For a stable extension identity across packaged releases, configure the repository secret `LINKPEEK_CRX_KEY_B64` with the base64-encoded PEM private key used to package the CRX. The Pages workflow uses it automatically. If the secret is absent, CI can still produce a development CRX but its extension ID may change between builds.
 
