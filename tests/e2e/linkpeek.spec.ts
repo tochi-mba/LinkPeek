@@ -84,12 +84,17 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
 test("GIF player supports playback, frame stepping, scrubbing, speed, looping and zoom",async()=>{
   const {context,profile}=await launchExtension();
   try{
+    const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();
+    await sw.evaluate(async()=>{
+      const stored=await chrome.storage.local.get("settings");
+      await chrome.storage.local.set({settings:{...(stored.settings??{}),gifAutoplay:"never"}});
+    });
     const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("3 media")),null,{timeout:12_000});
     await wheelStage(page,100);await wheelStage(page,100);
     await expect(page.locator(".lp-gif-controls")).toBeVisible({timeout:12_000});
     const timeline=page.locator(".lp-gif-timeline");await expect(timeline).toHaveAttribute("max","2");
-    const pause=page.locator('.lp-gif-toggle[aria-label="Pause GIF"]');if(await pause.count())await pause.click();
+    await expect(page.locator(".lp-gif-toggle")).toHaveAttribute("aria-label","Play GIF");
     await timeline.evaluate((el:HTMLInputElement)=>{el.value="0";el.dispatchEvent(new Event("input",{bubbles:true}))});
     await expect(timeline).toHaveValue("0");
     await page.locator(".lp-gif-next").click();await expect(timeline).toHaveValue("1");
