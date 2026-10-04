@@ -5,7 +5,7 @@ import {resolve} from "node:path";
 import {mkdtemp,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 
-let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0;
+let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;
 const extensionPath=resolve("dist");
 const animatedGif=Buffer.from("R0lGODlhBAAEAIEAANf/PwAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQIDwAAACwAAAAABAAEAIH/d00AAAAAAAAAAAAICQABCBxIsCCAgAAh+QQIFAAAACwAAAAABAAEAIERFRIAAAAAAAAAAAAICQABCBxIsCCAgAA7","base64");
 
@@ -52,7 +52,7 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="large" href="/t/perf/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="large" href="/t/perf/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
     }
     if(path==="/prefetch"){
       res.setHeader("content-type","text/html");res.end(`<!doctype html><body>${Array.from({length:6},(_,i)=>`<a href="/t/prefetch-${i}/${800+i}">P${i}</a>`).join("<br>")}</body>`);return;
@@ -65,6 +65,8 @@ test.beforeAll(async()=>{
     }
     if(path==="/t/slow/790.json"){setTimeout(()=>{if(!res.writableEnded){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(790))) }},400);return}
     if(path==="/t/790/posts.json"){slowBatchRequests++;res.setHeader("content-type","application/json");res.end(JSON.stringify({post_stream:{posts:[]}}));return}
+    if(path==="/t/shared/791.json"){sharedTopicRequests++;setTimeout(()=>{if(!res.writableEnded){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(791))) }},100);return}
+    if(path==="/t/791/posts.json"){sharedBatchRequests++;const ids=requestUrl.searchParams.getAll("post_ids[]").map(Number);setTimeout(()=>{if(!res.writableEnded){res.setHeader("content-type","application/json");res.end(JSON.stringify({post_stream:{posts:ids.map(perfPost)}}))}},150);return}
     if(/^\/t\/prefetch-\d+\/80\d\.json$/.test(path)){prefetchTopicRequests++;const id=Number(/(80\d)\.json$/.exec(path)![1]);res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(id)));return}
     if(/^\/t\/80\d\/posts\.json$/.test(path)){prefetchBatchRequests++;res.setHeader("content-type","application/json");res.end(JSON.stringify({post_stream:{posts:[]}}));return}
     if(path==="/t/fallback/456.json"){res.statusCode=403;res.end("blocked");return}
@@ -160,6 +162,23 @@ test("phase-2 optimization streams progress, cancels stale scans and bounds near
     expect(prefetchTopicRequests).toBeLessThanOrEqual(2);
     expect(prefetchBatchRequests).toBe(0);
   }finally{await closeExtension(second.context,second.profile)}
+});
+
+test("simultaneous scans share one in-flight network task",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();
+    await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:0,prefetch:"off",batchSize:50,maxRequests:3}})});
+    sharedTopicRequests=0;sharedBatchRequests=0;
+    const a=await context.newPage(),b=await context.newPage();await Promise.all([a.goto(base),b.goto(base)]);
+    await Promise.all([a.locator("#shared").hover(),b.locator("#shared").hover()]);
+    await Promise.all([
+      a.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("100 media")),null,{timeout:5_000}),
+      b.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("100 media")),null,{timeout:5_000})
+    ]);
+    expect(sharedTopicRequests).toBe(1);
+    expect(sharedBatchRequests).toBe(2);
+  }finally{await closeExtension(context,profile)}
 });
 
 test("onboarding and settings render and persist GIF customization",async()=>{
