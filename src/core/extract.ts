@@ -9,7 +9,7 @@ type ExtractOptions=Pick<LinkPeekSettings,"includeImages"|"includeGif"|"includeW
 const defaults:ExtractOptions={includeImages:true,includeGif:true,includeWebp:true,includeAvif:true,includeSvg:false,includeAvatars:false,includeEmoji:false,minWidth:120,minHeight:120,quotedDuplicates:"hide"};
 
 function allowed(url:string,o:ExtractOptions){
-  const ext=(new URL(url,"https://example.test").pathname.split(".").pop()||"").toLowerCase();
+  const ext=new URL(url,"https://example.test").pathname.split(".").pop()!.toLowerCase();
   if(ext==="gif")return o.includeGif;if(ext==="webp")return o.includeWebp;if(ext==="avif")return o.includeAvif;if(ext==="svg")return o.includeSvg;
   return o.includeImages;
 }
