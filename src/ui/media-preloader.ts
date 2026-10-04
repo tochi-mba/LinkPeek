@@ -53,7 +53,7 @@ export class MediaPreloader{
   schedule(index:number,direction=0){
     if(!this.settings||!this.items.length)return;
     this.index=index;this.generation++;this.queue=[];
-    if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
+    if(this.idleHandle!=null){window.cancelIdleCallback(this.idleHandle);this.idleHandle=undefined}
     const connection=(navigator as Navigator&{connection?:{saveData?:boolean;effectiveType?:string}}).connection;
     const constrained=this.settings.meteredOff&&(connection?.saveData===true||connection?.effectiveType==="slow-2g"||connection?.effectiveType==="2g");
     const effective=constrained?{...this.settings,networkMode:"data" as const,preloadRest:"off" as const}:this.settings;
@@ -76,7 +76,7 @@ export class MediaPreloader{
   element(item:MediaItem){const entry=this.entries.get(item.previewUrl);if(!entry?.ready)return undefined;entry.lastUsed=performance.now();return entry.img}
   dispose(){
     this.generation++;this.queue=[];this.items=[];
-    if(this.idleHandle!=null){window.cancelIdleCallback?.(this.idleHandle);this.idleHandle=undefined}
+    if(this.idleHandle!=null){window.cancelIdleCallback(this.idleHandle);this.idleHandle=undefined}
     this.entries.clear();this.decodedBytes=0;
   }
   private enqueuePreview(item:MediaItem,priority:number,generation:number){
