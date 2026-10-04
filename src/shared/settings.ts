@@ -29,7 +29,7 @@ export interface LinkPeekSettings{
   prefetch:"off"|"nearby"|"visible"|"all"; prefetchRadius:number; idlePrefetch:boolean; maxRequests:number;
   batchSize:number; networkMode:"adaptive"|"data"|"aggressive"; meteredOff:boolean; cacheMinutes:number;
   maxCacheMb:number; preloadNext:number; preloadOriginals:"never"|"next"|"three"|"aggressive";
-  gifAutoplay:"focus"|"always"|"never"; videoAutoplay:boolean; videoMuted:boolean; videoLoopShort:boolean;
+  gifAutoplay:"focus"|"always"|"never"; gifLoop:boolean; gifDefaultSpeed:number; gifPauseWhenHidden:boolean; gifDecodeMaxMb:number; gifControls:"always"|"hover"|"minimal"; gifScrubWheel:boolean; gifFrameStepKeyboard:boolean; videoAutoplay:boolean; videoMuted:boolean; videoLoopShort:boolean;
   theme:ThemeMode; customAccent:string; blur:number; transparency:number; imageBackground:"black"|"checker"|"theme"|"custom";
   thumbnailShape:"square"|"ratio"|"rounded"; thumbnailSize:number; density:"compact"|"comfortable"|"spacious";
   labels:"both"|"icons"|"text"; scrollbar:"normal"|"minimal"|"hidden"; motion:"full"|"reduced"|"none";
@@ -54,7 +54,7 @@ export const DEFAULT_SETTINGS:LinkPeekSettings={
   includeImages:true,includeGif:true,includeWebp:true,includeAvif:true,includeSvg:false,includeVideoThumbs:true,includeAvatars:false,includeEmoji:false,minWidth:200,minHeight:160,minBytes:0,
   preferVersion:"original",thumbQuality:"auto",relevanceStrength:.7,dedupe:true,quotedDuplicates:"hide",perceptualHash:false,scanScope:"whole",maxPosts:2000,progressiveScan:true,prioritizeLinkedPost:true,fetchDirection:"linked",
   continueAfterClose:"brief",cacheThreads:true,prefetch:"nearby",prefetchRadius:1,idlePrefetch:true,maxRequests:3,batchSize:20,networkMode:"adaptive",meteredOff:true,cacheMinutes:60,maxCacheMb:250,preloadNext:3,preloadOriginals:"next",
-  gifAutoplay:"focus",videoAutoplay:false,videoMuted:true,videoLoopShort:true,theme:"rex",customAccent:"#D7FF3F",blur:16,transparency:.08,imageBackground:"black",thumbnailShape:"ratio",thumbnailSize:120,density:"comfortable",
+  gifAutoplay:"focus",gifLoop:true,gifDefaultSpeed:1,gifPauseWhenHidden:true,gifDecodeMaxMb:32,gifControls:"always",gifScrubWheel:true,gifFrameStepKeyboard:true,videoAutoplay:false,videoMuted:true,videoLoopShort:true,theme:"rex",customAccent:"#D7FF3F",blur:16,transparency:.08,imageBackground:"black",thumbnailShape:"ratio",thumbnailSize:120,density:"comfortable",
   labels:"both",scrollbar:"minimal",motion:"full",shortcuts:{next:["ArrowDown","ArrowRight"],previous:["ArrowUp","ArrowLeft"],close:["Escape"],pin:["p"],grid:["g"],focus:["f"],open:["o"],help:["?","/"],zoomIn:["+","="],zoomOut:["-"],resetZoom:["0"],download:["d"]},
   mouseWheel:"navigate",ctrlWheel:"zoom",middleClick:"original",siteProfiles:{},stripTracking:true,referrerPolicy:"same-origin",clearCache:"close",
   downloadOriginal:true,downloadPattern:"{thread}-{post}-{index}-{filename}",downloadFolder:true,downloadMetadata:false,reducedMotion:false,highContrast:false,largeControls:false,minTextSize:13,alwaysShowControls:false,

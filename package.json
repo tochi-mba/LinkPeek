@@ -25,5 +25,8 @@
     "typescript": "^5.9.2",
     "vitest": "^3.2.4",
     "@types/node": "^24.5.2"
+  },
+  "dependencies": {
+    "gifuct-js": "^2.1.2"
   }
 }
