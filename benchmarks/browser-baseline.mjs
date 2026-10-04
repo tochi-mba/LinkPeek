@@ -99,7 +99,7 @@ try{
     await page.keyboard.press("Escape").catch(()=>{});
     await page.waitForTimeout(60);
   }
-  async function hoverMeasure(selector,expected,{resetNet=true,label=selector,resultTimeout=5000,beforeStart=null}={}){
+  async function hoverMeasure(selector,expected,{resetNet=true,label=selector,resultTimeout=5000,beforeStart=null,initialExpected=null}={}){
     console.log("BASELINE_CASE_START",label,expected);
     await page.reload({waitUntil:"domcontentloaded"});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
@@ -109,6 +109,13 @@ try{
     await target.dispatchEvent("pointerover",{pointerType:"mouse",clientX:box.x+box.width/2,clientY:box.y+box.height/2,bubbles:true});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-panel")),null,{timeout:10000});
     const panel=performance.now()-t;
+    let initial_ms=null;
+    if(initialExpected){
+      try{
+        await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>(n.shadowRoot?.textContent||"").includes(exp)),initialExpected,{timeout:resultTimeout});
+        initial_ms=round(performance.now()-t);
+      }catch{}
+    }
     let timedOut=false;
     try{
       await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>{
@@ -118,7 +125,7 @@ try{
     }catch{timedOut=true}
     const panelText=await page.evaluate(()=>Array.from(document.documentElement.children).map(n=>n.shadowRoot?.textContent||"").join("\n"));
     const ok=panelText.includes(expected);
-    const measured={panel_ms:round(panel),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes,ok,timed_out:timedOut,panel_text:ok?undefined:panelText.slice(0,600)};
+    const measured={panel_ms:round(panel),initial_ms,result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes,ok,timed_out:timedOut,panel_text:ok?undefined:panelText.slice(0,600)};
     console.log("BASELINE_CASE_DONE",label,JSON.stringify(measured));return measured;
   }
   await patchSettings({hoverDelay:300});
@@ -130,7 +137,7 @@ try{
     ["discourse_500_posts","#large","1000 media"],["discourse_500_posts_rtt50","#slow50","1000 media"],
     ["discourse_500_posts_rtt100","#slow100","1000 media"],["discourse_fallback_100_posts","#fallback","200 media"]
   ]){
-    const r=await hoverMeasure(selector,expected,{label:name});results.latency[name]=r;results.network[name]={requests:r.requests,response_bytes:r.response_bytes};
+    const r=await hoverMeasure(selector,expected,{label:name,initialExpected:name==="discourse_500_posts_rtt100"?"40 media":null});results.latency[name]=r;results.network[name]={requests:r.requests,response_bytes:r.response_bytes};
   }
 
   const cacheHit=await hoverMeasure("#small","40 media",{label:"discourse_20_posts_cache_hit"});
