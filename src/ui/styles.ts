@@ -11,6 +11,22 @@ export const overlayCss=rexCss+`
 .lp-btn:hover,.lp-btn[aria-pressed="true"]{color:${REX.signal};background:${REX.raised};border-color:${REX.line}}
 .lp-stage{position:relative;height:min(54vh,560px);min-height:260px;background:#050605;display:grid;place-items:center;overflow:hidden;touch-action:none}
 .lp-image{max-width:100%;max-height:100%;object-fit:contain;transform-origin:0 0;will-change:transform;user-select:none;-webkit-user-drag:none}
+.lp-gif-mount{position:absolute;inset:0;display:grid;place-items:center}
+.lp-gif-player{position:absolute;inset:0;display:grid;grid-template-rows:1fr auto;min-height:0}
+.lp-gif-surface{min-height:0;display:grid;place-items:center;overflow:hidden;padding:8px 8px 0}
+.lp-gif-canvas{display:block;width:auto;height:auto}
+.lp-gif-preparing,.lp-gif-fallback{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:${REX.muted};font-size:12px;text-align:center}
+.lp-gif-fallback img{max-width:100%;max-height:calc(100% - 38px)}
+.lp-gif-fallback span{position:absolute;bottom:12px;background:rgba(17,21,18,.9);border:1px solid ${REX.line};border-radius:999px;padding:6px 10px}
+.lp-gif-controls{display:grid;grid-template-columns:32px 38px 32px minmax(80px,1fr) auto auto 34px;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(180deg,rgba(8,10,9,.4),rgba(8,10,9,.97));border-top:1px solid ${REX.line};z-index:4}
+.lp-media-btn{height:30px;min-width:30px;border:1px solid ${REX.line};border-radius:8px;background:${REX.raised};color:${REX.text};font-weight:800;line-height:1}
+.lp-media-btn:hover,.lp-media-btn:focus-visible,.lp-media-btn[aria-pressed="true"]{border-color:${REX.signal};color:${REX.signal}}
+.lp-gif-timeline{width:100%;min-width:70px;accent-color:${REX.signal};cursor:ew-resize}
+.lp-gif-time{white-space:nowrap;font:700 10px ui-monospace,monospace;color:${REX.muted};font-variant-numeric:tabular-nums}
+.lp-gif-speed{height:30px;border:1px solid ${REX.line};border-radius:8px;background:${REX.raised};color:${REX.text};font:700 11px ui-monospace,monospace;padding:0 6px}
+.lp-gif-player[data-controls="hover"] .lp-gif-controls{opacity:.18;transition:opacity .14s ease}.lp-gif-player[data-controls="hover"]:hover .lp-gif-controls,.lp-gif-player[data-controls="hover"]:focus-within .lp-gif-controls{opacity:1}
+.lp-gif-player[data-controls="minimal"] .lp-gif-time,.lp-gif-player[data-controls="minimal"] .lp-gif-prev,.lp-gif-player[data-controls="minimal"] .lp-gif-next{display:none}
+@media(max-width:560px){.lp-gif-controls{grid-template-columns:30px 36px 30px minmax(60px,1fr) auto 32px}.lp-gif-time{display:none}}
 .lp-empty,.lp-loading,.lp-error{display:grid;place-items:center;gap:8px;text-align:center;padding:32px;color:${REX.muted};font-size:13px}
 .lp-loading-dot{width:8px;height:8px;border-radius:50%;background:${REX.signal};box-shadow:0 0 24px ${REX.signal};animation:pulse .8s alternate infinite}
 @keyframes pulse{to{opacity:.25;transform:scale(.7)}}
