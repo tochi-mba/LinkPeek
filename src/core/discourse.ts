@@ -26,7 +26,7 @@ export function parsePreloadedDiscourseTopic(html:string,topicId:number):DTopic|
 async function fetchTopic(raw:string,jsonUrl:URL,signal?:AbortSignal):Promise<DiscourseSeed>{
   try{return {topic:await fetchJson(jsonUrl.href,signal) as DTopic}}
   catch(primaryError){
-    if(signal?.aborted)throw primaryError;const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)?.[1]);if(!id)throw primaryError;
+    if(signal?.aborted)throw primaryError;const id=Number(/(\d+)\.json$/.exec(jsonUrl.pathname)![1]);
     const html=await fetchText(raw,signal),fallback=parsePreloadedDiscourseTopic(html,id);if(!fallback)throw primaryError;
     return {topic:fallback,warning:"Used embedded Discourse topic data after the JSON endpoint was unavailable."};
   }
