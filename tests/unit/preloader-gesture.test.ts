@@ -146,6 +146,32 @@ describe("GestureController",()=>{
     g.destroy();
   });
 
+  it("covers drag-pan pointer-capture failures, stale/far clicks and horizontal momentum",()=>{
+    cb.isZoomed.mockReturnValue(true);
+    let g=new GestureController(el,cb,settings);
+
+    (g as any).lastPrimaryUpAt=-1000;(g as any).lastPrimaryUpX=10;(g as any).lastPrimaryUpY=10;
+    pointer("pointerdown",10,10);
+    (g as any).lastPrimaryUpAt=performance.now();(g as any).lastPrimaryUpX=0;(g as any).lastPrimaryUpY=0;
+    pointer("pointerdown",100,100);
+
+    (el as any).setPointerCapture=vi.fn(()=>{throw new Error("capture")});
+    (g as any).lastPrimaryUpAt=performance.now();(g as any).lastPrimaryUpX=20;(g as any).lastPrimaryUpY=20;
+    pointer("pointerdown",20,20,3);pointer("pointermove",30,30,99);pointer("pointermove",30,30,3);
+    (el as any).hasPointerCapture=vi.fn(()=>false);pointer("pointerup",30,30,3);
+
+    (el as any).setPointerCapture=vi.fn();
+    (el as any).hasPointerCapture=vi.fn(()=>true);(el as any).releasePointerCapture=vi.fn(()=>{throw new Error("release")});
+    (g as any).lastPrimaryUpAt=performance.now();(g as any).lastPrimaryUpX=40;(g as any).lastPrimaryUpY=40;
+    pointer("pointerdown",40,40,4);pointer("pointercancel",40,40,4);
+    g.destroy();
+
+    settings.momentumFiltering=true;settings.horizontalGesture="navigate";settings.reverseHorizontal=false;settings.gestureCooldown=500;
+    cb.isZoomed.mockReturnValue(false);g=new GestureController(el,cb,settings);
+    const before=cb.next.mock.calls.length;wheel(100,1);wheel(100,1);expect(cb.next.mock.calls.length-before).toBe(1);
+    g.destroy();
+  });
+
   it("supports double-click, disabled double-click and double-click-hold drag panning",()=>{
     cb.isZoomed.mockReturnValue(true);
     const g=new GestureController(el,cb,settings);
