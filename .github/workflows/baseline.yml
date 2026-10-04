@@ -1,0 +1,75 @@
+name: Optimization baseline
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start timer
+        run: |
+          mkdir -p baseline
+          echo "BASELINE_START=$(date +%s%3N)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: |
+          START=$(date +%s%3N)
+          npm install
+          END=$(date +%s%3N)
+          node -e "const fs=require('fs');fs.writeFileSync('baseline/install.json',JSON.stringify({npm_install_ms:Number(process.argv[1])},null,2))" "$((END-START))"
+
+      - name: Build, bundle, and microbench baseline
+        run: node scripts/collect-baseline.mjs
+
+      - name: Install Chromium
+        run: |
+          START=$(date +%s%3N)
+          npx playwright install --with-deps --no-shell chromium
+          END=$(date +%s%3N)
+          node -e "const fs=require('fs');const p='baseline/install.json';const j=JSON.parse(fs.readFileSync(p));j.chromium_install_ms=Number(process.argv[1]);fs.writeFileSync(p,JSON.stringify(j,null,2))" "$((END-START))"
+
+      - name: Loaded-extension browser baseline
+        run: node benchmarks/browser-baseline.mjs
+
+      - name: Package CRX baseline
+        run: |
+          set -euxo pipefail
+          CHROMIUM=$(node -e "const {chromium}=require('@playwright/test'); process.stdout.write(chromium.executablePath())")
+          START=$(date +%s%3N)
+          "$CHROMIUM" --no-sandbox --pack-extension="$GITHUB_WORKSPACE/dist"
+          END=$(date +%s%3N)
+          node -e "const fs=require('fs');fs.writeFileSync('baseline/release.json',JSON.stringify({crx_bytes:fs.statSync('dist.crx').size,pack_crx_ms:Number(process.argv[1])},null,2))" "$((END-START))"
+          rm -f dist.crx dist.pem
+
+      - name: Render combined baseline
+        run: |
+          NOW=$(date +%s%3N)
+          node -e "const fs=require('fs');const p='baseline/install.json';const j=JSON.parse(fs.readFileSync(p));j.total_workflow_ms=Number(process.argv[1])-Number(process.argv[2]);fs.writeFileSync(p,JSON.stringify(j,null,2))" "$NOW" "$BASELINE_START"
+          node scripts/render-baseline-report.mjs
+          cat baseline/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linkpeek-optimization-baseline
+          path: |
+            baseline/baseline.json
+            baseline/REPORT.md
+            baseline/build.json
+            baseline/node.json
+            baseline/browser.json
+            baseline/release.json
+            baseline/install.json
+          retention-days: 30
