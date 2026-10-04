@@ -169,6 +169,15 @@ describe("background service worker",()=>{
     await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/progress/22",kind:"discourse",token:"p"},{tab:{id:7}});
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(sent[0][2]).toEqual({frameId:0});
+
+    sent=[];
+    mocks.scanDiscourse.mockImplementationOnce(async(url:string,_b:number,_m:number,_s:any,_seed:any,hooks:any)=>{
+      hooks?.onProgress?.({...direct(url,"discourse"),complete:false,postsScanned:1,totalPosts:2});
+      await new Promise(r=>setTimeout(r,70));
+      return {...direct(url,"discourse"),complete:true,postsScanned:2,totalPosts:2};
+    });
+    await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/no-tab-progress/24",kind:"discourse",token:"none"},{});
+    expect(sent).toHaveLength(0);
   });
 
   it("replaces an aborted task before its old promise settles and tolerates failed warm prefetch",async()=>{
