@@ -27,19 +27,53 @@ const choices:Record<string,string[]>={
   mouseWheel:["navigate","scroll","zoom"],ctrlWheel:["zoom","browser"],middleClick:["original","post","pin"],referrerPolicy:["default","same-origin","never"],clearCache:["close","daily","never"],touchTarget:["normal","large","xl"]
 };
 const descriptions:Record<string,string>={
-  hoverDelay:"Milliseconds before a hover becomes an intentional preview.",gifAutoplay:"Choose whether focused GIFs start playing automatically.",gifLoop:"Loop GIF playback at the final frame.",gifDefaultSpeed:"Initial GIF playback speed multiplier.",gifPauseWhenHidden:"Pause decoded GIF playback while the tab is hidden.",gifDecodeMaxMb:"Largest GIF LinkPeek will decode for frame controls; larger files fall back to native playback.",gifControls:"How prominently GIF playback controls stay visible.",gifScrubWheel:"Two-finger horizontal scrolling over the GIF timeline scrubs frames.",gifFrameStepKeyboard:"Enable comma/period frame stepping and bracket speed shortcuts.",gestureThreshold:"Trackpad movement required before one navigation step fires.",magneticBridgeStrength:"How forgiving the invisible bridge is when moving from the link into the panel.",relevanceStrength:"How strict generic-page media filtering should be.",batchSize:"Posts requested per Discourse batch.",siteProfiles:"JSON map of hostnames or wildcard hosts to setting overrides.",shortcuts:"JSON map of actions to one or more keys.",customIgnoreSelectors:"Selectors whose images should never count as content.",customPreferredSelectors:"Selectors that should be treated as high-confidence content."
+  hoverDelay:"Milliseconds before a hover becomes an intentional preview.",
+  prefetch:"Warm likely links before you hover them. Nearby is the recommended balance.",
+  prefetchRadius:"How far around the current viewport LinkPeek considers links for prefetching.",
+  idlePrefetch:"Only prefetch when the page/browser has spare time.",
+  maxRequests:"Maximum simultaneous LinkPeek network requests.",
+  batchSize:"Posts requested per Discourse batch. Larger batches reduce round trips.",
+  networkMode:"Adaptive balances responsiveness and bandwidth; Data Saver is conservative; Aggressive favors speed.",
+  meteredOff:"Disable background prefetch when the browser reports a constrained connection.",
+  cacheMinutes:"How long completed thread scans stay reusable before expiring.",
+  maxCacheMb:"Maximum approximate LinkPeek result-cache memory budget.",
+  preloadNext:"How many upcoming media items to prepare around the current item.",
+  preloadOriginals:"Choose when full-resolution originals are prepared instead of previews.",
+  gifAutoplay:"Choose whether focused GIFs start playing automatically.",gifLoop:"Loop GIF playback at the final frame.",gifDefaultSpeed:"Initial GIF playback speed multiplier.",gifPauseWhenHidden:"Pause decoded GIF playback while the tab is hidden.",gifDecodeMaxMb:"Largest GIF LinkPeek will decode for frame controls; larger files fall back to native playback.",gifControls:"How prominently GIF playback controls stay visible.",gifScrubWheel:"Two-finger horizontal scrolling over the GIF timeline scrubs frames.",gifFrameStepKeyboard:"Enable comma/period frame stepping and bracket speed shortcuts.",gestureThreshold:"Trackpad movement required before one navigation step fires.",magneticBridgeStrength:"How forgiving the invisible bridge is when moving from the link into the panel.",relevanceStrength:"How strict generic-page media filtering should be.",siteProfiles:"JSON map of hostnames or wildcard hosts to setting overrides.",shortcuts:"JSON map of actions to one or more keys.",customIgnoreSelectors:"Selectors whose images should never count as content.",customPreferredSelectors:"Selectors that should be treated as high-confidence content."
+};
+const choiceLabels:Record<string,Record<string,string>>={
+  prefetch:{off:"Off",nearby:"Nearby",visible:"Visible",all:"All visible links"},
+  networkMode:{adaptive:"Adaptive",data:"Data Saver",aggressive:"Aggressive"},
+  preloadOriginals:{never:"Never",next:"Next",three:"Next 3",aggressive:"Aggressive"},
+  activationMode:{hover:"Hover",click:"Click",modifier:"Modifier + hover"},
+  continueAfterClose:{no:"Stop",brief:"Briefly",always:"Always"}
+};
+const segmentedKeys=new Set(["prefetch"]);
+const numberMeta:Record<string,{min?:number;max?:number;step?:number;unit?:string}>={
+  hoverDelay:{min:0,max:2000,step:25,unit:"ms"},closeDelay:{min:0,max:2000,step:25,unit:"ms"},
+  prefetchRadius:{min:0,max:6,step:1},maxRequests:{min:1,max:12,step:1},batchSize:{min:10,max:100,step:10},
+  cacheMinutes:{min:1,max:1440,step:5,unit:"min"},maxCacheMb:{min:16,max:2048,step:16,unit:"MB"},preloadNext:{min:0,max:20,step:1},
+  maxPosts:{min:20,max:10000,step:20},gifDecodeMaxMb:{min:1,max:100,step:1,unit:"MB"},
+  panelWidth:{min:280,max:1000,step:10,unit:"px"},pointerGap:{min:0,max:48,step:1,unit:"px"},
+  animationMs:{min:0,max:1000,step:10,unit:"ms"},fetchTimeout:{min:500,max:30000,step:500,unit:"ms"},
+  retryCount:{min:0,max:10,step:1},thumbnailSize:{min:56,max:240,step:4,unit:"px"}
 };
 let state:LinkPeekSettings;
 const title=(k:string)=>k.replace(/([A-Z])/g," $1").replace(/^./,x=>x.toUpperCase());
 const $=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
 function same(a:unknown,b:unknown){return JSON.stringify(a)===JSON.stringify(b)}
 function categoryModified(keys:readonly string[]){return keys.some(k=>!same((state as any)[k],(DEFAULT_SETTINGS as any)[k]))}
+function choiceLabel(key:string,value:string){return choiceLabels[key]?.[value]??title(value)}
 function control(key:string,value:any){
-  if(typeof value==="boolean")return `<input type="checkbox" data-key="${key}" ${value?"checked":""}>`;
-  if(choices[key])return `<select data-key="${key}">${choices[key].map(x=>`<option value="${x}" ${x===value?"selected":""}>${title(x)}</option>`).join("")}</select>`;
+  if(typeof value==="boolean")return `<label class="switch"><input type="checkbox" data-key="${key}" ${value?"checked":""}><span class="switch-track"><span class="switch-thumb"></span></span></label>`;
+  if(choices[key]){
+    if(segmentedKeys.has(key))return `<div class="segmented" role="radiogroup" aria-label="${title(key)}">${choices[key].map(x=>`<button type="button" class="segment ${x===value?"active":""}" data-choice-key="${key}" data-choice-value="${x}" aria-pressed="${x===value}">${choiceLabel(key,x)}</button>`).join("")}</div>`;
+    return `<span class="select-shell"><select data-key="${key}" aria-label="${title(key)}">${choices[key].map(x=>`<option value="${x}" ${x===value?"selected":""}>${choiceLabel(key,x)}</option>`).join("")}</select><span class="select-chevron">⌄</span></span>`;
+  }
   if(typeof value==="number"){
-    const range=/opacity|Strength|Sensitivity|Friction|transparency/i.test(key);if(range){const max=/opacity|transparency/i.test(key)?1:1;return `<input type="range" min="0" max="${max}" step=".05" value="${value}" data-key="${key}"><span class="value-num">${value}</span>`}
-    return `<input type="number" value="${value}" data-key="${key}">`;
+    const range=/opacity|Strength|Sensitivity|Friction|transparency/i.test(key);if(range){const max=/opacity|transparency/i.test(key)?1:1;return `<div class="range-control"><input type="range" min="0" max="${max}" step=".05" value="${value}" data-key="${key}"><span class="value-num">${value}</span></div>`}
+    const meta=numberMeta[key]??{},attrs=[meta.min!=null?`min="${meta.min}"`:"",meta.max!=null?`max="${meta.max}"`:"",meta.step!=null?`step="${meta.step}"`:""].filter(Boolean).join(" ");
+    return `<div class="number-shell"><button type="button" class="number-step" data-step-key="${key}" data-step-dir="-1" aria-label="Decrease ${title(key)}">−</button><input type="number" value="${value}" data-key="${key}" ${attrs}><button type="button" class="number-step" data-step-key="${key}" data-step-dir="1" aria-label="Increase ${title(key)}">+</button>${meta.unit?`<span class="number-unit">${meta.unit}</span>`:""}</div>`;
   }
   if(typeof value==="object")return `<textarea class="json" data-key="${key}">${escapeHtml(JSON.stringify(value,null,2))}</textarea>`;
   return `<input type="text" value="${escapeHtml(String(value))}" data-key="${key}">`;
@@ -54,6 +88,13 @@ function render(filter=""){
   bind();
 }
 function bind(){
+  document.querySelectorAll<HTMLElement>("[data-choice-key]").forEach(el=>el.addEventListener("click",async()=>{
+    const key=el.dataset.choiceKey!,v=el.dataset.choiceValue!;(state as any)[key]=v;if(key!=="preset")state.preset="custom";await persist();render(($("search") as HTMLInputElement).value);
+  }));
+  document.querySelectorAll<HTMLElement>("[data-step-key]").forEach(el=>el.addEventListener("click",async()=>{
+    const key=el.dataset.stepKey!,dir=Number(el.dataset.stepDir||0),meta=numberMeta[key]??{},current=Number((state as any)[key]),step=meta.step??1;
+    const next=Math.min(meta.max??Infinity,Math.max(meta.min??-Infinity,current+dir*step));(state as any)[key]=next;state.preset="custom";await persist();render(($("search") as HTMLInputElement).value);
+  }));
   document.querySelectorAll<HTMLElement>("[data-key]").forEach(el=>el.addEventListener("change",async()=>{
     const key=el.dataset.key!;let v:any;
     if(el instanceof HTMLInputElement&&el.type==="checkbox")v=el.checked;
