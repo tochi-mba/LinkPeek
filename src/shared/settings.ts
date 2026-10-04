@@ -47,7 +47,7 @@ export interface LinkPeekSettings{
 export const DEFAULT_SETTINGS:LinkPeekSettings={
   enabled:true,activationMode:"hover",hoverDelay:300,closeDelay:180,intentDetection:true,slowdownDetection:true,requirePointerStop:false,cancelMovePx:18,
   magneticBridge:true,magneticBridgeStrength:0.7,panelSize:"medium",panelWidth:480,panelMaxVh:70,focusHeightVh:54,expandedWidthVw:92,expandedHeightVh:92,startExpanded:false,quickViewControls:true,placement:"auto",pointerGap:12,autoExpand:true,panelOpacity:1,inactiveOpacity:.9,animationMs:180,
-  defaultView:"focus",navAxis:"vertical",snap:true,loopMode:"resist",showCounter:true,showPostCounter:true,showFilename:false,showAuthor:true,showDimensions:false,groupByPost:true,sort:"thread",startAt:"linked",
+  defaultView:"focus",navAxis:"vertical",snap:true,loopMode:"wrap",showCounter:true,showPostCounter:true,showFilename:false,showAuthor:true,showDimensions:false,groupByPost:true,sort:"thread",startAt:"linked",
   verticalGesture:"navigate",horizontalGesture:"scrub",pinchZoom:true,doubleClick:"zoom",navSensitivity:.55,gestureThreshold:62,momentumFiltering:true,gestureCooldown:140,fastSwipeAcceleration:true,maxImagesPerSwipe:3,
   reverseVertical:false,reverseHorizontal:false,deliberateGesture:true,ignoreTinyMotion:true,fit:"contain",maxZoom:8,minZoom:1,pinchSensitivity:1,doubleClickZoom:2,secondDoubleClick:"fit",zoomCenter:"pointer",
   panWhenZoomed:true,panFriction:.85,edgeResistance:true,edgeNext:true,edgeDwell:120,resetZoomPerImage:true,rememberZoom:false,
