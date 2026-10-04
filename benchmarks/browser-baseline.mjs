@@ -81,8 +81,11 @@ try{
   await sw.evaluate(async()=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),prefetch:"off",showLearningTips:false}})});
   for(const p of context.pages())await p.close().catch(()=>{});
   const page=await context.newPage();
-  const navStart=performance.now();await page.goto(base);
+  const navStart=performance.now();await page.goto(base,{waitUntil:"domcontentloaded"});
+  const domReady=performance.now();
   await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
+  results.browser.navigation_domcontentloaded_ms=round(domReady-navStart);
+  results.browser.content_host_after_dom_ms=round(performance.now()-domReady);
   results.browser.navigation_to_content_host_ms=round(performance.now()-navStart);
   const cdp=await context.newCDPSession(page);
   const heap=async()=>{const h=await cdp.send("Runtime.getHeapUsage");return {usedSize:h.usedSize,totalSize:h.totalSize,embedderHeapUsedSize:h.embedderHeapUsedSize,backingStorageSize:h.backingStorageSize}};
