@@ -27,6 +27,16 @@ await build({
   minify: true
 });
 
+await build({
+  entryPoints: {"gif-player":"src/ui/gif-player.ts"},
+  bundle: true,
+  outdir: out,
+  format: "esm",
+  target: "chrome120",
+  sourcemap: false,
+  minify: true
+});
+
 await cp("public", out, { recursive: true });
 await cp("src/pages/base.css", resolve(out, "base.css"));
 const icons=JSON.parse(await readFile("assets/icons.json","utf8"));

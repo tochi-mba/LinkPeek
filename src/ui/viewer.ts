@@ -1,21 +1,23 @@
-import type {ScanResult} from "../shared/media";
+import type {MediaItem,ScanResult} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {overlayCss} from "./styles";
 import {GestureController} from "./gesture";
-import {GifPlayer} from "./gif-player";
+
+type GifPlayerLike={init:()=>Promise<void>;destroy:()=>void;key:(e:KeyboardEvent)=>boolean};
 
 export class Viewer{
   host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
   panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
-  index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayer;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;
+  index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
+  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
   openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.panel.className="lp-panel";this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
   show(result:ScanResult){this.result=result;this.index=Math.min(this.index,Math.max(0,result.items.length-1));this.render()}
   error(message:string){this.panel.innerHTML=this.shell("Couldn’t preview",`<div class="lp-error"><strong>Preview unavailable</strong><span>${this.escape(message)}</span></div>`,"");this.bind()}
-  close(force=false){if(this.pinned&&!force)return;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
+  close(force=false){if(this.pinned&&!force)return;this.renderVersion++;this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
   private render(){
     if(!this.result)return;
+    const version=++this.renderVersion;
     this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;
     const item=this.result.items[this.index];
     const media=item?.type==="gif"?`<div class="lp-gif-mount"></div>`:`<img class="lp-image" src="${item?this.escape(item.previewUrl):""}" alt="${item?this.escape(item.filename||"Preview image"):""}">`;
@@ -32,7 +34,19 @@ export class Viewer{
         pan:(dx:number,dy:number)=>this.pan(dx,dy),zoom:(factor:number,x:number,y:number)=>this.applyZoom(factor,x,y),
         doubleClick:(x:number,y:number)=>this.onDoubleClick(x,y),isZoomed:()=>this.zoom>1.01
       },this.settings);
-      if(item.type==="gif"){this.gifPlayer=new GifPlayer(this.stage,item.originalUrl,this.settings,message=>this.toast(message));void this.gifPlayer.init()}
+      if(item.type==="gif")void this.mountGif(item,version)
+    }
+  }
+  private async mountGif(item:MediaItem,version:number){
+    try{
+      const mod=await import(chrome.runtime.getURL("gif-player.js")) as {GifPlayer:new(stage:HTMLElement,url:string,settings:LinkPeekSettings,onNotice?:(message:string)=>void)=>GifPlayerLike};
+      if(version!==this.renderVersion||this.view!=="focus"||this.result?.items[this.index]!==item)return;
+      const player=new mod.GifPlayer(this.stage,item.originalUrl,this.settings,message=>this.toast(message));this.gifPlayer=player;await player.init();
+    }catch(error){
+      if(version!==this.renderVersion)return;
+      const mount=this.stage.querySelector(".lp-gif-mount");
+      if(mount)mount.innerHTML=`<div class="lp-gif-fallback"><img class="lp-image" src="${this.escape(item.originalUrl)}" alt="Animated GIF"><span>Native GIF playback</span></div>`;
+      this.toast(error instanceof Error?error.message:"GIF controls unavailable");
     }
   }
   private shell(title:string,body:string,status:string){return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span><button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button><button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span><span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
