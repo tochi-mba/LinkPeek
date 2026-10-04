@@ -19,9 +19,9 @@ chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
       const cached=cache.get(msg.url);
       if(cached&&Date.now()-cached.at<settings.cacheMinutes*60_000)return cached.result;
       let result:ScanResult;
-      if(msg.kind==="discourse")result=await scanDiscourse(msg.url,settings.batchSize,settings.maxPosts);
+      if(msg.kind==="discourse")result=await scanDiscourse(msg.url,settings.batchSize,settings.maxPosts,settings);
       else if(msg.kind==="direct-image")result={url:msg.url,kind:"direct-image",items:[{id:msg.url,type:/\.gif/i.test(msg.url)?"gif":"image",originalUrl:msg.url,previewUrl:msg.url,sourceUrl:msg.url,score:1}],complete:true,diagnostics:{adapter:"Direct media",ignored:0,duplicates:0,warnings:[]}};
-      else result=await scanGeneric(msg.url);
+      else result=await scanGeneric(msg.url,settings);
       if(settings.cacheThreads)cache.set(msg.url,{at:Date.now(),result});
       return result;
     })().then(sendResponse).catch((e:Error)=>sendResponse({error:e.message}));
