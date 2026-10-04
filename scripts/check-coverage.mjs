@@ -2,12 +2,17 @@ import {readFile} from "node:fs/promises";
 import {relative} from "node:path";
 
 const report=JSON.parse(await readFile("coverage/coverage-final.json","utf8"));
-let statements=0,statementsHit=0,branches=0,branchesHit=0,functions=0,functionsHit=0;
+let statements=0,statementsHit=0,branches=0,branchesHit=0,functions=0,functionsHit=0,lines=0,linesHit=0;
 const gaps=[];
 for(const [file,data] of Object.entries(report)){
   const path=relative(process.cwd(),file).replaceAll("\\","/");
   if(!path.startsWith("src/"))continue;
-  for(const [id,count] of Object.entries(data.s)){statements++;if(count>0)statementsHit++}
+  const lineCounts=new Map();
+  for(const [id,count] of Object.entries(data.s)){
+    statements++;if(count>0)statementsHit++;
+    const line=data.statementMap[id]?.start?.line;if(line!=null)lineCounts.set(line,Math.max(lineCounts.get(line)??0,count));
+  }
+  for(const count of lineCounts.values()){lines++;if(count>0)linesHit++}
   for(const [id,count] of Object.entries(data.f)){
     functions++;if(count>0)functionsHit++;
     else{
@@ -31,7 +36,7 @@ const result={
   statements:pct(statementsHit,statements),
   branches:pct(branchesHit,branches),
   functions:pct(functionsHit,functions),
-  lines:100
+  lines:pct(linesHit,lines)
 };
 console.log("Coverage gate:",Object.fromEntries(Object.entries(result).map(([k,v])=>[k,`${v.toFixed(2)}%`])));
 if(gaps.length){
