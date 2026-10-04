@@ -233,4 +233,16 @@ describe("background service worker",()=>{
     let r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/error",kind:"generic",token:"e"});expect(r.value.error).toBe("scan fail");
     r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/noprogress/9",kind:"discourse",token:"np"});expect(r.value.complete).toBe(true);
   });
+  it("skips progress delivery for consumers without a tab after the progress timer starts",async()=>{
+    sent=[];
+    mocks.scanDiscourse.mockImplementationOnce(async(url:string,_b:number,_m:number,_s:any,_seed:any,hooks:any)=>{
+      hooks?.onProgress?.({...direct(url,"discourse"),complete:false,postsScanned:1,totalPosts:3});
+      await new Promise(r=>setTimeout(r,70));
+      hooks?.onProgress?.({...direct(url,"discourse"),complete:false,postsScanned:2,totalPosts:3});
+      return {...direct(url,"discourse"),complete:true,postsScanned:3,totalPosts:3};
+    });
+    const r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/t/no-tab-progress/99",kind:"discourse",token:"nt"},{});
+    expect(r.value.complete).toBe(true);expect(sent).toHaveLength(0);
+  });
+
 });
