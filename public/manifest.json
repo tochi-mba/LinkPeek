@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "LinkPeek",
+  "version": "0.1.0",
+  "description": "Preview and browse the media behind links without leaving the page. A REX Technologies product.",
+  "permissions": ["storage", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "LinkPeek",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["onboarding.html"],
+    "matches": ["<all_urls>"]
+  }]
+}
