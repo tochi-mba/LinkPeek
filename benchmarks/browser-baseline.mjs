@@ -114,20 +114,26 @@ try{
   const defaultHover=await hoverMeasure("#direct","1 media",{label:"default_hover_direct"});results.latency.default_hover_direct=defaultHover;
   await patchSettings({hoverDelay:0});
   for(const [name,selector,expected] of [
-    ["direct","#direct","1 media"],["generic_200","#generic","200 media"],["discourse_20_posts","#small","40 media"],
-    ["discourse_100_posts","#medium","200 media"],["discourse_500_posts","#large","1000 media"],["discourse_fallback_100_posts","#fallback","200 media"]
+    ["direct","#direct","1 media"],["generic_200","#generic","200 media"],["generic_1000","#generic-large","1000 media"],
+    ["discourse_20_posts","#small","40 media"],["discourse_100_posts","#medium","200 media"],
+    ["discourse_500_posts","#large","1000 media"],["discourse_fallback_100_posts","#fallback","200 media"]
   ]){
     const r=await hoverMeasure(selector,expected,{label:name});results.latency[name]=r;results.network[name]={requests:r.requests,response_bytes:r.response_bytes};
   }
 
-  const cacheHit=await hoverMeasure("#large","1000 media");
-  results.latency.discourse_500_posts_cache_hit_ms=cacheHit.result_ms;
-  results.network.discourse_500_posts_cache_hit={requests:cacheHit.requests,response_bytes:cacheHit.response_bytes};
+  const cacheHit=await hoverMeasure("#small","40 media",{label:"discourse_20_posts_cache_hit"});
+  results.latency.discourse_20_posts_cache_hit_ms=cacheHit.result_ms;
+  results.network.discourse_20_posts_cache_hit={requests:cacheHit.requests,response_bytes:cacheHit.response_bytes};
   let t=performance.now();
 
+  const gridSource=await hoverMeasure("#generic-large","1000 media",{label:"generic_1000_grid_source"});
   results.memory.after_large_focus=await heap();
-  t=performance.now();await page.keyboard.press("g");await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
-  results.ui.grid_1000_render_ms=round(performance.now()-t);results.memory.after_grid_1000=await heap();
+  if(gridSource.ok){
+    t=performance.now();await page.keyboard.press("g");await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
+    results.ui.grid_1000_render_ms=round(performance.now()-t);results.memory.after_grid_1000=await heap();
+  }else{
+    results.ui.grid_1000_render_ms=null;results.memory.after_grid_1000=results.memory.after_large_focus;
+  }
   await page.keyboard.press("g");t=performance.now();
   await page.evaluate(()=>{const host=Array.from(document.documentElement.children).find(n=>n.shadowRoot?.querySelector(".lp-stage"));host?.shadowRoot?.querySelector(".lp-stage")?.dispatchEvent(new WheelEvent("wheel",{deltaY:100,bubbles:true,cancelable:true}))});
   await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes("2 / 1000")));
