@@ -91,14 +91,16 @@ export async function scanDiscourse(raw:string,batchSize=50,maxPosts=2000,settin
 
   const size=Math.max(1,Math.min(100,batchSize||50)),idBatches:number[][]=[];
   for(let i=0;i<missing.length;i+=size)idBatches.push(missing.slice(i,i+size));
-  let cursor=0,completed=0;
+  let cursor=0,completed=0,lastProgressAt=Date.now();
   const concurrency=Math.max(1,Math.min(settings?.maxRequests??3,idBatches.length||1));
   const workers=Array.from({length:concurrency},async()=>{
     while(true){
       ensureNotAborted(signal);
       const index=cursor++;if(index>=idBatches.length)return;
       const batch=await fetchBatch(topic.id,jsonUrl.origin,idBatches[index],signal);posts.push(...batch);completed++;
-      if(onProgress&&(completed===idBatches.length||completed%concurrency===0)){
+      const now=Date.now();
+      if(onProgress&&completed<idBatches.length&&now-lastProgressAt>=250){
+        lastProgressAt=now;
         onProgress(makeResult(raw,topic,posts,stream,settings,false,fetched.warning));
       }
     }
