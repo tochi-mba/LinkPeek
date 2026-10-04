@@ -10,6 +10,8 @@ let activeScan:ActiveScan|undefined;const prefetched=new Set<string>();
 
 async function boot(){
   settings=await loadSettings();
+  const storedView=await chrome.storage.local.get("viewerState");
+  viewer.restoreViewerState(storedView.viewerState);
   chrome.storage.onChanged.addListener(async()=>{settings=await loadSettings()});
   chrome.runtime.onMessage.addListener(msg=>{
     if(msg?.type!=="LINKPEEK_SCAN_PROGRESS"||!activeScan||msg.token!==activeScan.token||msg.url!==activeScan.url)return;
