@@ -79,11 +79,13 @@ try{
   results.memory.page_idle=await heap();
 
   async function patchSettings(patch){await sw.evaluate(async p=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),...p}})},patch);await page.waitForTimeout(80)}
-  async function leave(){await page.mouse.move(1,1);await page.keyboard.press("Escape").catch(()=>{});await page.waitForTimeout(40)}
+  async function leave(){await page.keyboard.press("Escape").catch(()=>{});await page.evaluate(()=>document.dispatchEvent(new PointerEvent("pointerout",{bubbles:true,relatedTarget:document.body}))).catch(()=>{});await page.waitForTimeout(60)}
   async function hoverMeasure(selector,expected,{resetNet=true}={}){
     await leave();if(resetNet){requestCount=0;responseBytes=0}
-    const t=performance.now();await page.locator(selector).hover();
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-panel")));
+    const target=page.locator(selector),box=await target.boundingBox();if(!box)throw new Error(`No benchmark target for ${selector}`);
+    const t=performance.now();
+    await target.dispatchEvent("pointerover",{pointerType:"mouse",clientX:box.x+box.width/2,clientY:box.y+box.height/2,bubbles:true});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-panel")),null,{timeout:10000});
     const panel=performance.now()-t;
     await page.waitForFunction(exp=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.textContent?.includes(exp)),expected,{timeout:30000});
     return {panel_ms:round(panel),result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes};
