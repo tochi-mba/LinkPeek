@@ -93,7 +93,7 @@ describe("shared runtime coverage",()=>{
     const fallback=await toggleFavorite({url:"https://x.test/d"});expect(fallback.favorite?.title).toBe("https://x.test/d");
     expect(await isFavorite("https://x.test/missing")).toBe(false);
     await removeFavorite("https://x.test/b");
-    expect((await loadFavorites()).map(x=>x.url)).toEqual(["https://x.test/d","https://x.test/c"]);
+    expect((await loadFavorites()).map(x=>x.url)).toEqual(["https://x.test/d","https://x.test/c","https://x.test/e"]);
     store.favorites=[{url:"https://x.test/no-meta"}];
     const noMeta=await loadFavorites();expect(noMeta[0].addedAt).toBe(0);expect(noMeta[0].mediaCount).toBeUndefined();expect(noMeta[0].title).toBe("https://x.test/no-meta");
 
