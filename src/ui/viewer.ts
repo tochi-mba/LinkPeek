@@ -18,7 +18,14 @@ export class Viewer{
     const progress=this.result.complete?"Complete":`${this.result.postsScanned??0}/${this.result.totalPosts??"?"} posts`;
     this.panel.innerHTML=this.shell(this.result.title||new URL(this.result.url).hostname,body,`${this.result.items.length} media · ${progress}`);
     this.bind();
-    if(this.view==="focus"&&item){this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{next:n=>this.move(n||1),previous:n=>this.move(-(n||1)),scrub:d=>this.move(d>0?3:-3),pan:(dx,dy)=>this.pan(dx,dy),zoom:(f,x,y)=>this.applyZoom(f,x,y)},this.settings.gestureThreshold,this.settings.gestureCooldown)}
+    if(this.view==="focus"&&item){this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{
+      next:n=>this.move(this.settings.reverseVertical?-(n||1):(n||1)),
+      previous:n=>this.move(this.settings.reverseVertical?(n||1):-(n||1)),
+      scrub:d=>this.move((this.settings.reverseHorizontal?-1:1)*(d>0?this.settings.maxImagesPerSwipe:-this.settings.maxImagesPerSwipe)),
+      pan:(dx,dy)=>this.pan(dx,dy),
+      zoom:(f,x,y)=>this.applyZoom(f,x,y),
+      quickZoom:(x,y)=>this.quickZoom(x,y)
+    },this.settings.gestureThreshold*(.55/Math.max(.2,this.settings.navSensitivity)),this.settings.gestureCooldown,this.settings.maxImagesPerSwipe)}
   }
   private shell(title:string,body:string,status:string){return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span><button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button><button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span><span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
   private grid(){return `<div class="lp-grid">${this.result!.items.map((i,n)=>`<button class="lp-thumb" data-i="${n}" aria-current="${n===this.index}"><img src="${this.escape(i.previewUrl)}" alt=""></button>`).join("")}</div>`}
@@ -49,10 +56,14 @@ export class Viewer{
     return false;
   }
   move(delta:number){if(!this.result?.items.length)return;const max=this.result.items.length-1;let n=this.index+delta;if(this.settings.loopMode==="wrap")n=(n+this.result.items.length)%this.result.items.length;else n=Math.max(0,Math.min(max,n));if(n!==this.index){this.index=n;if(this.settings.resetZoomPerImage){this.zoom=1;this.tx=this.ty=0}this.render()}}
+  quickZoom(x:number,y:number){
+    if(this.zoom>1.01&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}
+    const target=Math.max(1,this.settings.doubleClickZoom);this.applyZoom(target/this.zoom,x,y)
+  }
   applyZoom(factor:number,x:number,y:number){const old=this.zoom;this.zoom=Math.max(this.settings.minZoom,Math.min(this.settings.maxZoom,this.zoom*factor));if(old===this.zoom&&factor>1&&old>1){this.zoom=1;this.tx=this.ty=0}else{const ratio=this.zoom/old;this.tx=x-(x-this.tx)*ratio;this.ty=y-(y-this.ty)*ratio}this.paintTransform();this.toast(`${Math.round(this.zoom*100)}%`)}
   pan(dx:number,dy:number){if(this.zoom<=1)return;this.tx+=dx;this.ty+=dy;this.paintTransform()}
   paintTransform(){const img=this.panel.querySelector(".lp-image") as HTMLImageElement|null;if(img)img.style.transform=`translate(${this.tx}px,${this.ty}px) scale(${this.zoom})`}
   toast(text:string){const t=document.createElement("div");t.className="lp-toast";t.textContent=text;this.panel.appendChild(t);setTimeout(()=>t.remove(),650)}
-  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.opacity=String(this.settings.panelOpacity);if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
+  position(x:number,y:number){const w=this.settings.panelWidth||480,h=480,g=this.settings.pointerGap||12;let left=x+g,top=y+g;if(left+w>innerWidth-12)left=Math.max(12,x-w-g);if(top+h>innerHeight-12)top=Math.max(12,y-h-g);this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.setProperty("--lp-thumb",`${this.settings.thumbnailSize}px`);this.panel.style.opacity=String(this.settings.panelOpacity);this.panel.style.background=`rgba(17,21,18,${Math.max(.1,1-this.settings.transparency)})`;this.panel.style.backdropFilter=`blur(${this.settings.blur}px)`;if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"}
   private escape(v:string){return v.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}
 }
