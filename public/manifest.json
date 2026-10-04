@@ -38,7 +38,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "onboarding.html"
+        "onboarding.html",
+        "gif-player.js"
       ],
       "matches": [
         "<all_urls>"
