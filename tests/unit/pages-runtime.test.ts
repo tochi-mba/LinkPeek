@@ -57,6 +57,9 @@ describe("page entrypoints",()=>{
     document.querySelector<HTMLElement>('[data-step-key="hoverDelay"][data-step-dir="-1"]')!.click();await tick();
     document.querySelector<HTMLElement>('[data-step-key="maxZoom"][data-step-dir="1"]')!.click();await tick();
     document.querySelector<HTMLElement>('[data-step-key="maxZoom"][data-step-dir="-1"]')!.click();await tick();
+    const fallbackStep=document.querySelector<HTMLElement>('[data-step-key="minWidth"][data-step-dir="1"]')!;
+    fallbackStep.removeAttribute("data-step-dir");fallbackStep.click();await tick();
+
     const zeroStep=document.querySelector<HTMLElement>('[data-step-key="maxZoom"][data-step-dir="1"]')!;zeroStep.dataset.stepDir="";zeroStep.click();await tick();
     const json=document.querySelector<HTMLTextAreaElement>('textarea[data-key="shortcuts"]')!;json.value="{";json.dispatchEvent(new Event("change"));expect(json.style.borderColor).not.toBe("");
     json.value='{"grid":["z"]}';json.dispatchEvent(new Event("change"));await tick();
