@@ -31,6 +31,8 @@ describe("preload planning",()=>{
     expect(forward.priority.slice(0,3)).toEqual([4,2,5]);expect(forward.originals).toEqual([4]);
     const backward=buildPreloadPlan(8,3,{...base,preloadOriginals:"three",preloadRest:"all"},-1);
     expect(backward.priority[0]).toBe(4);expect(backward.originals).toEqual([2,1,0]);
+    const forwardThree=buildPreloadPlan(8,3,{...base,preloadOriginals:"three",preloadRest:"all"},1);
+    expect(forwardThree.originals).toEqual([4,5,6]);
     const aggressive=buildPreloadPlan(8,3,{...base,preloadOriginals:"aggressive",preloadRest:"all"},1);
     expect(aggressive.originals).toEqual(expect.arrayContaining(aggressive.priority));
     const data=buildPreloadPlan(8,3,{...base,networkMode:"data",preloadRest:"all"},1);
@@ -91,6 +93,40 @@ describe("MediaPreloader",()=>{
     await q.ensure(decodeFail);expect(q.isReady(decodeFail)).toBe(true);
     await q.ensure(fail);expect(q.isReady(fail)).toBe(false);
     q.dispose();p.dispose();expect(cancel).toHaveBeenCalled();
+  });
+
+  it("covers stale idle work, default settings fallbacks and internal eviction guards",async()=>{
+    const p=new MediaPreloader();
+    await p.ensure(item(90,"gif"));expect(sent.at(-1)?.maxMb).toBe(32);
+    (p as any).pump();(p as any).prune();expect((p as any).keepUrls().size).toBe(0);(p as any).deleteEntry("missing");
+
+    (p as any).items=[item(0),item(1)];(p as any).settings=undefined;
+    expect((p as any).keepUrls().size).toBeGreaterThan(0);
+    (p as any).settings={...DEFAULT_SETTINGS,loopMode:"stop",preloadNext:10,preloadPrevious:10};
+    expect((p as any).keepUrls().size).toBeGreaterThan(0);
+    (p as any).enqueueOriginal({...item(0),originalUrl:""},0,0);
+    (p as any).enqueueOriginal({...item(0),originalUrl:item(0).previewUrl},0,0);
+    (p as any).settings=undefined;(p as any).enqueuePreview(item(91,"gif"),0,0);await Promise.resolve();expect(sent.at(-1)?.maxMb).toBe(32);
+
+    (p as any).settings={...DEFAULT_SETTINGS,preloadConcurrency:2};(p as any).generation=2;
+    (p as any).queue=[{url:"https://x.test/stale.jpg",priority:0,generation:1}];(p as any).pump();expect((p as any).queue).toHaveLength(0);
+
+    let callbacks:IdleRequestCallback[]=[];
+    Object.defineProperty(window,"requestIdleCallback",{configurable:true,value:vi.fn((cb:IdleRequestCallback)=>{callbacks.push(cb);return callbacks.length})});
+    const cancel=vi.fn();Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:cancel});
+    const items=[item(0),item(1),item(2),item(3)];
+    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadNext:1,preloadPrevious:0});
+    const old=callbacks[0];p.schedule(2,1);old({didTimeout:false,timeRemaining:()=>50} as IdleDeadline);
+    p.dispose();expect(cancel).toHaveBeenCalled();
+
+    class ZeroImage extends FakeImage{naturalWidth=0;naturalHeight=0}
+    vi.stubGlobal("Image",ZeroImage as any);
+    const q=new MediaPreloader(),zero=item(92);q.reset([zero],0,{...DEFAULT_SETTINGS,preloadNext:0,preloadPrevious:0,preloadRest:"off"});
+    await q.ensure(zero);expect(q.isReady(zero)).toBe(true);expect((q as any).decodedBytes).toBe(0);
+
+    const r=new MediaPreloader();(r as any).settings={...DEFAULT_SETTINGS,preloadRestLimit:12,preloadMemoryMb:1024};(r as any).items=[];
+    const entries=new Map<string,any>();for(let i=0;i<30;i++)entries.set(`u${i}`,{img:{},promise:Promise.resolve(),ready:true,failed:false,lastUsed:i,bytes:0});
+    (r as any).entries=entries;(r as any).decodedBytes=0;(r as any).prune();expect((r as any).entries.size).toBe(24);
   });
 
   it("uses timeout fallback when idle callbacks are unavailable and evicts outside the memory ring",async()=>{
