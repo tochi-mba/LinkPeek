@@ -1,0 +1,25 @@
+{
+  "$schema": "https://tochi-mba.github.io/schema/project.schema.json",
+  "slug": "linkpeek",
+  "name": "LinkPeek",
+  "tagline": "See the media behind a link without leaving the page.",
+  "description": "A touchpad-first Chromium and Helium extension that turns links into fast media previews. It classifies destinations, understands Discourse threads, prefers original uploads over page chrome, and gives one-handed gallery navigation without making you leave the page.\n\nInteractive onboarding, searchable settings, presets, per-site profiles, privacy controls and a REX Technologies GitHub Pages install site ship with the extension.",
+  "highlights": [
+    "Whole-thread Discourse media extraction with original/preview pairing and deduplication",
+    "One-handed touchpad browsing, scrub and zoom controls",
+    "Deep searchable settings with presets and per-site overrides",
+    "Direct CRX build and GitHub Pages distribution pipeline",
+    "Browser-level Playwright E2E coverage for the packaged extension"
+  ],
+  "stack": ["TypeScript", "Manifest V3", "Chromium", "Playwright", "GitHub Actions", "GitHub Pages"],
+  "category": "product",
+  "status": "active",
+  "featured": true,
+  "display": true,
+  "publicSafe": true,
+  "links": {
+    "site": "https://tochi-mba.github.io/LinkPeek/",
+    "download": "https://tochi-mba.github.io/LinkPeek/downloads/LinkPeek.crx"
+  },
+  "year": 2026
+}

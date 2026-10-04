@@ -1,0 +1,29 @@
+{
+  "name": "linkpeek",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LinkPeek by REX Technologies — preview and browse media behind links.",
+  "author": "REX Technologies",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "clean": "node scripts/build.mjs --clean",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run tests/unit",
+    "test:watch": "vitest tests/unit",
+    "test:e2e": "npm run build && playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "package": "npm run build && cd dist && zip -r ../linkpeek.zip .",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/chrome": "^0.1.1",
+    "esbuild": "^0.25.9",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "@types/node": "^24.5.2"
+  }
+}
