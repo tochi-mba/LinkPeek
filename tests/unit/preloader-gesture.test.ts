@@ -77,9 +77,9 @@ describe("MediaPreloader",()=>{
     Object.defineProperty(window,"requestIdleCallback",{configurable:true,value:idle});
     Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:cancel});
     const p=new MediaPreloader(),items=[item(0),item(1),item(2),item(3)];
-    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadConcurrency:1,preloadMemoryMb:32});
+    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadNext:1,preloadPrevious:0,preloadConcurrency:1,preloadMemoryMb:32});
     await new Promise(r=>setTimeout(r,0));expect(idle).toHaveBeenCalled();
-    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"all",preloadRestLimit:20,preloadConcurrency:8,preloadMemoryMb:32});
+    p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"all",preloadRestLimit:20,preloadNext:1,preloadPrevious:0,preloadConcurrency:8,preloadMemoryMb:32});
     await new Promise(r=>setTimeout(r,0));
     Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:true,effectiveType:"2g"}});
     p.reset(items,1,{...DEFAULT_SETTINGS,meteredOff:true,preloadRest:"all",preloadNext:8,preloadPrevious:8});
@@ -100,8 +100,8 @@ describe("MediaPreloader",()=>{
     await new Promise<void>(resolve=>queueMicrotask(resolve));
     expect(timeout).toHaveBeenCalled();
     p.schedule(10,1);
-    await new Promise<void>(resolve=>queueMicrotask(resolve));
-    expect(p.isReady(items[10])||p.isReady(items[11])).toBe(true);
+    await p.ensure(items[10]);
+    expect(p.isReady(items[10])).toBe(true);
     p.dispose();
   });
 });
