@@ -97,10 +97,10 @@ describe("MediaPreloader",()=>{
     const timeout=vi.spyOn(window,"setTimeout").mockImplementation(((cb:any)=>{cb();return 1}) as any);
     const p=new MediaPreloader(),items=Array.from({length:12},(_,i)=>item(i));
     p.reset(items,5,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadNext:1,preloadPrevious:1,preloadConcurrency:8,preloadMemoryMb:32});
-    await new Promise(r=>queueMicrotask(r));
+    await new Promise<void>(resolve=>queueMicrotask(resolve));
     expect(timeout).toHaveBeenCalled();
     p.schedule(10,1);
-    await new Promise(r=>queueMicrotask(r));
+    await new Promise<void>(resolve=>queueMicrotask(resolve));
     expect(p.isReady(items[10])||p.isReady(items[11])).toBe(true);
     p.dispose();
   });
