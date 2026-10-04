@@ -1,14 +1,21 @@
-import {scanDiscourse} from "./core/discourse";
+import {prefetchDiscourse,scanDiscourse,type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {DEFAULT_SETTINGS,effectiveSettings,loadSettings} from "./shared/settings";
 import type {ScanResult} from "./shared/media";
 
-const cache=new Map<string,{at:number,result:ScanResult}>();
+type CacheEntry={at:number;result:ScanResult;discourseSeed?:DiscourseSeed};
+const cache=new Map<string,CacheEntry>();
 
 function bytesToBase64(buffer:ArrayBuffer){
   const bytes=new Uint8Array(buffer);let binary="";const size=0x8000;
   for(let i=0;i<bytes.length;i+=size)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+size,bytes.length)));
   return btoa(binary);
+}
+function fresh(entry:CacheEntry|undefined,minutes:number){
+  return !!entry&&Date.now()-entry.at<minutes*60_000;
+}
+function directResult(url:string):ScanResult{
+  return {url,kind:"direct-image",items:[{id:url,type:/\.gif/i.test(url)?"gif":"image",originalUrl:url,previewUrl:url,sourceUrl:url,score:1}],complete:true,diagnostics:{adapter:"Direct media",ignored:0,duplicates:0,warnings:[]}};
 }
 
 chrome.runtime.onInstalled.addListener(async details=>{
@@ -19,15 +26,31 @@ chrome.runtime.onInstalled.addListener(async details=>{
 });
 
 chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
+  if(msg?.type==="LINKPEEK_PREFETCH"){
+    (async()=>{
+      const globalSettings=await loadSettings(),settings=effectiveSettings(globalSettings,msg.url);
+      const cached=cache.get(msg.url);if(fresh(cached,settings.cacheMinutes))return cached!.result;
+      if(msg.kind==="discourse"){
+        const shallow=await prefetchDiscourse(msg.url,settings);
+        cache.set(msg.url,{at:Date.now(),result:shallow.result,discourseSeed:shallow.seed});
+        return shallow.result;
+      }
+      if(msg.kind==="direct-image"){
+        const result=directResult(msg.url);cache.set(msg.url,{at:Date.now(),result});return result;
+      }
+      return null;
+    })().then(sendResponse).catch((e:Error)=>sendResponse({error:e.message}));
+    return true;
+  }
   if(msg?.type==="LINKPEEK_SCAN"){
     (async()=>{
       const globalSettings=await loadSettings();
       const settings=effectiveSettings(globalSettings,msg.url);
       const cached=cache.get(msg.url);
-      if(cached&&Date.now()-cached.at<settings.cacheMinutes*60_000)return cached.result;
+      if(fresh(cached,settings.cacheMinutes)&&cached!.result.complete)return cached!.result;
       let result:ScanResult;
-      if(msg.kind==="discourse")result=await scanDiscourse(msg.url,settings.batchSize,settings.maxPosts,settings);
-      else if(msg.kind==="direct-image")result={url:msg.url,kind:"direct-image",items:[{id:msg.url,type:/\.gif/i.test(msg.url)?"gif":"image",originalUrl:msg.url,previewUrl:msg.url,sourceUrl:msg.url,score:1}],complete:true,diagnostics:{adapter:"Direct media",ignored:0,duplicates:0,warnings:[]}};
+      if(msg.kind==="discourse")result=await scanDiscourse(msg.url,settings.batchSize,settings.maxPosts,settings,fresh(cached,settings.cacheMinutes)?cached?.discourseSeed:undefined);
+      else if(msg.kind==="direct-image")result=directResult(msg.url);
       else result=await scanGeneric(msg.url,settings);
       if(settings.cacheThreads)cache.set(msg.url,{at:Date.now(),result});
       return result;
