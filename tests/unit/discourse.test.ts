@@ -23,7 +23,7 @@ describe("Discourse topic scanning",()=>{
       if(url.includes("/t/700/posts.json")){
         batchCalls++;active++;maxActive=Math.max(maxActive,active);
         await new Promise<void>((resolve,reject)=>{
-          const timer=setTimeout(resolve,25);init?.signal?.addEventListener("abort",()=>{clearTimeout(timer);reject(new DOMException("Aborted","AbortError"))},{once:true});
+          const timer=setTimeout(resolve,150);init?.signal?.addEventListener("abort",()=>{clearTimeout(timer);reject(new DOMException("Aborted","AbortError"))},{once:true});
         });active--;
         const ids=new URL(url).searchParams.getAll("post_ids[]").map(Number);
         return new Response(JSON.stringify({post_stream:{posts:ids.map(makePost)}}),{status:200});
