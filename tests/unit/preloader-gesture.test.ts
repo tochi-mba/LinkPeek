@@ -110,6 +110,12 @@ describe("MediaPreloader",()=>{
     (p as any).settings={...DEFAULT_SETTINGS,preloadConcurrency:2};(p as any).generation=2;
     (p as any).queue=[{url:"https://x.test/stale.jpg",priority:0,generation:1}];(p as any).pump();expect((p as any).queue).toHaveLength(0);
 
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:false,effectiveType:"slow-2g"}});
+    p.reset([item(0),item(1)],0,{...DEFAULT_SETTINGS,meteredOff:true,preloadRest:"off"});
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:false,effectiveType:"2g"}});
+    p.reset([item(0),item(1)],0,{...DEFAULT_SETTINGS,meteredOff:true,preloadRest:"off"});
+    Object.defineProperty(navigator,"connection",{configurable:true,value:undefined});
+
     let callbacks:IdleRequestCallback[]=[];
     Object.defineProperty(window,"requestIdleCallback",{configurable:true,value:vi.fn((cb:IdleRequestCallback)=>{callbacks.push(cb);return callbacks.length})});
     const cancel=vi.fn();Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:cancel});
@@ -117,6 +123,9 @@ describe("MediaPreloader",()=>{
     p.reset(items,1,{...DEFAULT_SETTINGS,preloadRest:"idle",preloadRestLimit:20,preloadNext:1,preloadPrevious:0});
     const old=callbacks[0];p.schedule(2,1);old({didTimeout:false,timeRemaining:()=>50} as IdleDeadline);
     p.dispose();expect(cancel).toHaveBeenCalled();
+
+    const noCancel:any=new MediaPreloader();(noCancel as any).idleHandle=9;
+    Object.defineProperty(window,"cancelIdleCallback",{configurable:true,value:undefined});noCancel.dispose();
 
     class ZeroImage extends FakeImage{naturalWidth=0;naturalHeight=0}
     vi.stubGlobal("Image",ZeroImage as any);
