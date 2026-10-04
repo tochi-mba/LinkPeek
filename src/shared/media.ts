@@ -34,3 +34,25 @@ export function canonicalMediaUrl(raw:string){
     return u.href;
   }catch{return raw;}
 }
+
+export function uniqueMediaItems(items:MediaItem[]):{items:MediaItem[];duplicates:number}{
+  const out:MediaItem[]=[];const byIdentity=new Map<string,number>();let duplicates=0;
+  const keys=(item:MediaItem)=>{
+    const set=new Set<string>();
+    if(item.id)set.add(`id:${item.id}`);
+    set.add(`original:${canonicalMediaUrl(item.originalUrl)}`);
+    set.add(`preview:${canonicalMediaUrl(item.previewUrl)}`);
+    return [...set];
+  };
+  for(const item of items){
+    const identity=keys(item),existing=identity.map(k=>byIdentity.get(k)).find((n):n is number=>n!==undefined);
+    if(existing!==undefined){
+      duplicates++;
+      if(item.score>out[existing].score)out[existing]=item;
+      for(const key of identity)byIdentity.set(key,existing);
+      continue;
+    }
+    const index=out.length;out.push(item);for(const key of identity)byIdentity.set(key,index);
+  }
+  return {items:out,duplicates};
+}
