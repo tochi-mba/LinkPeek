@@ -1,6 +1,6 @@
 import {scanDiscourse} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
-import {DEFAULT_SETTINGS,loadSettings} from "./shared/settings";
+import {DEFAULT_SETTINGS,effectiveSettings,loadSettings} from "./shared/settings";
 import type {ScanResult} from "./shared/media";
 
 const cache=new Map<string,{at:number,result:ScanResult}>();
@@ -15,7 +15,8 @@ chrome.runtime.onInstalled.addListener(async details=>{
 chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
   if(msg?.type==="LINKPEEK_SCAN"){
     (async()=>{
-      const settings=await loadSettings();
+      const globalSettings=await loadSettings();
+      const settings=effectiveSettings(globalSettings,msg.url);
       const cached=cache.get(msg.url);
       if(cached&&Date.now()-cached.at<settings.cacheMinutes*60_000)return cached.result;
       let result:ScanResult;
