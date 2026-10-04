@@ -43,14 +43,18 @@ export class MediaPreloader{
     this.prune();
   }
   schedule(index:number){
-    if(!this.settings||!this.items.length)return;this.index=index;const gen=this.generation,plan=buildPreloadPlan(this.items.length,index,this.settings);
+    if(!this.settings||!this.items.length)return;this.index=index;
+    const connection=(navigator as Navigator&{connection?:{saveData?:boolean;effectiveType?:string}}).connection;
+    const constrained=this.settings.meteredOff&&(connection?.saveData===true||connection?.effectiveType==="slow-2g"||connection?.effectiveType==="2g");
+    const effective=constrained?{...this.settings,networkMode:"data" as const,preloadRest:"off" as const}:this.settings;
+    const gen=this.generation,plan=buildPreloadPlan(this.items.length,index,effective);
     for(const n of plan.priority)this.enqueuePreview(this.items[n],0,gen);
     for(const n of plan.originals)this.enqueueOriginal(this.items[n],1,gen);
     this.pump();
     if(plan.background.length){
       const run=()=>{this.idleHandle=undefined;for(const n of plan.background)this.enqueuePreview(this.items[n],3,gen);this.pump()};
-      if(this.settings.preloadRest==="all")run();
-      else if(typeof requestIdleCallback==="function")this.idleHandle=requestIdleCallback(run,{timeout:1200});
+      if(effective.preloadRest==="all")run();
+      else if(typeof window.requestIdleCallback==="function")this.idleHandle=window.requestIdleCallback(run,{timeout:1200});
       else window.setTimeout(run,180);
     }
   }
