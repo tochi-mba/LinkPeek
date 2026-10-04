@@ -1,9 +1,33 @@
-import {test,expect,chromium,Page} from "@playwright/test";
-import {createServer,Server} from "node:http";
-import {AddressInfo} from "node:net";
+import {test,expect,chromium,type BrowserContext} from "@playwright/test";
+import {createServer,type Server} from "node:http";
+import {type AddressInfo} from "node:net";
 import {resolve} from "node:path";
+import {mkdtemp,rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
 
 let server:Server;let base:string;
+const extensionPath=resolve("dist");
+
+async function launchExtension():Promise<{context:BrowserContext;profile:string}>{
+  const profile=await mkdtemp(`${tmpdir()}/linkpeek-e2e-`);
+  try{
+    const context=await chromium.launchPersistentContext(profile,{
+      channel:"chromium",
+      headless:true,
+      args:[`--disable-extensions-except=${extensionPath}`,`--load-extension=${extensionPath}`]
+    });
+    await Promise.race([
+      context.serviceWorkers().length?Promise.resolve():context.waitForEvent("serviceworker"),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error("LinkPeek service worker did not start")),12_000))
+    ]);
+    return {context,profile};
+  }catch(error){await rm(profile,{recursive:true,force:true});throw error}
+}
+async function closeExtension(context:BrowserContext,profile:string){
+  await Promise.race([context.close(),new Promise<void>(resolve=>setTimeout(resolve,5_000))]);
+  await rm(profile,{recursive:true,force:true});
+}
+
 test.beforeAll(async()=>{
   server=createServer((req,res)=>{
     const path=req.url||"/";
@@ -21,30 +45,29 @@ test.beforeAll(async()=>{
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
   base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
-test.afterAll(async()=>{await new Promise<void>(r=>server.close(()=>r()))});
+test.afterAll(async()=>{if(server?.listening)await new Promise<void>(r=>server.close(()=>r()))});
 
 test("hovering a Discourse link opens a filtered whole-thread media viewer",async()=>{
-  const path=resolve("dist");
-  const context=await chromium.launchPersistentContext("",{headless:true,args:[`--disable-extensions-except=${path}`,`--load-extension=${path}`]});
-  const workers=context.serviceWorkers();if(!workers.length)await context.waitForEvent("serviceworker");
-  const page=await context.newPage();await page.goto(base);
-  await page.locator("#topic").hover();
-  await page.waitForFunction(()=>document.querySelector("div")!==null);
-  await page.waitForFunction(()=>[...document.documentElement.children].some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:10_000});
-  const snapshot=await page.evaluate(()=>[...document.documentElement.children].map((n:any)=>n.shadowRoot?.textContent||"").join("\n"));
-  expect(snapshot).toContain("1 media");
-  expect(snapshot).toContain("Demo thread");
-  expect(snapshot).not.toContain("avatar");
-  await page.keyboard.press("?");
-  const help=await page.evaluate(()=>[...document.documentElement.children].map((n:any)=>n.shadowRoot?.textContent||"").join("\n"));
-  expect(help).toContain("One-hand controls");
-  await context.close();
+  const {context,profile}=await launchExtension();
+  try{
+    const page=await context.newPage();await page.goto(base);
+    await page.locator("#topic").hover();
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:12_000});
+    const snapshot=await page.evaluate(()=>Array.from(document.documentElement.children).map((n:any)=>n.shadowRoot?.textContent||"").join("\n"));
+    expect(snapshot).toContain("1 media");
+    expect(snapshot).toContain("Demo thread");
+    expect(snapshot).not.toContain("avatar");
+    await page.keyboard.press("?");
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("One-hand controls")));
+  }finally{await closeExtension(context,profile)}
 });
 
 test("onboarding and settings pages render",async()=>{
-  const path=resolve("dist");const context=await chromium.launchPersistentContext("",{headless:true,args:[`--disable-extensions-except=${path}`,`--load-extension=${path}`]});
-  const sw=context.serviceWorkers()[0]??await context.waitForEvent("serviceworker");const id=new URL(sw.url()).host;
-  const page=await context.newPage();await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
-  await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();await expect(page.getByText("Gestures",{exact:true})).toBeVisible();
-  await context.close();
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;
+    const page=await context.newPage();
+    await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
+    await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();await expect(page.getByText("Gestures",{exact:true})).toBeVisible();
+  }finally{await closeExtension(context,profile)}
 });
