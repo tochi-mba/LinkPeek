@@ -131,7 +131,7 @@ try{
   await patchSettings({hoverDelay:300});
   const defaultHover=await hoverMeasure("#direct","1 media",{label:"default_hover_direct"});results.latency.default_hover_direct=defaultHover;
   await patchSettings({hoverDelay:0});
-  for(const [name,selector,expected] of [
+  for(const [name,selector,expected,progressExpected] of [
     ["direct","#direct","1 media"],["generic_200","#generic","200 media"],["generic_1000","#generic-large","1000 media"],
     ["discourse_20_posts","#small","40 media"],["discourse_100_posts","#medium","200 media"],
     ["discourse_500_posts","#large","1000 media",null],["discourse_500_posts_rtt50","#slow50","1000 media","40 media"],
