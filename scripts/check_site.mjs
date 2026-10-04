@@ -1,0 +1,3 @@
+import {readFile,readdir,stat} from "node:fs/promises";import {join,dirname,resolve} from "node:path";
+const root=resolve("site");const files=[];async function walk(p){for(const n of await readdir(p)){const f=join(p,n);(await stat(f)).isDirectory()?await walk(f):files.push(f)}}await walk(root);
+let bad=0;for(const f of files.filter(x=>x.endsWith(".html"))){const html=await readFile(f,"utf8");for(const m of html.matchAll(/href=["']([^"'#]+)["']/g)){const h=m[1];if(/^(https?:|mailto:)/.test(h)||h.startsWith("downloads/"))continue;const target=resolve(dirname(f),h);try{await stat(target)}catch{console.error(`${f}: broken link ${h}`);bad++}}}if(bad)process.exit(1);console.log(`Checked ${files.length} site files`);
