@@ -6,10 +6,21 @@ export interface GestureCallbacks{
 }
 export class GestureController{
   private accX=0;private accY=0;private lockedUntil=0;
+  private lastPrimaryUpAt=0;private lastPrimaryUpX=0;private lastPrimaryUpY=0;
+  private dragPointer:number|undefined;private dragX=0;private dragY=0;private dragMoved=false;private suppressDoubleUntil=0;
   constructor(private el:HTMLElement,private cb:GestureCallbacks,private settings:LinkPeekSettings){
-    el.addEventListener("wheel",this.onWheel,{passive:false});el.addEventListener("dblclick",this.onDouble);
+    el.addEventListener("wheel",this.onWheel,{passive:false});
+    el.addEventListener("dblclick",this.onDouble);
+    el.addEventListener("pointerdown",this.onPointerDown);
+    el.addEventListener("pointermove",this.onPointerMove);
+    el.addEventListener("pointerup",this.onPointerUp);
+    el.addEventListener("pointercancel",this.onPointerCancel);
   }
-  destroy(){this.el.removeEventListener("wheel",this.onWheel);this.el.removeEventListener("dblclick",this.onDouble)}
+  destroy(){
+    this.el.removeEventListener("wheel",this.onWheel);this.el.removeEventListener("dblclick",this.onDouble);
+    this.el.removeEventListener("pointerdown",this.onPointerDown);this.el.removeEventListener("pointermove",this.onPointerMove);
+    this.el.removeEventListener("pointerup",this.onPointerUp);this.el.removeEventListener("pointercancel",this.onPointerCancel);
+  }
   private stepCount(delta:number){
     if(!this.settings.fastSwipeAcceleration)return 1;
     return Math.min(this.settings.maxImagesPerSwipe,Math.max(1,Math.floor(Math.abs(delta)/(this.settings.gestureThreshold*1.8))));
@@ -39,5 +50,34 @@ export class GestureController{
       this.accX=this.accY=0;this.lockedUntil=now+(this.settings.momentumFiltering?this.settings.gestureCooldown:0);
     }
   };
-  private onDouble=(e:MouseEvent)=>{if(this.settings.doubleClick==="none")return;e.preventDefault();this.cb.doubleClick(e.offsetX,e.offsetY)};
+  private onPointerDown=(e:PointerEvent)=>{
+    if(e.button!==0||!this.settings.doubleClickDragPan||!this.settings.panWhenZoomed||!this.cb.isZoomed())return;
+    const now=performance.now(),near=Math.hypot(e.clientX-this.lastPrimaryUpX,e.clientY-this.lastPrimaryUpY)<=28;
+    if(now-this.lastPrimaryUpAt>360||!near)return;
+    this.dragPointer=e.pointerId;this.dragX=e.clientX;this.dragY=e.clientY;this.dragMoved=false;
+    this.el.classList.add("lp-dragging");
+    try{this.el.setPointerCapture(e.pointerId)}catch{}
+    e.preventDefault();
+  };
+  private onPointerMove=(e:PointerEvent)=>{
+    if(this.dragPointer!==e.pointerId)return;
+    const dx=e.clientX-this.dragX,dy=e.clientY-this.dragY;this.dragX=e.clientX;this.dragY=e.clientY;
+    if(Math.abs(dx)+Math.abs(dy)>=1){this.dragMoved=true;this.cb.pan(dx,dy)}
+    e.preventDefault();
+  };
+  private finishPointer=(e:PointerEvent,cancelled=false)=>{
+    if(this.dragPointer===e.pointerId){
+      if(this.dragMoved){this.suppressDoubleUntil=performance.now()+120}
+      this.dragPointer=undefined;this.dragMoved=false;this.el.classList.remove("lp-dragging");
+      try{if(this.el.hasPointerCapture(e.pointerId))this.el.releasePointerCapture(e.pointerId)}catch{}
+      e.preventDefault();
+    }
+    if(!cancelled&&e.button===0){this.lastPrimaryUpAt=performance.now();this.lastPrimaryUpX=e.clientX;this.lastPrimaryUpY=e.clientY}
+  };
+  private onPointerUp=(e:PointerEvent)=>this.finishPointer(e,false);
+  private onPointerCancel=(e:PointerEvent)=>this.finishPointer(e,true);
+  private onDouble=(e:MouseEvent)=>{
+    if(performance.now()<this.suppressDoubleUntil){e.preventDefault();return}
+    if(this.settings.doubleClick==="none")return;e.preventDefault();this.cb.doubleClick(e.offsetX,e.offsetY)
+  };
 }
