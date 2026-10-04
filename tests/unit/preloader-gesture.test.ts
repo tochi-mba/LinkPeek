@@ -225,4 +225,33 @@ describe("GestureController",()=>{
     const calls=cb.doubleClick.mock.calls.length;expect(calls).toBeGreaterThan(0);
     g2.destroy();
   });
+  it("covers momentum horizontal locking and drag-pan rejection/capture edge cases",()=>{
+    cb.isZoomed.mockReturnValue(true);
+    const now=vi.spyOn(performance,"now");let t=100;now.mockImplementation(()=>t);
+    const g=new GestureController(el,cb,settings);
+
+    // Establish a prior click, then reject a stale second press.
+    pointer("pointerup",20,20);t=500;pointer("pointerdown",21,21);
+    expect((el as any).setPointerCapture).not.toHaveBeenCalled();
+
+    // Reject a nearby-in-time press that is too far from the first click.
+    t=200;pointer("pointerdown",100,100);expect((el as any).setPointerCapture).not.toHaveBeenCalled();
+
+    // Capture failures must not break dragging, and unrelated pointer moves are ignored.
+    (el as any).setPointerCapture.mockImplementationOnce(()=>{throw new Error("capture")});
+    t=220;pointer("pointerdown",21,21,1);pointer("pointermove",30,30,2);const before=cb.pan.mock.calls.length;
+    pointer("pointermove",30,30,1);expect(cb.pan.mock.calls.length).toBeGreaterThan(before);
+    (el as any).hasPointerCapture.mockReturnValueOnce(false);pointer("pointerup",30,30,1);
+
+    // Release failures are tolerated too.
+    (el as any).setPointerCapture.mockImplementation(()=>{});
+    (el as any).hasPointerCapture.mockReturnValue(true);(el as any).releasePointerCapture.mockImplementationOnce(()=>{throw new Error("release")});
+    t=250;pointer("pointerdown",31,31,1);pointer("pointerup",31,31,1);
+
+    g.destroy();
+
+    settings.momentumFiltering=true;settings.horizontalGesture="navigate";settings.reverseHorizontal=false;
+    const h=new GestureController(el,cb,settings);t=300;wheel(100,1);expect(cb.next).toHaveBeenCalled();h.destroy();
+  });
+
 });
