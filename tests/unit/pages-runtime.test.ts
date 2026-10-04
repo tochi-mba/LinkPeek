@@ -79,7 +79,7 @@ describe("page entrypoints",()=>{
     await import("../../src/pages/popup");await tick();
     expect(document.getElementById("site")!.textContent).toBe("forum.test");expect(document.getElementById("favoriteCount")!.textContent).toBe("1");
     (document.querySelector("[data-open-favorite]") as HTMLButtonElement).click();expect(created.some(x=>x.url==="https://fav.test/a")).toBe(true);
-    (document.querySelector("[data-remove-favorite]") as HTMLButtonElement).click();await tick();expect(document.getElementById("favoriteCount")!.textContent).toBe("0");
+    (document.querySelector("[data-remove-favorite]") as HTMLButtonElement).click();await tick();await tick();await tick();expect(store.favorites).toHaveLength(0);expect(document.getElementById("favoriteCount")!.textContent).toBe("0");
     const enabled=document.getElementById("enabled") as HTMLInputElement;enabled.checked=false;enabled.dispatchEvent(new Event("change"));await tick();
     const preset=document.getElementById("preset") as HTMLSelectElement;preset.value="fast";preset.dispatchEvent(new Event("change"));await tick();
     (document.getElementById("options") as HTMLButtonElement).click();expect(openOptions).toHaveBeenCalled();
