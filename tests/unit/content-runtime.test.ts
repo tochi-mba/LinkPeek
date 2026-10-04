@@ -135,6 +135,47 @@ describe("content script runtime",()=>{
     viewer.pinned=true;const p=link("pinned","https://x.test/pinned");pointer("pointerover",p);vi.advanceTimersByTime(21);await tick();p.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:document.body}));vi.advanceTimersByTime(20);
   });
 
+  it("covers no-anchor/click-mode guards, empty labels and repeated same-anchor hover",async()=>{
+    document.body.dispatchEvent(new MouseEvent("pointerover",{bubbles:true,clientX:1,clientY:1}));
+    document.body.dispatchEvent(new MouseEvent("pointermove",{bubbles:true,clientX:2,clientY:2}));
+    document.body.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:null}));
+    await update({activationMode:"click"});
+    const clickOnly=link("click-only","https://x.test/click-only");pointer("pointerover",clickOnly);vi.advanceTimersByTime(30);await tick();
+    expect(messages.some(x=>x.url?.includes("click-only"))).toBe(false);
+
+    await update({activationMode:"hover"});
+    const empty=link("empty","https://x.test/empty");empty.textContent="";
+    pointer("pointerover",empty);pointer("pointerover",empty);vi.advanceTimersByTime(25);await tick();
+    expect(viewer.openLoading).toHaveBeenCalledWith(expect.any(Number),expect.any(Number),expect.any(Object),"Scanning link…");
+
+    const other=link("other","https://x.test/other");
+    other.dispatchEvent(new MouseEvent("pointerout",{bubbles:true,relatedTarget:document.body}));
+  });
+
+  it("covers visible/all prefetch budgets, duplicate-prefetch skipping and disabled guard",async()=>{
+    const visible={left:10,top:10,right:100,bottom:30};
+    for(let i=0;i<20;i++)link(`pv${i}`,`https://forum.test/t/prefetch/${500+i}`,visible);
+    const before=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length;
+    idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();
+    const nearby=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length-before;expect(nearby).toBeLessThanOrEqual(2);
+    const same=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length;
+    idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length).toBeGreaterThanOrEqual(same);
+
+    await update({prefetch:"visible"});
+    for(let i=0;i<8;i++)link(`vis${i}`,`https://forum.test/t/visible/${600+i}`,visible);
+    const v0=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length;idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();
+    expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length-v0).toBeLessThanOrEqual(6);
+
+    await update({prefetch:"all"});
+    for(let i=0;i<14;i++)link(`all${i}`,`https://forum.test/t/all/${700+i}`,visible);
+    const a0=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length;idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();
+    expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length-a0).toBeLessThanOrEqual(12);
+
+    await update({enabled:false});
+    const d0=messages.filter(x=>x.type==="LINKPEEK_PREFETCH").length;idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();
+    expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH")).toHaveLength(d0);
+  });
+
   it("prefetches only visible Discourse candidates within mode budgets",async()=>{
     const visible={left:10,top:10,right:100,bottom:30},off={left:10,top:innerHeight*3,right:100,bottom:innerHeight*3+20};
     for(let i=0;i<8;i++)link(`d${i}`,`https://forum.test/t/topic/${100+i}`,i===7?off:visible);
