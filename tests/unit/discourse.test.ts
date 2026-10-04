@@ -40,7 +40,7 @@ describe("Discourse embedded topic data",()=>{
     expect(batchCalls).toBe(2);
     expect(maxActive).toBe(2);
     expect(progress[0]).toBe(20);
-    expect(progress.at(-1)).toBe(100);
+    expect(progress).toEqual([20]);
     expect(result.postsScanned).toBe(100);
     expect(result.items).toHaveLength(100);
     expect(result.complete).toBe(true);
