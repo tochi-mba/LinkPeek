@@ -3,6 +3,11 @@ import {DEFAULT_SETTINGS} from "../../src/shared/settings";
 import type {ScanResult} from "../../src/shared/media";
 
 const vm=vi.hoisted(()=>({instances:[] as any[]}));
+const settingsHarness=vi.hoisted(()=>({current:null as any}));
+vi.mock("../../src/shared/settings",async(importOriginal)=>{
+  const actual=await importOriginal<any>();
+  return {...actual,loadSettings:vi.fn(async()=>settingsHarness.current??actual.DEFAULT_SETTINGS)};
+});
 vi.mock("../../src/ui/viewer",()=>({
   Viewer:class{
     host=document.createElement("div");pinned=false;closeTimer:any;
@@ -21,6 +26,7 @@ describe("content script runtime",()=>{
   beforeEach(async()=>{
     vi.resetModules();vi.useFakeTimers();vm.instances.length=0;document.body.innerHTML="";
     store={settings:{...DEFAULT_SETTINGS,hoverDelay:20,closeDelay:10,prefetch:"nearby"},viewerState:{view:"grid",gridThumbSize:90,expanded:false}};
+    settingsHarness.current=store.settings;
     changed=[];runtimeListeners=[];messages=[];idleCb=undefined;
     sendImpl=async(msg:any)=>{if(msg.type==="LINKPEEK_SCAN")return scan(msg.url);return {ok:true}};
     vi.stubGlobal("chrome",{
@@ -38,7 +44,7 @@ describe("content script runtime",()=>{
   });
   afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML=""});
 
-  const update=async(patch:any)=>{store.settings={...store.settings,...patch};for(const cb of changed)cb({settings:{newValue:store.settings}});await tick()};
+  const update=async(patch:any)=>{store.settings={...store.settings,...patch};settingsHarness.current=store.settings;for(const cb of changed)await cb({settings:{newValue:store.settings}});await tick()};
   const link=(id:string,href:string,rect:any={left:10,top:10,right:110,bottom:30})=>{
     const a=document.createElement("a");a.id=id;a.href=href;a.textContent=id;(a as any).getBoundingClientRect=()=>rect;document.body.appendChild(a);return a;
   };
@@ -140,8 +146,9 @@ describe("content boot without prefetch",()=>{
     vi.resetModules();vm.instances.length=0;
     const idle=vi.fn();
     vi.stubGlobal("requestIdleCallback",idle);
+    settingsHarness.current={...DEFAULT_SETTINGS,prefetch:"off"};
     vi.stubGlobal("chrome",{
-      storage:{local:{get:vi.fn(async(k:string)=>({[k]:k==="settings"?{...DEFAULT_SETTINGS,prefetch:"off"}:undefined}))},onChanged:{addListener:vi.fn()}},
+      storage:{local:{get:vi.fn(async(k:string)=>({[k]:k==="settings"?settingsHarness.current:undefined}))},onChanged:{addListener:vi.fn()}},
       runtime:{onMessage:{addListener:vi.fn()},sendMessage:vi.fn(async()=>({}))}
     });
     await import("../../src/content");await Promise.resolve();await Promise.resolve();expect(idle).not.toHaveBeenCalled();
