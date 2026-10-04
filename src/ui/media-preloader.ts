@@ -116,10 +116,10 @@ export class MediaPreloader{
       this.load(task.url,task.priority,task.generation).promise.finally(()=>{this.active--;this.pump()});
     }
   }
-  private keepUrls(){
+  private keepUrls(settings:LinkPeekSettings){
     const keep=new Set<string>(),length=this.items.length;if(!length)return keep;
-    const at=(n:number)=>this.settings?.loopMode==="wrap"?((n%length)+length)%length:n;
-    const behind=(this.settings?.preloadPrevious??2)+2,ahead=(this.settings?.preloadNext??4)+2;
+    const at=(n:number)=>settings.loopMode==="wrap"?((n%length)+length)%length:n;
+    const behind=settings.preloadPrevious+2,ahead=settings.preloadNext+2;
     for(let d=-behind;d<=ahead;d++){
       const n=at(this.index+d);if(n<0||n>=length)continue;const item=this.items[n];keep.add(item.previewUrl);keep.add(item.originalUrl);
     }
@@ -132,7 +132,7 @@ export class MediaPreloader{
     if(!this.settings)return;
     const countMax=Math.max(24,this.settings.preloadRestLimit+12),byteMax=Math.max(32,this.settings.preloadMemoryMb)*1024*1024;
     if(this.entries.size<=countMax&&this.decodedBytes<=byteMax)return;
-    const keep=this.keepUrls(),candidates=[...this.entries.entries()].filter(([url])=>!keep.has(url)).sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
+    const keep=this.keepUrls(this.settings),candidates=[...this.entries.entries()].filter(([url])=>!keep.has(url)).sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
     for(const [url] of candidates){
       if(this.entries.size<=countMax&&this.decodedBytes<=byteMax)break;this.deleteEntry(url);
     }
