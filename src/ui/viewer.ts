@@ -11,9 +11,19 @@ export class Viewer{
   host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
   panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
   index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;
+  onDismiss?:()=>void;private gridCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;
   constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host)}
-  openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.expanded=settings.startExpanded;this.gridThumbSize=settings.thumbnailSize;this.view=settings.defaultView==="grid"||settings.defaultView==="masonry"?"grid":"focus";this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
+  restoreViewerState(state?:{view?:"focus"|"grid";gridThumbSize?:number;expanded?:boolean}){
+    if(state?.view==="focus"||state?.view==="grid")this.rememberedView=state.view;
+    if(Number.isFinite(state?.gridThumbSize))this.rememberedGridThumbSize=Math.max(48,Math.min(320,Number(state!.gridThumbSize)));
+    if(typeof state?.expanded==="boolean")this.rememberedExpanded=state.expanded;
+  }
+  private persistViewerState(){
+    this.rememberedView=this.view;this.rememberedGridThumbSize=this.gridThumbSize;this.rememberedExpanded=this.expanded;
+    void chrome.storage.local.set({viewerState:{view:this.view,gridThumbSize:this.gridThumbSize,expanded:this.expanded}});
+  }
+  private toggleView(){this.view=this.view==="grid"?"focus":"grid";this.persistViewerState();this.render()}
+  openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.settings=settings;this.expanded=this.rememberedExpanded??settings.startExpanded;this.gridThumbSize=this.rememberedGridThumbSize??settings.thumbnailSize;this.view=this.rememberedView??(settings.defaultView==="grid"||settings.defaultView==="masonry"?"grid":"focus");this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Finding posted media…</span></div>`,"Scanning…");this.root.replaceChildren(this.panel);this.bind()}
   show(result:ScanResult){
     const unique=uniqueMediaItems(result.items),diagnostics=result.diagnostics?{...result.diagnostics,duplicates:result.diagnostics.duplicates+unique.duplicates}:result.diagnostics;
     this.result={...result,items:unique.items,diagnostics};this.index=Math.min(this.index,Math.max(0,unique.items.length-1));this.render()
@@ -61,7 +71,7 @@ export class Viewer{
       this.toast(error instanceof Error?error.message:"GIF controls unavailable");
     }
   }
-  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Show more images" aria-label="Show more images">−</button><button class="lp-btn lp-grid-bigger" title="Make thumbnails bigger" aria-label="Make thumbnails bigger">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}<button class="lp-btn lp-gridbtn" title="Grid (G)">▦</button>${expand}<button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
+  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Show more images" aria-label="Show more images">−</button><button class="lp-btn lp-grid-bigger" title="Make thumbnails bigger" aria-label="Make thumbnails bigger">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";const gridToggle=this.view==="grid"?`<button class="lp-btn lp-gridbtn" title="Back to single image (G)" aria-label="Back to single image">▣</button>`:`<button class="lp-btn lp-gridbtn" title="Show image grid (G)" aria-label="Show image grid">▦</button>`;return `<header class="lp-head"><span class="lp-brand">REX · LINKPEEK</span><span class="lp-title">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}${gridToggle}${expand}<button class="lp-btn lp-helpbtn" title="Controls (?)">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="Pin (P)">⌖</button><button class="lp-btn lp-close" title="Close">×</button></header>${body}<footer class="lp-foot"><span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span><span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${this.help?this.helpMarkup():""}`;}
   private grid(){return `<div class="lp-grid" data-total="${this.result!.items.length}" role="grid" aria-label="Media grid"><div class="lp-grid-spacer"></div><div class="lp-grid-window"></div></div>`}
   private setupVirtualGrid(){
     const grid=this.panel.querySelector(".lp-grid") as HTMLDivElement|null,windowEl=this.panel.querySelector(".lp-grid-window") as HTMLDivElement|null,spacer=this.panel.querySelector(".lp-grid-spacer") as HTMLDivElement|null;
@@ -85,7 +95,7 @@ export class Viewer{
     const schedule=()=>{if(!raf)raf=requestAnimationFrame(renderWindow)};
     const onClick=(event:Event)=>{
       const thumb=(event.target as Element).closest?.(".lp-thumb") as HTMLElement|null;if(!thumb)return;
-      this.index=Number(thumb.dataset.i);this.view="focus";this.render();
+      this.index=Number(thumb.dataset.i);this.view="focus";this.persistViewerState();this.render();
     };
     grid.addEventListener("scroll",schedule,{passive:true});grid.addEventListener("click",onClick);
     const ro=new ResizeObserver(schedule);ro.observe(grid);
@@ -98,10 +108,10 @@ export class Viewer{
   private bind(){
     this.panel.querySelector(".lp-close")?.addEventListener("click",()=>this.close(true));
     this.panel.querySelector(".lp-pin")?.addEventListener("click",()=>{this.pinned=!this.pinned;this.render()});
-    this.panel.querySelector(".lp-gridbtn")?.addEventListener("click",()=>{this.view=this.view==="grid"?"focus":"grid";this.render()});
-    this.panel.querySelector(".lp-expandbtn")?.addEventListener("click",()=>{this.expanded=!this.expanded;this.render()});
-    this.panel.querySelector(".lp-grid-more")?.addEventListener("click",()=>{this.gridThumbSize=Math.max(48,this.gridThumbSize-16);this.render();this.toast(`${this.gridThumbSize}px tiles`)});
-    this.panel.querySelector(".lp-grid-bigger")?.addEventListener("click",()=>{this.gridThumbSize=Math.min(320,this.gridThumbSize+16);this.render();this.toast(`${this.gridThumbSize}px tiles`)});
+    this.panel.querySelector(".lp-gridbtn")?.addEventListener("click",()=>this.toggleView());
+    this.panel.querySelector(".lp-expandbtn")?.addEventListener("click",()=>{this.expanded=!this.expanded;this.persistViewerState();this.render()});
+    this.panel.querySelector(".lp-grid-more")?.addEventListener("click",()=>{this.gridThumbSize=Math.max(48,this.gridThumbSize-16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
+    this.panel.querySelector(".lp-grid-bigger")?.addEventListener("click",()=>{this.gridThumbSize=Math.min(320,this.gridThumbSize+16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
     this.panel.querySelector(".lp-helpbtn")?.addEventListener("click",()=>{this.help=!this.help;this.render()});
     this.panel.addEventListener("mouseenter",()=>{if(this.closeTimer)clearTimeout(this.closeTimer)});
     this.panel.addEventListener("mouseleave",()=>{if(!this.pinned)this.closeTimer=window.setTimeout(()=>this.close(),this.settings.closeDelay)});
@@ -110,7 +120,7 @@ export class Viewer{
     if(!this.root.childElementCount)return false;if(this.gifPlayer?.key(e))return true;
     const hit=(action:string,fallback:string[]=[])=>[...(this.settings.shortcuts[action]??[]),...fallback].some(k=>k.toLowerCase()===e.key.toLowerCase());
     if(hit("close",["Escape"])){this.close(true);return true}
-    if(hit("grid",["g"])){this.view=this.view==="grid"?"focus":"grid";this.render();return true}
+    if(hit("grid",["g"])){this.toggleView();return true}
     if(hit("pin",["p"])){this.pinned=!this.pinned;this.render();return true}
     if(hit("help",["?","/"])){this.help=!this.help;this.render();return true}
     if(hit("next",["ArrowDown","ArrowRight"," "])){this.move(1);return true}
