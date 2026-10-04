@@ -6,10 +6,10 @@ const categories=[
   ["Panel",["panelSize","panelWidth","panelMaxVh","focusHeightVh","expandedWidthVw","expandedHeightVh","startExpanded","quickViewControls","placement","pointerGap","autoExpand","panelOpacity","inactiveOpacity","animationMs"]],
   ["Gallery",["navAxis","snap","loopMode","showCounter","showPostCounter","showFilename","showAuthor","showDimensions","groupByPost","sort","startAt"]],
   ["Gestures",["verticalGesture","horizontalGesture","pinchZoom","doubleClick","navSensitivity","gestureThreshold","momentumFiltering","gestureCooldown","fastSwipeAcceleration","maxImagesPerSwipe","reverseVertical","reverseHorizontal","deliberateGesture","ignoreTinyMotion"]],
-  ["Zoom & Pan",["fit","maxZoom","minZoom","pinchSensitivity","doubleClickZoom","secondDoubleClick","zoomCenter","panWhenZoomed","panFriction","edgeResistance","edgeNext","edgeDwell","resetZoomPerImage","rememberZoom"]],
+  ["Zoom & Pan",["fit","maxZoom","minZoom","pinchSensitivity","doubleClickZoom","secondDoubleClick","zoomCenter","doubleClickDragPan","panWhenZoomed","panFriction","edgeResistance","edgeNext","edgeDwell","resetZoomPerImage","rememberZoom"]],
   ["Media Detection",["includeImages","includeGif","includeWebp","includeAvif","includeSvg","includeVideoThumbs","includeAvatars","includeEmoji","minWidth","minHeight","minBytes","preferVersion","thumbQuality","relevanceStrength","dedupe","quotedDuplicates","perceptualHash","customIgnoreSelectors","customPreferredSelectors"]],
   ["Threads",["scanScope","maxPosts","progressiveScan","prioritizeLinkedPost","fetchDirection","continueAfterClose","cacheThreads"]],
-  ["Prefetch & Performance",["prefetch","prefetchRadius","idlePrefetch","maxRequests","batchSize","networkMode","meteredOff","cacheMinutes","maxCacheMb","preloadNext","preloadPrevious","preloadConcurrency","preloadRest","preloadRestLimit","preloadOriginals"]],
+  ["Prefetch & Performance",["prefetch","prefetchRadius","idlePrefetch","maxRequests","batchSize","networkMode","meteredOff","cacheMinutes","maxCacheMb","preloadNext","preloadPrevious","preloadConcurrency","preloadMemoryMb","preloadRest","preloadRestLimit","preloadOriginals"]],
   ["Media Types",["gifAutoplay","gifLoop","gifDefaultSpeed","gifPauseWhenHidden","gifDecodeMaxMb","gifControls","gifScrubWheel","gifFrameStepKeyboard","videoAutoplay","videoMuted","videoLoopShort"]],
   ["Appearance",["theme","customAccent","blur","transparency","imageBackground","thumbnailShape","thumbnailSize","density","labels","scrollbar","motion"]],
   ["Keyboard & Mouse",["shortcuts","mouseWheel","ctrlWheel","middleClick"]],
@@ -40,6 +40,7 @@ const descriptions:Record<string,string>={
   preloadNext:"How many upcoming media items to decode before you reach them.",
   preloadPrevious:"How many previous media items to keep decoded for instant back-navigation.",
   preloadConcurrency:"Maximum simultaneous media preload/decode jobs.",
+  preloadMemoryMb:"Approximate decoded-image memory budget for the focus-view preload ring.",
   preloadRest:"After nearby media is ready, optionally preload the rest of the gallery in idle time or immediately.",
   preloadRestLimit:"Only preload the full gallery when it has at most this many items. Use 0 for no limit.",
   preloadOriginals:"Choose when full-resolution originals are prepared instead of previews.",
@@ -48,6 +49,7 @@ const descriptions:Record<string,string>={
   expandedHeightVh:"Height used by the quick Expand control.",
   startExpanded:"Open media viewers in the expanded layout by default.",
   quickViewControls:"Show quick Expand and grid-density controls directly in the viewer.",
+  doubleClickDragPan:"When zoomed, double-click-and-hold then drag to pan the media directly.",
   gifAutoplay:"Choose whether focused GIFs start playing automatically.",gifLoop:"Loop GIF playback at the final frame.",gifDefaultSpeed:"Initial GIF playback speed multiplier.",gifPauseWhenHidden:"Pause decoded GIF playback while the tab is hidden.",gifDecodeMaxMb:"Largest GIF LinkPeek will decode for frame controls; larger files fall back to native playback.",gifControls:"How prominently GIF playback controls stay visible.",gifScrubWheel:"Two-finger horizontal scrolling over the GIF timeline scrubs frames.",gifFrameStepKeyboard:"Enable comma/period frame stepping and bracket speed shortcuts.",gestureThreshold:"Trackpad movement required before one navigation step fires.",magneticBridgeStrength:"How forgiving the invisible bridge is when moving from the link into the panel.",relevanceStrength:"How strict generic-page media filtering should be.",siteProfiles:"JSON map of hostnames or wildcard hosts to setting overrides.",shortcuts:"JSON map of actions to one or more keys.",customIgnoreSelectors:"Selectors whose images should never count as content.",customPreferredSelectors:"Selectors that should be treated as high-confidence content."
 };
 const choiceLabels:Record<string,Record<string,string>>={
@@ -62,7 +64,7 @@ const segmentedKeys=new Set(["prefetch"]);
 const numberMeta:Record<string,{min?:number;max?:number;step?:number;unit?:string}>={
   hoverDelay:{min:0,max:2000,step:25,unit:"ms"},closeDelay:{min:0,max:2000,step:25,unit:"ms"},
   prefetchRadius:{min:0,max:6,step:1},maxRequests:{min:1,max:12,step:1},batchSize:{min:10,max:100,step:10},
-  cacheMinutes:{min:1,max:1440,step:5,unit:"min"},maxCacheMb:{min:16,max:2048,step:16,unit:"MB"},preloadNext:{min:0,max:30,step:1},preloadPrevious:{min:0,max:20,step:1},preloadConcurrency:{min:1,max:8,step:1},preloadRestLimit:{min:0,max:5000,step:10},
+  cacheMinutes:{min:1,max:1440,step:5,unit:"min"},maxCacheMb:{min:16,max:2048,step:16,unit:"MB"},preloadNext:{min:0,max:30,step:1},preloadPrevious:{min:0,max:20,step:1},preloadConcurrency:{min:1,max:8,step:1},preloadMemoryMb:{min:32,max:1024,step:16,unit:"MB"},preloadRestLimit:{min:0,max:5000,step:10},
   maxPosts:{min:20,max:10000,step:20},gifDecodeMaxMb:{min:1,max:100,step:1,unit:"MB"},
   panelWidth:{min:280,max:1600,step:10,unit:"px"},panelMaxVh:{min:40,max:98,step:1,unit:"vh"},focusHeightVh:{min:30,max:90,step:1,unit:"vh"},expandedWidthVw:{min:50,max:98,step:1,unit:"vw"},expandedHeightVh:{min:50,max:98,step:1,unit:"vh"},pointerGap:{min:0,max:48,step:1,unit:"px"},
   animationMs:{min:0,max:1000,step:10,unit:"ms"},fetchTimeout:{min:500,max:30000,step:500,unit:"ms"},
