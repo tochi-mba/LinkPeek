@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v7
+
       - name: Start timer
         run: |
           mkdir -p baseline
           echo "BASELINE_START=$(date +%s%3N)" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
