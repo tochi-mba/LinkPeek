@@ -99,11 +99,11 @@ try{
     await page.keyboard.press("Escape").catch(()=>{});
     await page.waitForTimeout(60);
   }
-  async function hoverMeasure(selector,expected,{resetNet=true,label=selector,resultTimeout=5000}={}){
+  async function hoverMeasure(selector,expected,{resetNet=true,label=selector,resultTimeout=5000,beforeStart=null}={}){
     console.log("BASELINE_CASE_START",label,expected);
     await page.reload({waitUntil:"domcontentloaded"});
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
-    await leave();if(resetNet){requestCount=0;responseBytes=0}
+    await leave();if(beforeStart)await beforeStart();if(resetNet){requestCount=0;responseBytes=0}
     const target=page.locator(selector),box=await target.boundingBox();if(!box)throw new Error(`No benchmark target for ${selector}`);
     const t=performance.now();
     await target.dispatchEvent("pointerover",{pointerType:"mouse",clientX:box.x+box.width/2,clientY:box.y+box.height/2,bubbles:true});
@@ -158,7 +158,7 @@ try{
     await page.keyboard.press("g");
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelectorAll(".lp-thumb").length===1000),null,{timeout:15000});
     results.ui.grid_1000_render_ms=round(performance.now()-t);
-    results.memory.after_grid_1000=await heap();
+    await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_grid_1000=await heap();
     await page.waitForTimeout(1200);
     results.network.grid_1000={requests:requestCount,response_bytes:responseBytes};
     await page.keyboard.press("g");
