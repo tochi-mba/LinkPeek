@@ -21,7 +21,7 @@ function mediaId(tag:string,url:string){
 }
 
 export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<MediaItem>={},options:Partial<ExtractOptions>={}):MediaItem[]{
-  const o={...defaults,...options},source=o.quotedDuplicates==="hide"?withoutQuotedBlocks(html):html,out:MediaItem[]=[];const seen=new Set<string>();
+  const o={...defaults,...options},source=o.quotedDuplicates==="show"?html:withoutQuotedBlocks(html),out:MediaItem[]=[];const seen=new Set<string>();
   const lightbox=/<a\b[^>]*class=["'][^"']*\blightbox\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi;let m:RegExpExecArray|null;
   while((m=lightbox.exec(source))){
     const block=m[0],open=block.match(/^<a\b[^>]*>/i)?.[0]??"",href=attr(open,"href");if(!href)continue;
@@ -41,6 +41,10 @@ export function extractMediaFromHtml(html:string,baseUrl:string,meta:Partial<Med
     if(srcset){const choices=srcset.split(",").map(x=>x.trim().split(/\s+/)[0]).filter(Boolean);const optimized=choices.find(x=>/\/optimized\//.test(x));preview=abs(optimized||choices[0]||original,baseUrl)}
     const animated=/\banimated\b/.test(cls)||/\.gif(?:$|\?)/i.test(original);
     out.push({id:key,type:animated?"gif":"image",originalUrl:canonical,previewUrl:preview,sourceUrl:baseUrl,filename:attr(tag,"alt")||filename(original),width:w,height:h,score:animated?0.9:0.65,...meta});
+  }
+  if(o.quotedDuplicates==="mark"){
+    const quotes=html.match(/<aside\b[^>]*class=["'][^"']*\bquote\b[^"']*["'][^>]*>[\s\S]*?<\/aside>/gi)??[];
+    for(const quote of quotes)out.push(...extractMediaFromHtml(quote,baseUrl,{...meta,quoted:true},{...o,quotedDuplicates:"show"}));
   }
   return out;
 }
