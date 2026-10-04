@@ -137,10 +137,10 @@ describe("GIF runtime",()=>{
     (p as any).destroyed=false;(p as any).playing=true;(p as any).frame=0;(p as any).schedule();
     (p as any).playing=false;vi.advanceTimersByTime(1000);
 
-    (p as any).playing=true;(p as any).loop=true;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersByTime(1000);
+    (p as any).playing=true;(p as any).loop=true;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersToNextTimer();
     expect((p as any).frame).toBe(0);
 
-    (p as any).playing=true;(p as any).loop=false;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersByTime(1000);
+    (p as any).playing=true;(p as any).loop=false;(p as any).frame=(p as any).frames.length-1;(p as any).schedule();vi.advanceTimersToNextTimer();
     expect((p as any).playing).toBe(false);
     p.destroy();
   });
