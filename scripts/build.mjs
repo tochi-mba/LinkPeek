@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = resolve(".");
@@ -29,4 +29,8 @@ await build({
 
 await cp("public", out, { recursive: true });
 await cp("src/pages/base.css", resolve(out, "base.css"));
+const icons=JSON.parse(await readFile("assets/icons.json","utf8"));
+await mkdir(resolve(out,"icons"),{recursive:true});
+for(const [size,data] of Object.entries(icons)) await writeFile(resolve(out,"icons",`icon${size}.png`),Buffer.from(data,"base64"));
+await writeFile(resolve("site","favicon.png"),Buffer.from(icons["48"],"base64"));
 console.log("Built LinkPeek extension to dist/");
