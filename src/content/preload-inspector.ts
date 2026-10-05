@@ -32,6 +32,7 @@ const MIN_REDRAW_MS = 200;
 const MAX_ROWS = 150;
 const STATE_ATTR = "linkpeekPreloadState";
 const PRIORITY_ATTR = "linkpeekPreloadPriority";
+const GIF_ATTR = "linkpeekPreloadGif";
 
 /** Outlines the inspector puts on the page's own links, keyed by state and priority. */
 const PAGE_OUTLINES = `
@@ -43,6 +44,9 @@ const PAGE_OUTLINES = `
 [data-linkpeek-preload-state="blocked"]{outline:1px dotted rgba(133,141,131,.45)!important;outline-offset:2px!important}
 [data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px ${REX.signal}!important}
 [data-linkpeek-preload-priority="maximum"]{box-shadow:0 0 0 3px ${REX.live}!important}
+[data-linkpeek-preload-gif="true"]{position:relative!important}
+[data-linkpeek-preload-gif="true"]::after{content:"▶";display:inline-grid;place-items:center;box-sizing:border-box;width:14px;height:14px;margin-left:4px;
+  border-radius:4px;background:${REX.signal};color:${REX.panel};font:800 8px/1 system-ui,sans-serif;vertical-align:1px;pointer-events:none}
 `;
 
 const PANEL_CSS = `${rexCss}
@@ -73,6 +77,7 @@ const PANEL_CSS = `${rexCss}
 .pi-open{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;padding:6px;border:0;border-radius:8px;background:transparent;color:inherit;cursor:pointer}
 .pi-open:hover{background:${REX.raised}}
 .pi-open strong,.pi-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pi-gif{display:inline-grid;place-items:center;width:14px;height:14px;margin-left:5px;border-radius:4px;background:${REX.signal};color:${REX.panel};font:800 8px/1 system-ui,sans-serif;vertical-align:1px}
 .pi-open small{color:${REX.muted};font-size:11px;margin-top:2px}
 .pi-state{font-size:11px;color:${REX.muted};white-space:nowrap}
 .pi-tag{margin-left:6px;padding:1px 5px;border:1px solid ${REX.line};border-radius:999px;color:${REX.muted};font:700 9px ui-monospace,monospace;font-style:normal;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
@@ -156,6 +161,8 @@ export class PreloadInspector {
     for (const anchor of this.outlined) {
       delete anchor.dataset[STATE_ATTR];
       delete anchor.dataset[PRIORITY_ATTR];
+      delete anchor.dataset[GIF_ATTR];
+      delete anchor.dataset[GIF_ATTR];
     }
     this.outlined.clear();
     this.signature = "";
@@ -251,7 +258,7 @@ export class PreloadInspector {
       return `<div class="pi-row" data-priority="${entry.priority}">`
         + `<input type="checkbox" data-select="${escapeHtml(entry.url)}" aria-label="Select ${escapeHtml(entry.label)}"${this.selected.has(entry.url) ? " checked" : ""}>`
         + `<button type="button" class="pi-open" data-open="${escapeHtml(entry.url)}" title="Preview ${escapeHtml(entry.url)}">`
-        + `<span><strong>${escapeHtml(entry.label)}${entry.source === "linked" ? '<em class="pi-tag">linked page</em>' : ""}</strong><small>${escapeHtml(entry.title || entry.url)}</small></span>`
+        + `<span><strong>${escapeHtml(entry.label)}${entry.hasGif ? '<i class="pi-gif" aria-label="Contains GIF" title="Contains GIF">▶</i>' : ""}${entry.source === "linked" ? '<em class="pi-tag">linked page</em>' : ""}</strong><small>${escapeHtml(entry.title || entry.url)}</small></span>`
         + `<span class="pi-state">${escapeHtml(stateLabel(entry, now))}${priority}</span></button></div>`;
     }).join("") : "";
     const more = open && entries.length > MAX_ROWS ? `<div class="pi-more">and ${entries.length - MAX_ROWS} more</div>` : "";
@@ -273,6 +280,8 @@ export class PreloadInspector {
       } else if (anchor.dataset[PRIORITY_ATTR] !== entry.priority) {
         anchor.dataset[PRIORITY_ATTR] = entry.priority;
       }
+      if (entry.hasGif) anchor.dataset[GIF_ATTR] = "true";
+      else if (GIF_ATTR in anchor.dataset) delete anchor.dataset[GIF_ATTR];
     }
     for (const anchor of this.outlined) {
       if (current.has(anchor)) continue;
