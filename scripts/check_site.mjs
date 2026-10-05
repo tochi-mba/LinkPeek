@@ -4,6 +4,9 @@ async function walk(p){for(const n of await readdir(p)){const f=join(p,n);(await
 let bad=0;
 for(const f of files.filter(x=>x.endsWith(".html"))){
   const html=await readFile(f,"utf8");
+  // A broken edit once multiplied a page to megabytes while every link still resolved.
+  if(html.length>200_000){console.error(`${f}: ${html.length} bytes is far too large for a site page`);bad++}
+  if((html.match(/<html\b/gi)??[]).length!==1||(html.match(/<\/html>/gi)??[]).length!==1){console.error(`${f}: expected exactly one <html> element`);bad++}
   for(const m of html.matchAll(/href=["']([^"'#]+)["']/g)){
     const h=m[1];if(/^(https?:|mailto:)/.test(h))continue;if(h.startsWith("downloads/")&&allowMissingDownloads)continue;
     const target=resolve(dirname(f),h);try{await stat(target)}catch{console.error(`${f}: broken link ${h}`);bad++}
