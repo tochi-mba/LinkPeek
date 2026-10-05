@@ -396,17 +396,18 @@ export class PreviewController {
     if (prepared?.items.length) return prepared;
     const token = `nav-${Date.now()}-${navigationId}-${Math.random().toString(36).slice(2)}`;
     this.navigationProbe = {url, token};
+    let result: ScanResult | undefined;
     try {
       const response = await chrome.runtime.sendMessage({type: "LINKPEEK_SCAN", url, kind: classifyLink(url), token} satisfies ScanRequest) as ScanResponse | undefined;
-      if (navigationId !== this.linkNavigationId) return undefined;
-      if (!response || "cancelled" in response || "error" in response) return undefined;
-      if (response.items.length) this.prefetcher.remember(url, response);
-      return response;
+      if (navigationId === this.linkNavigationId && response && !("cancelled" in response) && !("error" in response)) {
+        if (response.items.length) this.prefetcher.remember(url, response);
+        result = response;
+      }
     } catch {
-      return undefined;
-    } finally {
-      if (this.navigationProbe?.token === token) this.navigationProbe = undefined;
+      // A failed candidate is skipped; the preview already on screen stays open.
     }
+    if (this.navigationProbe?.token === token) this.navigationProbe = undefined;
+    return result;
   }
 
   /**

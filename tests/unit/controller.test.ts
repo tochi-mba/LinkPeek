@@ -570,6 +570,28 @@ describe("keyboard", () => {
     await flush();
     expect(viewer.result!.url).toBe(last);
     expect(viewer.result!.items.map((item: any) => item.id)).toEqual(["last"]);
+    viewer.close(true);
+    controller.prefetcher.reset();
+    recursive.linkContexts = [];
+    expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
+    await flush();
+    expect(viewer.result!.url).toBe(last);
+  });
+
+  it("keeps a dismissed preview closed when its cancelled navigation probe finishes", async () => {
+    await boot();
+    const current = link("current"), next = link("next");
+    await controller.activate(current, 20, 30);
+    let finish!: (result: ScanResult) => void;
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(resolve => finish = resolve) : {ok: true};
+    key("n");
+    await flush();
+    viewer.close(true);
+    expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN" && msg.url === next.href)).toBe(true);
+    finish(scan(next.href));
+    await flush();
+    expect(viewer.isOpen).toBe(false);
+    expect(viewer.result!.url).toBe(current.href);
   });
 
   it("cancels an active preview scan before probing N and completes an incomplete linked candidate", async () => {
@@ -606,6 +628,14 @@ describe("keyboard", () => {
     };
     expect(internal.normalizeUrl("http://[bad")).toBe("http://[bad");
     viewer.result = undefined;
+    expect(internal.linkedContextForCurrent()).toBeUndefined();
+
+    // A completed empty gallery can still carry the page's link context.
+    // Keyboard navigation must cope with there being no current media source.
+    viewer.result = scan("https://dest.test/empty", 0, {
+      linkContexts: [{sourceUrl: "https://dest.test/empty", links: ["https://dest.test/next"]}]
+    });
+    viewer.index = 0;
     expect(internal.linkedContextForCurrent()).toBeUndefined();
 
     const root = "https://dest.test/root", child = "https://dest.test/child";
