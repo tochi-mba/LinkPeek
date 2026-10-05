@@ -77,6 +77,7 @@ export class Viewer {
   private renderVersion = 0;
   private favorite = false;
   private favoriteVersion = 0;
+  private rejectedMedia = new Set<string>();
 
   /** `loadGifPlayer` defaults to the separately built gif-player.js, loaded only when a GIF is shown. */
   constructor(options: {budget: () => Budget; loadGifPlayer?: () => Promise<GifModule>}) {
@@ -156,6 +157,7 @@ export class Viewer {
     this.pendingIndex = null;
     this.pendingStart = startIndex ?? null;
     this.favorite = false;
+    this.rejectedMedia.clear();
     this.title = title;
     this.openX = x;
     this.openY = y;
@@ -179,7 +181,8 @@ export class Viewer {
       this.pendingIndex = null;
       this.navigationVersion++;
     }
-    const items = uniqueMediaItems(previous ? [...previous.items, ...incoming.items] : incoming.items).items;
+    const items = uniqueMediaItems(previous ? [...previous.items, ...incoming.items] : incoming.items).items
+      .filter(item => !this.rejectedMedia.has(item.id));
     const currentId = previous?.items[this.index]?.id;
     this.result = {
       ...previous, ...incoming, items,
@@ -494,6 +497,7 @@ export class Viewer {
       slot.replaceWith(decoded);
     }
     if (item.type === "gif") void this.mountGif(item, version);
+    this.watchActualWidth(item, version);
     this.paintTransform();
     void this.prepareNextGif();
   }
@@ -512,6 +516,45 @@ export class Viewer {
     this.updateChrome();
     const live = this.panel.querySelector(".lp-live");
     if (live) live.textContent = `Media ${this.index + 1} of ${this.result!.items.length}`;
+  }
+
+  /** Removes media whose real decoded width is below the configured threshold. */
+  private rejectIfTooNarrow(item: MediaItem, width: number, version: number) {
+    if (!width || width >= this.settings.minWidth || version !== this.renderVersion || !this.result) return;
+    const at = this.result.items.findIndex(entry => entry.id === item.id);
+    if (at < 0) return;
+    this.rejectedMedia.add(item.id);
+    const items = this.result.items.filter(entry => entry.id !== item.id);
+    this.result = {...this.result, items};
+    this.navigationVersion++;
+    this.pendingIndex = null;
+    if (at < this.index) this.index--;
+    else if (at === this.index) this.index = Math.min(this.index, Math.max(0, items.length - 1));
+    this.render();
+  }
+
+  /** Browser-decoded dimensions catch media whose HTML omitted or misstated width. */
+  private watchActualWidth(item: MediaItem, version: number) {
+    if (this.settings.minWidth <= 0) return;
+    if (item.type === "video") {
+      const video = this.stage?.querySelector<HTMLVideoElement>(".lp-video");
+      if (!video) return;
+      const check = () => this.rejectIfTooNarrow(item, video.videoWidth, version);
+      if (video.readyState >= 1) check();
+      else video.addEventListener("loadedmetadata", check, {once: true});
+      return;
+    }
+    if (item.type === "image") {
+      const image = this.stage?.querySelector<HTMLImageElement>(".lp-image");
+      if (!image) return;
+      const check = () => this.rejectIfTooNarrow(item, image.naturalWidth, version);
+      if (image.complete && image.naturalWidth) check();
+      else image.addEventListener("load", check, {once: true});
+      return;
+    }
+    const probe = new Image();
+    probe.addEventListener("load", () => this.rejectIfTooNarrow(item, probe.naturalWidth, version), {once: true});
+    probe.src = item.originalUrl;
   }
 
   private loadGifModule() {
