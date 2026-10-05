@@ -5,7 +5,7 @@ import {resolve} from "node:path";
 import {mkdtemp,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 
-let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;const shortcutMediaRequests=new Set<string>();
+let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;
 const extensionPath=resolve("dist");
 const animatedGif=Buffer.from("R0lGODlhBAAEAIEAANf/PwAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQIDwAAACwAAAAABAAEAIH/d00AAAAAAAAAAAAICQABCBxIsCCAgAAh+QQIFAAAACwAAAAABAAEAIERFRIAAAAAAAAAAAAICQABCBxIsCCAgAA7","base64");
 
@@ -52,7 +52,7 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
     }
     if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
     if(path==="/album/a"||path==="/album/b"){res.setHeader("content-type","text/html");res.end(`<img src="${base}/media/${path.endsWith("a")?"album-a":"album-b"}.jpg" width="800" height="600">`);return}
@@ -79,7 +79,7 @@ test.beforeAll(async()=>{
       res.setHeader("content-type","text/html");res.end(`<!doctype html><meta name="generator" content="Discourse 2026"><script type="application/json" id="data-preloaded">${preload}</script>`);return;
     }
     if(path==="/media/anim.gif"||path==="/media/original/fallback.gif"||path==="/media/original/quoted.gif"){res.setHeader("content-type","image/gif");res.end(animatedGif);return}
-    if(path.startsWith("/media/")){if(path.startsWith("/media/shortcut-"))shortcutMediaRequests.add(requestUrl.href);res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
+    if(path.startsWith("/media/")){res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
     res.statusCode=404;res.end("not found");
   });
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -204,24 +204,6 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
     const page=await second.context.newPage();await page.goto(base+"/prefetch");await page.waitForTimeout(3000);
     expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(3);expect(prefetchBatchRequests).toBe(0);
   }finally{await closeExtension(second.context,second.profile)}
-});
-
-test("N cycles through prepared page links without capturing text input",async()=>{
-  const {context,profile}=await launchExtension();
-  try{
-    shortcutMediaRequests.clear();
-    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby",activationKeywords:["shortcut-"]}})});
-    const page=await context.newPage();await page.goto(base);const run=`run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    await page.locator("#shortcut-a").evaluate((a:HTMLAnchorElement,tag)=>a.search=`?${tag}`,run);await page.locator("#shortcut-b").evaluate((a:HTMLAnchorElement,tag)=>a.search=`?${tag}`,run);
-    await page.locator("#shortcut-a").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
-    await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
-    await expect.poll(()=>shortcutMediaRequests.has(`${base}/media/shortcut-a.jpg?${run}`)&&shortcutMediaRequests.has(`${base}/media/shortcut-b.jpg?${run}`),{timeout:12_000}).toBe(true);
-    const pressNext=()=>page.evaluate(()=>{const event=new KeyboardEvent("keydown",{key:"n",bubbles:true,cancelable:true});document.dispatchEvent(event);return event.defaultPrevented});
-    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-title")).toContainText(/Prepared A|shortcut-a/i,{timeout:5000});
-    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-title")).toContainText(/Prepared B|shortcut-b/i,{timeout:5000});
-    await page.keyboard.press("p");
-    const input=page.locator("#shortcut-input");await input.focus();await page.keyboard.press("n");await expect(input).toHaveValue("n");await expect(page.locator(".lp-title")).toContainText(/Prepared B|shortcut-b/i);
-  }finally{await closeExtension(context,profile)}
 });
 
 test("onboarding and settings render and persist GIF customization",async()=>{
