@@ -116,7 +116,7 @@ export const SECTIONS: SectionSpec[] = [
     fields: [
       {key: "includeGif", label: "GIFs", help: "Include animated GIFs."},
       {key: "includeVideo", label: "Videos", help: "Preview links to video files and videos posted in threads."},
-      {key: "minWidth", label: "Smallest image width", help: "Images narrower than this are treated as page decoration.", unit: "px"},
+      {key: "minWidth", label: "Minimum media width", help: "Skip media narrower than this when its width is known. The default is 50 px.", unit: "px"},
       {key: "minHeight", label: "Smallest image height", help: "Images shorter than this are treated as page decoration.", unit: "px"},
       {key: "quotedDuplicates", label: "Media inside quotes", help: "Forum replies often quote earlier posts. Hide skips quoted copies; Mark keeps them, labelled.", control: "segmented", options: {hide: "Hide", mark: "Mark", show: "Show"}},
       {key: "recursiveSearch", label: "Search linked pages", help: "When a page has no media of its own (an index or album list), look through the pages it links to.", control: "segmented", options: {off: "Off", "same-origin": "Same site", all: "Any site"}},
