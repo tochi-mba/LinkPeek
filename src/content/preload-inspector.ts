@@ -32,7 +32,6 @@ const MIN_REDRAW_MS = 200;
 const MAX_ROWS = 150;
 const STATE_ATTR = "linkpeekPreloadState";
 const PRIORITY_ATTR = "linkpeekPreloadPriority";
-const GIF_ATTR = "linkpeekPreloadGif";
 
 /** Outlines the inspector puts on the page's own links, keyed by state and priority. */
 const PAGE_OUTLINES = `
@@ -44,8 +43,6 @@ const PAGE_OUTLINES = `
 [data-linkpeek-preload-state="blocked"]{outline:1px dotted rgba(133,141,131,.45)!important;outline-offset:2px!important}
 [data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px ${REX.signal}!important}
 [data-linkpeek-preload-priority="maximum"]{box-shadow:0 0 0 3px ${REX.live}!important}
-[data-linkpeek-preload-gif="true"]::after{content:"▶";display:inline-grid;place-items:center;box-sizing:border-box;width:14px;height:14px;margin-left:4px;
-  border-radius:4px;background:${REX.signal};color:${REX.panel};font:800 8px/1 system-ui,sans-serif;vertical-align:1px;pointer-events:none}
 `;
 
 const PANEL_CSS = `${rexCss}
@@ -77,6 +74,9 @@ const PANEL_CSS = `${rexCss}
 .pi-open:hover{background:${REX.raised}}
 .pi-open strong,.pi-open small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pi-gif{display:inline-grid;place-items:center;width:14px;height:14px;margin-left:5px;border-radius:4px;background:${REX.signal};color:${REX.panel};font:800 8px/1 system-ui,sans-serif;vertical-align:1px}
+.pi-page-gif{position:fixed;display:grid;place-items:center;width:18px;height:18px;box-sizing:border-box;border:2px solid ${REX.panel};border-radius:5px;
+  background:${REX.signal};color:${REX.panel};box-shadow:0 2px 8px rgba(0,0,0,.45);font:900 9px/1 system-ui,sans-serif;
+  transform:translate(-50%,-50%);pointer-events:none;z-index:2147483647}
 .pi-open small{color:${REX.muted};font-size:11px;margin-top:2px}
 .pi-state{font-size:11px;color:${REX.muted};white-space:nowrap}
 .pi-tag{margin-left:6px;padding:1px 5px;border:1px solid ${REX.line};border-radius:999px;color:${REX.muted};font:700 9px ui-monospace,monospace;font-style:normal;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
@@ -112,7 +112,9 @@ export class PreloadInspector {
   private signature = "";
   private timer: number | undefined;
   private frame = 0;
+  private badgeFrame = 0;
   private lastDraw = 0;
+  private lastEntries: PreloadEntry[] = [];
 
   constructor(private source: PreloadInspectorHost) {
     this.root.dataset.linkpeekInspector = "true";
@@ -143,6 +145,8 @@ export class PreloadInspector {
     this.pageStyle.dataset.linkpeekInspectorStyle = "true";
     document.documentElement.append(this.pageStyle);
     this.unsubscribe = this.source.subscribe(() => this.requestDraw());
+    window.addEventListener("scroll", this.onViewport, true);
+    window.addEventListener("resize", this.onViewport);
     this.draw();
   }
 
@@ -152,15 +156,19 @@ export class PreloadInspector {
     this.unsubscribe = undefined;
     clearTimeout(this.timer);
     cancelAnimationFrame(this.frame);
+    cancelAnimationFrame(this.badgeFrame);
+    window.removeEventListener("scroll", this.onViewport, true);
+    window.removeEventListener("resize", this.onViewport);
     this.timer = undefined;
     this.frame = 0;
+    this.badgeFrame = 0;
+    this.lastEntries = [];
     this.root.remove();
     this.pageStyle?.remove();
     this.pageStyle = undefined;
     for (const anchor of this.outlined) {
       delete anchor.dataset[STATE_ATTR];
       delete anchor.dataset[PRIORITY_ATTR];
-      delete anchor.dataset[GIF_ATTR];
     }
     this.outlined.clear();
     this.signature = "";
@@ -172,6 +180,15 @@ export class PreloadInspector {
     this.close();
     return true;
   }
+
+  /** Keeps shadow-root GIF badges pinned to links while the page scrolls or resizes. */
+  private onViewport = () => {
+    if (!this.isOpen || this.badgeFrame) return;
+    this.badgeFrame = requestAnimationFrame(() => {
+      this.badgeFrame = 0;
+      this.renderPageGifBadges(this.lastEntries);
+    });
+  };
 
   /** Coalesces bursts of changes into one redraw per frame, at most every MIN_REDRAW_MS. */
   private requestDraw() {
@@ -223,12 +240,16 @@ export class PreloadInspector {
   private draw(force = false) {
     this.lastDraw = performance.now();
     const entries = this.source.snapshot(), now = Date.now();
+    this.lastEntries = entries;
     const urls = new Set(entries.map(entry => entry.url));
     for (const url of this.selected) if (!urls.has(url)) this.selected.delete(url);
     this.updateOutlines(entries);
     // URLs cannot contain spaces or newlines, so these separators are unambiguous.
     const signature = entries.map(entry => `${entry.url} ${entry.state} ${entry.priority} ${entry.hasGif ? "gif" : ""}`).join("\n");
-    if (!force && signature === this.signature) return;
+    if (!force && signature === this.signature) {
+      this.renderPageGifBadges(entries);
+      return;
+    }
     this.signature = signature;
     const byState = new Map<PreloadState, PreloadEntry[]>(INSPECTOR_GROUPS.map(([state]) => [state, []]));
     for (const entry of entries) byState.get(entry.state)!.push(entry);
@@ -247,6 +268,29 @@ export class PreloadInspector {
       + `</section>`;
     const fresh = this.shadow.querySelector(".pi-list");
     if (fresh) fresh.scrollTop = scroll;
+    this.renderPageGifBadges(entries);
+  }
+
+  /** Real shadow-root badges cannot be hidden or restyled by the host page. */
+  private renderPageGifBadges(entries: PreloadEntry[]) {
+    this.shadow.querySelectorAll(".pi-page-gif").forEach(badge => badge.remove());
+    const gifs = new Set(entries.filter(entry => entry.hasGif).map(entry => entry.url));
+    if (!gifs.size) return;
+    for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      if (!gifs.has(anchor.href)) continue;
+      const rect = anchor.getClientRects()[0] ?? anchor.getBoundingClientRect();
+      if (!rect || (rect.width <= 0 && rect.height <= 0) || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) continue;
+      const badge = document.createElement("i");
+      badge.className = "pi-page-gif";
+      badge.textContent = "▶";
+      badge.title = "Contains GIF";
+      badge.setAttribute("aria-label", "Contains GIF");
+      const left = Math.max(9, Math.min(innerWidth - 9, rect.right + 8));
+      const top = Math.max(9, Math.min(innerHeight - 9, rect.top + Math.min(9, Math.max(5, rect.height / 2))));
+      badge.style.left = `${Math.round(left)}px`;
+      badge.style.top = `${Math.round(top)}px`;
+      this.shadow.append(badge);
+    }
   }
 
   private groupMarkup(state: PreloadState, title: string, entries: PreloadEntry[], now: number) {
@@ -278,14 +322,11 @@ export class PreloadInspector {
       } else if (anchor.dataset[PRIORITY_ATTR] !== entry.priority) {
         anchor.dataset[PRIORITY_ATTR] = entry.priority;
       }
-      if (entry.hasGif) anchor.dataset[GIF_ATTR] = "true";
-      else if (GIF_ATTR in anchor.dataset) delete anchor.dataset[GIF_ATTR];
     }
     for (const anchor of this.outlined) {
       if (current.has(anchor)) continue;
       delete anchor.dataset[STATE_ATTR];
       delete anchor.dataset[PRIORITY_ATTR];
-      delete anchor.dataset[GIF_ATTR];
     }
     this.outlined = current;
   }
