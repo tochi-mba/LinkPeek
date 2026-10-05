@@ -415,7 +415,12 @@ export class PreviewController {
     if (!result.items.length) return undefined;
     const rootSources = new Set([candidate, result.url, result.linkContexts?.[0]?.sourceUrl].filter(Boolean).map(url => this.normalizeUrl(url!)));
     const rootItems = result.items.filter(item => rootSources.has(this.normalizeUrl(item.sourceUrl)));
-    if (result.kind !== "generic" || rootItems.length) return {url: candidate, result, linkedSource: undefined as string | undefined, linkedList: undefined as string[] | undefined};
+    if (result.kind !== "generic" || rootItems.length) return {
+      url: candidate, result,
+      linkedSource: undefined as string | undefined,
+      linkedList: undefined as string[] | undefined,
+      linkedExcluded: undefined as Set<string> | undefined
+    };
 
     const mediaSources = new Set(result.items.map(item => this.normalizeUrl(item.sourceUrl)));
     const contextOrder = (result.linkContexts ?? []).map(context => context.sourceUrl);
