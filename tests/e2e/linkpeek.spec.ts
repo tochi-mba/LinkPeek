@@ -79,7 +79,7 @@ test.beforeAll(async()=>{
       res.setHeader("content-type","text/html");res.end(`<!doctype html><meta name="generator" content="Discourse 2026"><script type="application/json" id="data-preloaded">${preload}</script>`);return;
     }
     if(path==="/media/anim.gif"||path==="/media/original/fallback.gif"||path==="/media/original/quoted.gif"){res.setHeader("content-type","image/gif");res.end(animatedGif);return}
-    if(path.startsWith("/media/")){if(path.startsWith("/media/shortcut-"))shortcutMediaRequests.add(path);res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
+    if(path.startsWith("/media/")){if(path.startsWith("/media/shortcut-"))shortcutMediaRequests.add(requestUrl.href);res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
     res.statusCode=404;res.end("not found");
   });
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -211,10 +211,11 @@ test("N cycles through prepared page links without capturing text input",async()
   try{
     shortcutMediaRequests.clear();
     const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby",activationKeywords:["shortcut-"]}})});
-    const page=await context.newPage();await page.goto(base);
+    const page=await context.newPage();await page.goto(base);const run=`run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await page.locator("#shortcut-a").evaluate((a:HTMLAnchorElement,tag)=>a.search=`?${tag}`,run);await page.locator("#shortcut-b").evaluate((a:HTMLAnchorElement,tag)=>a.search=`?${tag}`,run);
     await page.locator("#shortcut-a").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
     await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
-    await expect.poll(()=>shortcutMediaRequests.size,{timeout:12_000}).toBe(2);
+    await expect.poll(()=>shortcutMediaRequests.has(`${base}/media/shortcut-a.jpg?${run}`)&&shortcutMediaRequests.has(`${base}/media/shortcut-b.jpg?${run}`),{timeout:12_000}).toBe(true);
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
     await page.keyboard.press("p");
