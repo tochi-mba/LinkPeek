@@ -36,26 +36,37 @@ export class SeenMedia {
   private pending = new Map<string, Set<string>>();
   private saveTimer: number | undefined;
   private loading?: Promise<void>;
+  private stopped = false;
 
-  /** Reads the stored history once and follows changes other tabs make. */
+  /** Follows changes other tabs and the settings page make. */
+  private onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area !== "local") return;
+    for (const key of SEEN_KEYS) {
+      if (!(key in changes)) continue;
+      // Cleared elsewhere (the settings page): forget it here too, keeping nothing unsaved.
+      if (changes[key].newValue === undefined) {
+        this.buckets.delete(key);
+        this.pending.delete(key);
+      } else {
+        this.merge(key, changes[key].newValue);
+      }
+    }
+  };
+
+  /** Reads the stored history once and starts following changes. */
   load() {
     this.loading ??= chrome.storage.local.get(SEEN_KEYS).then(stored => {
       for (const key of SEEN_KEYS) this.merge(key, stored[key]);
-      chrome.storage.onChanged.addListener((changes, area) => {
-        if (area !== "local") return;
-        for (const key of SEEN_KEYS) {
-          if (!(key in changes)) continue;
-          // Cleared elsewhere (the settings page): forget it here too, keeping nothing unsaved.
-          if (changes[key].newValue === undefined) {
-            this.buckets.delete(key);
-            this.pending.delete(key);
-          } else {
-            this.merge(key, changes[key].newValue);
-          }
-        }
-      });
+      if (!this.stopped) chrome.storage.onChanged.addListener(this.onChanged);
     }).catch(() => undefined);
     return this.loading;
+  }
+
+  /** Stops following changes, for a page script whose extension went away. */
+  stop() {
+    this.stopped = true;
+    clearTimeout(this.saveTimer);
+    chrome.storage.onChanged.removeListener(this.onChanged);
   }
 
   private merge(key: string, value: unknown) {

@@ -7,6 +7,7 @@ import {
   DEFAULT_SETTINGS, SETTING_CHOICES, SETTING_RANGES, SETTINGS_VERSION, SHORTCUT_ACTIONS, loadSettings, normalizeKeywords,
   resolveSettings, saveSettings, settingsOverrides, type LinkPeekSettings, type ShortcutAction, type SiteProfiles
 } from "../shared/settings";
+import {SEEN_KEYS, forgetSeenMedia} from "../shared/seen-media";
 import {comboLabel, eventCombo} from "../shared/shortcuts";
 import {SECTIONS, SHORTCUT_LABELS, fieldFor, type Control, type FieldSpec, type SectionSpec, type SettingKey} from "./settings-schema";
 
@@ -18,6 +19,8 @@ let query = "";
 let showAdvanced = false;
 let recording: ShortcutAction | null = null;
 let savedTimer: number | undefined;
+/** Media remembered as seen, shown on the button that forgets them. */
+let seenCount = 0;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -109,6 +112,16 @@ function shortcutsMarkup() {
   }).join("")}</div>`;
 }
 
+function seenMarkup() {
+  const label = seenCount ? `Forget what I have seen (${seenCount.toLocaleString()})` : "Nothing remembered yet";
+  return `<button type="button" class="button ghost" data-forget-seen${seenCount ? "" : " disabled"}>${label}</button>`;
+}
+
+async function countSeen() {
+  const stored = await chrome.storage.local.get(SEEN_KEYS);
+  return SEEN_KEYS.reduce((total, key) => total + (Array.isArray(stored[key]) ? (stored[key] as unknown[]).length : 0), 0);
+}
+
 function describeRule(rule: Partial<LinkPeekSettings>) {
   if (rule.enabled === false) return "LinkPeek is paused here";
   const count = Object.keys(rule).filter(key => key !== "enabled").length;
@@ -137,6 +150,7 @@ function controlMarkup(field: FieldSpec) {
     case "keywords": return keywordsMarkup(field);
     case "shortcuts": return shortcutsMarkup();
     case "sites": return sitesMarkup();
+    case "seen": return toggleMarkup(field) + seenMarkup();
     default: return selectMarkup(field);
   }
 }
@@ -221,6 +235,12 @@ async function onClick(event: MouseEvent) {
     const input = document.querySelector<HTMLInputElement>(`input[data-key="${key}"]`)!;
     input.value = String(next);
     return update(key, next as never);
+  }
+  if (data.forgetSeen !== undefined) {
+    await forgetSeenMedia();
+    seenCount = 0;
+    flashSaved("Forgot everything you have seen");
+    return rerender();
   }
   if (data.reset) return update(data.reset as SettingKey, DEFAULT_SETTINGS[data.reset as SettingKey] as never, true);
   if (data.resetSection) {
@@ -341,7 +361,7 @@ async function resetEverything() {
 
 async function start() {
   showAdvanced = readAdvancedPreference();
-  state = await loadSettings();
+  [state, seenCount] = await Promise.all([loadSettings(), countSeen().catch(() => 0)]);
   render();
   const sections = $("sections");
   sections.addEventListener("click", event => void onClick(event));

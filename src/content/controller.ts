@@ -89,11 +89,11 @@ export class PreviewController {
       onLinger: anchor => this.prefetcher.deepen(anchor),
       // While the shuffle is open, hovering a link on the way somewhere never replaces it.
       onActivate: (anchor, x, y) => {
-        if (!this.viewer.result?.mixed) void this.activate(anchor, x, y);
+        if (!this.shuffleOnScreen()) void this.activate(anchor, x, y);
       },
       onLeave: () => this.onLeave(),
       onArm: (anchor, delayMs, x, y) => {
-        if (this.pageSettings().showHoverRing && !this.viewer.result?.mixed) this.viewer.showHoverRing(x, y, delayMs, this.prefetcher.isPrepared(anchor.href));
+        if (this.pageSettings().showHoverRing && !this.shuffleOnScreen()) this.viewer.showHoverRing(x, y, delayMs, this.prefetcher.isPrepared(anchor.href));
       },
       onDisarm: () => this.viewer.hideHoverRing()
     });
@@ -123,6 +123,7 @@ export class PreviewController {
       if (this.pageSettings().skipSeenMedia) this.seen.add(item);
     };
     void this.seen.load();
+    this.disposers.push(() => this.seen.stop());
 
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void this.onStorageChanged(changes, area);
     chrome.storage.onChanged.addListener(onStorage);
@@ -351,7 +352,7 @@ export class PreviewController {
    */
   private startShuffle() {
     const settings = this.pageSettings();
-    if (!settings.enabled || !settings.shuffleSlideshow || this.viewer.result?.mixed) return false;
+    if (!settings.enabled || !settings.shuffleSlideshow || this.shuffleOnScreen()) return false;
     const mix = new ShuffleMix(item => settings.skipSeenMedia && this.seen.has(item));
     // What is open now and everything already prepared join first; the page's links are explored next.
     if (this.viewer.isOpen && this.viewer.result && this.openUrl) mix.add(this.openUrl, this.viewer.result, settings.shuffleFollowLinks);
@@ -363,6 +364,10 @@ export class PreviewController {
     this.viewer.openLoading(point.x, point.y, settings, "Shuffle");
     this.refillShuffle();
     return true;
+  }
+
+  private shuffleOnScreen() {
+    return this.viewer.isOpen && Boolean(this.viewer.result?.mixed);
   }
 
   /** Keeps the shuffle a few items ahead of the screen, reading more links when it runs low. */

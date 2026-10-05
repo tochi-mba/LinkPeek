@@ -29,6 +29,9 @@ export function stubExtension(settings: Record<string, unknown> = {}, extra: Rec
         set: vi.fn(async (values: Record<string, unknown>) => {
           Object.assign(harness.store, values);
           for (const listener of harness.storageListeners) listener(Object.fromEntries(Object.entries(values).map(([key, value]) => [key, {newValue: value}])), "local");
+        }),
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete harness.store[key];
         })
       },
       onChanged: {addListener: vi.fn((listener: StorageListener) => harness.storageListeners.push(listener))}

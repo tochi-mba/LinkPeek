@@ -69,6 +69,7 @@ beforeEach(() => {
       init = vi.fn(async () => undefined);
       destroy = vi.fn();
       key = vi.fn((event: KeyboardEvent) => event.key === " ");
+      loopMs = vi.fn(() => 0);
       constructor(public stage: HTMLElement, public url: string, public settings: unknown, public notice: (m: string) => void, public width: (n: number) => void) {
         gifPlayers.push(this);
       }
@@ -752,18 +753,51 @@ describe("panel controls", () => {
 });
 
 describe("the slideshow", () => {
-  it("advances on a timer and stops on any manual move", async () => {
-    open({slideshowSeconds: 2}).show(result(3));
+  it("advances on a timer; moving by hand skips ahead and keeps it going, a full interval from then", async () => {
+    open({slideshowSeconds: 2}).show(result(4));
     click("slideshow");
     expect(toast()).toBe("Slideshow · every 2s");
     expect(q(".lp-signal")!.textContent).toBe("Slideshow · 2s");
     await vi.advanceTimersByTimeAsync(2000);
-    expect(count()).toBe("2 / 3");
+    expect(count()).toBe("2 / 4");
+    await vi.advanceTimersByTimeAsync(1500);
     click("next");
     await flush();
+    expect(count()).toBe("3 / 4");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(count()).toBe("3 / 4");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(count()).toBe("4 / 4");
+    gesture().cb.previous();
+    await flush();
+    expect(count()).toBe("3 / 4");
+    expect(q("[data-action=pause]")!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("pauses and resumes with Space or its button, and pauses while zooming in", async () => {
+    open({slideshowSeconds: 1}).show(result(3));
+    press("s");
+    press(" ");
+    expect([toast(), q(".lp-signal")!.textContent, q("[data-action=pause]")!.getAttribute("aria-label")]).toEqual(["Paused · Space to resume", "Paused · Space to resume", "Resume slideshow"]);
     await vi.advanceTimersByTimeAsync(5000);
+    expect(count()).toBe("1 / 3");
+    // Moving by hand while paused stays paused.
+    press("ArrowRight");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(count()).toBe("2 / 3");
+    click("pause");
+    expect(toast()).toBe("Slideshow playing");
+    await vi.advanceTimersByTimeAsync(1000);
     expect(count()).toBe("3 / 3");
-    expect(q("[data-action=slideshow]")!.getAttribute("aria-pressed")).toBe("false");
+    viewer.applyZoom(2, 0, 0);
+    expect(q("[data-action=pause]")!.getAttribute("aria-label")).toBe("Resume slideshow");
+    viewer.applyZoom(2, 0, 0);
+    // Without a slideshow, Space is just "next" again.
+    press("s");
+    press(" ");
+    await flush();
+    expect(count()).toBe("1 / 3");
+    expect((viewer as unknown as {perform: (action: string) => boolean}).perform("pause")).toBe(true);
   });
 
   it("can be stopped by its button, switches out of the grid, and ends at the last item without wrapping", async () => {
@@ -1235,5 +1269,123 @@ describe("one-handed extras", () => {
     Object.defineProperty(image, "naturalWidth", {configurable: true, value: 10});
     image.dispatchEvent(new Event("load"));
     expect(q(".lp-empty")).not.toBeNull();
+  });
+});
+
+describe("slideshow pacing", () => {
+  it("lets a playing video finish, up to a minute, and waits for its length when it is not known yet", async () => {
+    open({slideshowSeconds: 1, videoAutoplay: true}).show({...result(3), items: [item(0, "video"), item(1), item(2, "video")]});
+    const video = q<HTMLVideoElement>(".lp-video")!;
+    Object.defineProperty(video, "duration", {configurable: true, value: 4});
+    Object.defineProperty(video, "currentTime", {configurable: true, value: 1});
+    press("s");
+    await vi.advanceTimersByTimeAsync(2900);
+    expect(count()).toBe("1 / 3");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(count()).toBe("2 / 3");
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = q<HTMLVideoElement>(".lp-video")!;
+    Object.defineProperty(next, "readyState", {configurable: true, value: 0});
+    expect(count()).toBe("3 / 3");
+    Object.defineProperty(next, "duration", {configurable: true, value: 600});
+    Object.defineProperty(next, "currentTime", {configurable: true, value: 0});
+    next.dispatchEvent(new Event("loadedmetadata"));
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(count()).toBe("3 / 3");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(count()).toBe("1 / 3");
+  });
+
+  it("ignores a stale length and paused or unknown videos, and holds a GIF for one loop", async () => {
+    open({slideshowSeconds: 1, videoAutoplay: false}).show({...result(3), items: [item(0, "video"), item(1, "gif"), item(2)]});
+    press("s");
+    const video = q<HTMLVideoElement>(".lp-video")!;
+    Object.defineProperty(video, "readyState", {configurable: true, value: 0});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(count()).toBe("2 / 3");
+    video.dispatchEvent(new Event("loadedmetadata"));
+    await flush();
+    gifPlayers.at(-1)!.loopMs.mockReturnValue(2500);
+    press(" ");
+    press(" ");
+    await vi.advanceTimersByTimeAsync(2400);
+    expect(count()).toBe("2 / 3");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(count()).toBe("3 / 3");
+    viewer.close(true);
+    open({slideshowSeconds: 1, slideshowPlayThrough: false}).show({...result(2), items: [item(0, "gif"), item(1)]});
+    press("s");
+    await flush();
+    gifPlayers.at(-1)!.loopMs.mockReturnValue(9000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(count()).toBe("2 / 2");
+  });
+
+  it("waits at the end of a gallery that is still growing, asking for more, instead of wrapping", async () => {
+    const more = vi.fn();
+    viewer.onNeedMore = more;
+    open({slideshowSeconds: 1}).show(result(2, {complete: false}));
+    press("s");
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect([count(), toast(), more.mock.calls.length]).toEqual(["2 / 2", "Finding more media…", 1]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(more).toHaveBeenCalledTimes(2);
+    viewer.show({...result(3, {complete: false})});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(count()).toBe("3 / 3");
+    press("s");
+    press("ArrowRight");
+    expect(toast()).toBe("Loading more…");
+    expect(more).toHaveBeenCalledTimes(3);
+    viewer.onNeedMore = undefined;
+    press("ArrowRight");
+  });
+
+  it("lets the host take over starting a slideshow, and reports each item shown", async () => {
+    const seen = vi.fn();
+    viewer.onSeen = seen;
+    viewer.onSlideshowStart = vi.fn(() => true);
+    open().show(result(2));
+    press("s");
+    expect(q("[data-action=slideshow]")).not.toBeNull();
+    press("ArrowRight");
+    await flush();
+    expect(seen.mock.calls.map(([shown]) => shown.id)).toEqual(["i0", "i1"]);
+    viewer.onSlideshowStart = () => false;
+    press("s");
+    expect(q("[data-action=pause]")).not.toBeNull();
+  });
+});
+
+describe("a shuffle of many links", () => {
+  const mixed = () => ({...result(2), url: "linkpeek:shuffle", title: "Shuffle", mixed: true, complete: true,
+    items: [item(0, "image", {sourceUrl: "https://a.test/one"}), item(1, "image", {sourceUrl: "https://b.test/two"})]});
+
+  it("opens, saves and middle-clicks the link each item came from", async () => {
+    mocks.isFavorite.mockImplementation(async (url: string) => url === "https://b.test/two");
+    open().show(mixed());
+    await flush();
+    press("O", {shiftKey: true});
+    expect(window.open).toHaveBeenLastCalledWith("https://a.test/one", "_blank", "noopener");
+    expect(q("[data-action=favorite]")!.textContent).toBe("☆");
+    press("ArrowRight");
+    await flush();
+    expect(q("[data-action=favorite]")!.textContent).toBe("★");
+    q(".lp-title")!.dispatchEvent(new MouseEvent("auxclick", {button: 1, bubbles: true, cancelable: true}));
+    await flush();
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_OPEN_TAB", url: "https://b.test/two", active: false});
+    press("b");
+    await flush();
+    expect(mocks.toggleFavorite).toHaveBeenCalledWith({url: "https://b.test/two", title: "two", mediaCount: 1});
+    expect(toast()).toBe("Link saved");
+  });
+
+  it("stops at the end of a finished shuffle rather than start over", async () => {
+    open({slideshowSeconds: 1, wrapAround: true}).show(mixed());
+    press("s");
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect([count(), toast()]).toEqual(["2 / 2", "End of gallery"]);
   });
 });
