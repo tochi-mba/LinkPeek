@@ -26,6 +26,9 @@ export class GestureController {
   private accX = 0;
   private accY = 0;
   private lockedUntil = 0;
+  /** Direction of the swipe that last stepped, on the axis it stepped along. */
+  private lockedSign = 0;
+  private lockedHorizontal = false;
   private lastUpAt = 0;
   private lastUpX = 0;
   private lastUpY = 0;
@@ -87,8 +90,10 @@ export class GestureController {
     if ((horizontal ? s.horizontalGesture : s.verticalGesture) === "off") return;
     event.preventDefault();
     const now = performance.now();
-    if (s.momentumFiltering && now < this.lockedUntil) {
-      // The coasting tail of the swipe that just stepped: discard it rather than let it fire a late extra step.
+    // The coasting tail of the swipe that just stepped is discarded rather than let it fire a late extra step.
+    // Momentum only ever continues the same way, so turning back counts at once.
+    const reversed = horizontal === this.lockedHorizontal && Math.sign(horizontal ? dx : dy) === -this.lockedSign;
+    if (s.momentumFiltering && now < this.lockedUntil && !reversed) {
       this.accX = this.accY = 0;
       return;
     }
@@ -99,6 +104,8 @@ export class GestureController {
     if (Math.abs(horizontal ? this.accX : this.accY) < threshold) return;
     if (horizontal && s.horizontalGesture === "scrub") this.cb.scrub(amount);
     else this.step(amount, this.stepCount(amount));
+    this.lockedSign = Math.sign(horizontal ? this.accX : this.accY);
+    this.lockedHorizontal = horizontal;
     this.accX = this.accY = 0;
     this.lockedUntil = now + (s.momentumFiltering ? s.gestureCooldown : 0);
   };

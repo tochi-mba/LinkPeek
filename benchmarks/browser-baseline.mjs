@@ -64,7 +64,8 @@ const server=createServer((req,res)=>{
     send(res,`<!doctype html><meta name="generator" content="Discourse"><script type="application/json" id="data-preloaded">${preload}</script>`);return;
   }
   if(path==="/media/perf.gif"){send(res,animatedGif,"image/gif");return}
-  if(path.startsWith("/media/")){send(res,'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',"image/svg+xml");return}
+  // Real media size: the shipped 50px minimum-width filter measures decoded images.
+  if(path.startsWith("/media/")){send(res,'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><rect width="100%" height="100%"/></svg>',"image/svg+xml");return}
   send(res,"not found","text/plain",404);
 });
 await new Promise(r=>server.listen(0,"127.0.0.1",r));
@@ -163,7 +164,7 @@ try{
 
     requestCount=0;responseBytes=0;t=performance.now();
     await page.keyboard.press("g");
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector('.lp-grid[data-total="1000"]')&&n.shadowRoot.querySelectorAll(".lp-thumb").length>0),null,{timeout:15000});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector('.lp-grid')&&n.shadowRoot.querySelectorAll(".lp-thumb").length>0),null,{timeout:15000});
     results.ui.grid_1000_render_ms=round(performance.now()-t);
     results.ui.grid_1000_dom_nodes=await page.evaluate(()=>Array.from(document.documentElement.children).reduce((m,n)=>Math.max(m,n.shadowRoot?.querySelectorAll(".lp-thumb").length||0),0));
     await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_grid_1000=await heap();

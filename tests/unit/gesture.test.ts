@@ -51,6 +51,22 @@ describe("scrolling through media", () => {
     expect(cb.previous).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a swipe that turns back through at once, but not a sideways one", () => {
+    wheel({deltaY: 60});
+    expect(cb.next).toHaveBeenCalledTimes(1);
+    wheel({deltaX: -60});
+    expect(cb.scrub).not.toHaveBeenCalled();
+    wheel({deltaY: -60});
+    expect(cb.previous).toHaveBeenCalledTimes(1);
+    wheel({deltaY: 0.5});
+    wheel({deltaY: -60});
+    expect(cb.previous).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(100);
+    wheel({deltaX: 60});
+    wheel({deltaX: -60});
+    expect(cb.scrub.mock.calls.map(([amount]) => Math.sign(amount))).toEqual([1, -1]);
+  });
+
   it("skips several items for a long, fast swipe, up to the limit", () => {
     wheel({deltaY: 500});
     expect(cb.next).toHaveBeenCalledWith(3);
