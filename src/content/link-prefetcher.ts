@@ -39,6 +39,8 @@ export class LinkPrefetcher {
   private inFlight = 0;
   private waiters: Array<() => void> = [];
   private idleHandle: number | undefined;
+  private childIdleHandle: number | undefined;
+  private childQueue = new Set<string>();
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
 
@@ -77,6 +79,7 @@ export class LinkPrefetcher {
     this.requested.clear();
     this.results.clear();
     this.failedUntil.clear();
+    this.childQueue.clear();
     this.schedule();
   }
 
@@ -86,6 +89,7 @@ export class LinkPrefetcher {
     this.idleHandle = requestIdleCallback(() => {
       this.idleHandle = undefined;
       this.prepareNearest();
+      this.scheduleChildWork();
     }, {timeout: 600});
   }
 
@@ -117,11 +121,46 @@ export class LinkPrefetcher {
   }
 
   /** Records a gallery that a full scan produced, so it reopens instantly and counts as prepared. */
-  remember(url: string, result: ScanResult) {
+  remember(url: string, result: ScanResult, queueChildren = true) {
     if (!result.items.length) return;
     this.results.delete(url);
     this.results.set(url, result);
     while (this.results.size > RESULT_CACHE_SIZE) this.results.delete(this.results.keys().next().value!);
+    if (queueChildren) this.queueChildLinks(result);
+  }
+
+  /** Child-page links are priority-2 work: bounded, idle-only and governed by current headroom. */
+  private queueChildLinks(result: ScanResult) {
+    const contexts = result.linkContexts?.filter(context => context.sourceUrl !== result.url) ?? [];
+    for (const context of contexts) {
+      for (const url of context.links) {
+        if (this.childQueue.size >= 32) break;
+        if (!this.results.has(url) && !this.requested.has(url)) this.childQueue.add(url);
+      }
+      if (this.childQueue.size >= 32) break;
+    }
+    this.scheduleChildWork();
+  }
+
+  private scheduleChildWork() {
+    if (this.childIdleHandle !== undefined || document.hidden || !this.childQueue.size) return;
+    const budget = this.host.budget();
+    if (!budget.speculative || budget.nearbyLinks <= 0) return;
+    this.childIdleHandle = requestIdleCallback(() => {
+      this.childIdleHandle = undefined;
+      const current = this.host.budget();
+      if (!current.speculative || current.nearbyLinks <= 0) return;
+      const count = Math.min(this.childQueue.size, Math.max(1, Math.min(current.nearbyLinks, current.linkConcurrency * 2)));
+      const urls = [...this.childQueue].slice(0, count);
+      for (const url of urls) {
+        this.childQueue.delete(url);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        const settings = this.host.settingsFor(anchor);
+        if (settings) void this.prepareUrl(url, settings, "shallow", false, false);
+      }
+      if (this.childQueue.size) this.scheduleChildWork();
+    }, {timeout: 1500});
   }
 
   /** The pointer reached a link: prepare it now, ahead of any queued nearby work. */
@@ -172,8 +211,14 @@ export class LinkPrefetcher {
   }
 
   private async prepare(anchor: HTMLAnchorElement, level: Level, urgent: boolean) {
-    const url = anchor.href, settings = this.host.settingsFor(anchor), previous = this.requested.get(url);
-    if (!settings || document.hidden || previous === "deep" || (level === "shallow" && previous)) return;
+    const settings = this.host.settingsFor(anchor);
+    if (!settings) return;
+    await this.prepareUrl(anchor.href, settings, level, urgent, true);
+  }
+
+  private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, urgent: boolean, queueChildren: boolean) {
+    const previous = this.requested.get(url);
+    if (document.hidden || previous === "deep" || (level === "shallow" && previous)) return;
     if ((this.failedUntil.get(url) ?? 0) > Date.now()) return;
     this.requested.set(url, level);
     const request: PrefetchRequest = {type: "LINKPEEK_PREFETCH", url, kind: classifyLink(url), deep: level === "deep"};
@@ -181,7 +226,7 @@ export class LinkPrefetcher {
     try {
       const result = await chrome.runtime.sendMessage(request) as ScanResult | null | {error: string};
       if (!result || "error" in result) throw new Error(result?.error ?? "No result");
-      this.remember(url, result);
+      this.remember(url, result, queueChildren);
       this.warmThumbnails(result, urgent);
     } catch {
       if (previous) this.requested.set(url, previous);
