@@ -468,13 +468,11 @@ export class PreviewController {
         this.linkedSource = target.linkedSource;
         this.linkedList = target.linkedList;
         this.linkedExcluded = target.linkedExcluded;
-        this.prefetcher.remember(target.url, target.result);
         this.openOffPage(target.url, true, target.result);
         if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
         return;
       }
       if (keepExistingList) {
-        this.prefetcher.remember(candidate, target.result);
         this.openOffPage(candidate, true, target.result);
         const at = this.linkedList?.indexOf(candidate) ?? -1;
         if (this.linkedList?.length) this.prefetcher.warmAround(this.linkedList, at);
@@ -482,7 +480,6 @@ export class PreviewController {
       }
       const anchor = pageAnchors?.get(this.normalizeUrl(candidate));
       if (anchor) {
-        this.prefetcher.remember(candidate, target.result);
         this.openPageLink(anchor, target.result);
         return;
       }
