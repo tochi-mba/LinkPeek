@@ -9,13 +9,18 @@ vi.mock("../../src/ui/viewer", () => ({
     isOpen = false;
     pinned = false;
     help = false;
+    result?: ScanResult;
+    index = 0;
     onDismiss?: (explicit: boolean) => void;
     onPosition?: (url: string, index: number) => void;
     restoreViewerState = vi.fn();
     openLoading = vi.fn(() => {
       this.isOpen = true;
     });
-    show = vi.fn();
+    show = vi.fn((result: ScanResult) => {
+      this.result = result;
+      this.index = Math.min(this.index, Math.max(0, result.items.length - 1));
+    });
     error = vi.fn();
     scheduleClose = vi.fn();
     cancelClose = vi.fn();
@@ -399,6 +404,35 @@ describe("keyboard", () => {
     await boot();
     viewer.key.mockReturnValueOnce(true);
     expect(key("g").defaultPrevented).toBe(true);
+  });
+
+  it("uses the fetched child page's own link order for recursive media", async () => {
+    await boot();
+    const root = link("root", "https://dest.test/root");
+    const recursive = scan(root.href, 1, {
+      items: [{
+        id: "child-media", type: "image", originalUrl: "https://dest.test/child/photo.jpg",
+        previewUrl: "https://dest.test/child/photo-small.jpg", sourceUrl: "https://dest.test/child", score: 1
+      }],
+      linkContexts: [
+        {sourceUrl: root.href, links: ["https://dest.test/child"]},
+        {sourceUrl: "https://dest.test/child", links: ["https://dest.test/child/a", "https://dest.test/child/b", "https://dest.test/child/c"]}
+      ]
+    });
+    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url === root.href ? recursive : scan(msg.url!);
+    await controller.activate(root, 0, 0);
+    expect(viewer.result).toEqual(recursive);
+
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
+
+    // Re-show the recursive result to model returning to that gallery, then previous starts at the child page's end.
+    viewer.show(recursive);
+    (controller as any).openUrl = root.href;
+    expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().at(-1)!.url).toBe("https://dest.test/child/c");
   });
 
   it("moves between prepared links with N and Shift+N, in page order, wrapping", async () => {
