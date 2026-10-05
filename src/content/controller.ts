@@ -12,7 +12,8 @@ import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
 import {HoverIntent, anchorFrom} from "./hover-intent";
 import {ImageWarmer} from "./image-warmer";
-import {LinkPrefetcher} from "./link-prefetcher";
+import {LinkPrefetcher, type PreloadPriority} from "./link-prefetcher";
+import {PreloadInspector} from "./preload-inspector";
 import {ResourceGovernor, TIER_NAMES} from "./resource-governor";
 
 type ActiveScan = {url: string; token: string; settings: LinkPeekSettings};
@@ -33,11 +34,13 @@ export class PreviewController {
   private openUrl: string | null = null;
   private positions = new Map<string, number>();
   private mutationFrame = 0;
+  private inspectorChordUntil = 0;
   private disposers: Array<() => void> = [];
   readonly viewer: Viewer;
   readonly governor: ResourceGovernor;
   readonly warmer: ImageWarmer;
   readonly prefetcher: LinkPrefetcher;
+  readonly inspector: PreloadInspector;
   readonly intent: HoverIntent;
 
   constructor() {
@@ -61,6 +64,12 @@ export class PreviewController {
       pointer: () => this.intent.pointer(),
       budget: () => this.governor.budget()
     }, this.warmer);
+    this.inspector = new PreloadInspector({
+      snapshot: () => this.prefetcher.snapshot(),
+      setPriority: (urls: Iterable<string>, priority: PreloadPriority) => this.prefetcher.setPriority(urls, priority),
+      openUrl: url => this.openInspectorUrl(url),
+      subscribe: listener => this.prefetcher.subscribe(listener)
+    });
   }
 
   async boot() {
@@ -124,6 +133,7 @@ export class PreviewController {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.intent.clearTimers();
     this.warmer.clear();
+    this.inspector.close();
     this.viewer.close(true);
     return false;
   }
@@ -225,9 +235,27 @@ export class PreviewController {
     void this.activate(anchor, event.clientX, event.clientY);
   }
 
+  /** Ctrl+X, then X toggles the live preload inspector. Escape closes it. */
+  private inspectorKey(event: KeyboardEvent) {
+    if (this.inspector.key(event)) return true;
+    if (isTypingEvent(event)) return false;
+    const x = event.key.toLowerCase() === "x", now = performance.now();
+    if (x && event.ctrlKey && !event.altKey && !event.metaKey) {
+      this.inspectorChordUntil = now + 900;
+      return true;
+    }
+    const armed = this.inspectorChordUntil >= now;
+    this.inspectorChordUntil = 0;
+    if (armed && x && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      this.inspector.toggle();
+      return true;
+    }
+    return false;
+  }
+
   /** While a preview is open, LinkPeek owns the keyboard: its keys never reach the page. */
   private onKeyDown(event: KeyboardEvent) {
-    if (this.viewer.key(event)) {
+    if (this.inspectorKey(event) || this.viewer.key(event)) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -243,6 +271,18 @@ export class PreviewController {
     if (!direction || !this.openAdjacentPrepared(direction)) return;
     event.preventDefault();
     event.stopPropagation();
+  }
+
+  private openInspectorUrl(url: string) {
+    const anchor = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(candidate => candidate.href === url)
+      ?? Object.assign(document.createElement("a"), {href: url, textContent: new URL(url).hostname});
+    if (!this.settingsFor(anchor)) return;
+    const rect = anchor.isConnected ? anchor.getBoundingClientRect() : undefined;
+    const x = rect ? clamp(rect.left + rect.width / 2, 8, innerWidth - 8) : clamp(innerWidth / 2, 8, innerWidth - 8);
+    const y = rect ? clamp(rect.top + rect.height / 2, 8, innerHeight - 8) : clamp(innerHeight / 2, 8, innerHeight - 8);
+    this.intent.setCurrent(anchor);
+    this.viewer.cancelClose();
+    void this.activate(anchor, x, y);
   }
 
   /** Opens the next link in a recursively fetched child page, when the current media came from one. */
