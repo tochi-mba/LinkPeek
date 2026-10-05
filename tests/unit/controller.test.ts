@@ -502,6 +502,8 @@ describe("keyboard", () => {
   it("moves through media-bearing page links in order, skipping empties and wrapping", async () => {
     await boot();
     const [a, b, c, d] = [link("a"), link("b", undefined, 2000), link("c"), link("d")];
+    link("b-copy", b.href);
+    link("blocked", "https://dest.test/logout");
     b.scrollIntoView = vi.fn();
     const media = new Set([b.href, d.href]);
     respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!, media.has(msg.url!) ? 1 : 0) : scan(msg.url!, media.has(msg.url!) ? 1 : 0);
@@ -533,6 +535,78 @@ describe("keyboard", () => {
     await flush();
     expect(viewer.result!.url).toBe(b.href);
     expect(key("x").defaultPrevented).toBe(false);
+  });
+
+  it("skips missing and thrown probe answers, then accepts direct media", async () => {
+    await boot();
+    const missing = link("missing"), broken = link("broken"), direct = link("direct", "https://dest.test/direct.gif");
+    respond = msg => {
+      if (msg.type !== "LINKPEEK_SCAN") return scan(msg.url!);
+      if (msg.url === missing.href) return undefined;
+      if (msg.url === broken.href) throw new Error("network exploded");
+      if (msg.url === direct.href) return {...scan(direct.href), kind: "direct-image"};
+      return scan(msg.url!);
+    };
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().map(msg => msg.url)).toEqual([missing.href, broken.href, direct.href]);
+    expect(viewer.result).toMatchObject({url: direct.href, kind: "direct-image"});
+  });
+
+  it("chooses the last eligible recursive child for Shift+N even without link-context metadata", async () => {
+    await boot();
+    const candidate = link("candidate");
+    const blocked = "https://dest.test/logout", first = "https://dest.test/child/first", last = "https://dest.test/child/last";
+    const recursive: ScanResult = {
+      url: candidate.href, kind: "generic", complete: true,
+      items: [
+        {id: "blocked", type: "image", originalUrl: blocked + "/m.jpg", previewUrl: blocked + "/m.jpg", sourceUrl: blocked, score: 1},
+        {id: "first", type: "image", originalUrl: first + "/m.jpg", previewUrl: first + "/m.jpg", sourceUrl: first, score: 1},
+        {id: "last", type: "image", originalUrl: last + "/m.jpg", previewUrl: last + "/m.jpg", sourceUrl: last, score: 1}
+      ]
+    };
+    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url === candidate.href ? recursive : scan(msg.url!);
+    expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
+    await flush();
+    expect(viewer.result!.url).toBe(last);
+    expect(viewer.result!.items.map((item: any) => item.id)).toEqual(["last"]);
+  });
+
+  it("cancels an active preview scan before probing N and completes an incomplete linked candidate", async () => {
+    await boot();
+    const root = link("root"), child = "https://dest.test/child", next = child + "/next";
+    const rootResult = scan(root.href, 1, {
+      items: [{id: "child-media", type: "image", originalUrl: child + "/m.jpg", previewUrl: child + "/m.jpg", sourceUrl: child, score: 1}],
+      linkContexts: [{sourceUrl: root.href, links: [child]}, {sourceUrl: child, links: [next]}]
+    });
+    const partial = scan(next, 1, {complete: false});
+    const complete = scan(next, 2);
+    let nextScans = 0;
+    respond = msg => {
+      if (msg.type !== "LINKPEEK_SCAN") return {ok: true};
+      if (msg.url === root.href) return new Promise(() => undefined);
+      if (msg.url === next) return ++nextScans === 1 ? partial : complete;
+      return scan(msg.url!);
+    };
+    void controller.activate(root, 20, 30);
+    await flush();
+    viewer.show(rootResult);
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN" && msg.url === root.href)).toBe(true);
+    expect(scans().filter(msg => msg.url === next)).toHaveLength(2);
+    expect(viewer.result).toEqual(complete);
+  });
+
+  it("handles malformed URLs and an absent linked context without throwing", async () => {
+    await boot();
+    const internal = controller as unknown as {
+      normalizeUrl: (url: string) => string;
+      linkedContextForCurrent: () => unknown;
+    };
+    expect(internal.normalizeUrl("http://[bad")).toBe("http://[bad");
+    viewer.result = undefined;
+    expect(internal.linkedContextForCurrent()).toBeUndefined();
   });
 
   it("opens an incomplete prepared result immediately but still finishes its full scan", async () => {
