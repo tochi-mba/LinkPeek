@@ -7,13 +7,16 @@ for(const f of files.filter(x=>x.endsWith(".html"))){
   // A broken edit once multiplied a page to megabytes while every link still resolved.
   if(html.length>200_000){console.error(`${f}: ${html.length} bytes is far too large for a site page`);bad++}
   if((html.match(/<html\b/gi)??[]).length!==1||(html.match(/<\/html>/gi)??[]).length!==1){console.error(`${f}: expected exactly one <html> element`);bad++}
-  for(const m of html.matchAll(/href=["']([^"'#]+)["']/g)){
+  for(const m of html.matchAll(/(?:href|src)=["']([^"'#]+)["']/g)){
     const h=m[1];if(/^(https?:|mailto:)/.test(h))continue;if(h.startsWith("downloads/")&&allowMissingDownloads)continue;
     const target=resolve(dirname(f),h);try{await stat(target)}catch{console.error(`${f}: broken link ${h}`);bad++}
   }
   // Clicking a .crx makes the browser try to install it, which fails for self-hosted packages
   // (CRX_REQUIRED_PROOF_MISSING); the site offers the ZIP, which saves like any other file.
-  if(/href=["']downloads\/LinkPeek\.crx["']/i.test(html)){console.error(`${f}: link LinkPeek.zip, not the CRX`);bad++}
+  // Only the click-to-install steps (shown to browsers that allow it once a flag is set) may link the CRX.
+  for(const m of html.matchAll(/<a\b[^>]*href=["']downloads\/LinkPeek\.crx["'][^>]*>/gi)){
+    if(!/\bdata-requires-flag\b/.test(m[0])){console.error(`${f}: link LinkPeek.zip; a CRX link needs data-requires-flag`);bad++}
+  }
   for(const m of html.matchAll(/<a\b[^>]*href=["']downloads\/LinkPeek\.zip["'][^>]*>/gi)){
     if(!/\bdownload(?:=|\s|>)/i.test(m[0])){console.error(`${f}: the ZIP link must be a download`);bad++}
   }
