@@ -64,7 +64,7 @@ describe("the first-run guide", () => {
     const sheet = $("#cheat").textContent!;
     expect(sheet).toContain("Shift+J");
     expect(sheet).toContain("Next link with media");
-    expect(sheet).not.toContain("Slideshow");
+    expect(sheet.toLowerCase()).not.toContain("slideshow");
   });
 
   it("saves on finish and closes, or opens settings", async () => {

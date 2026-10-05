@@ -176,6 +176,28 @@ test("whole-page preparation checks links far below the fold in idle time and ma
   }finally{await closeExtension(context,profile)}
 });
 
+test("S starts a shuffle across links that pauses, skips ahead and never shows what was already seen",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];
+    await sw.evaluate(async()=>{await chrome.storage.local.set({settings:{slideshowSeconds:30}})});
+    const page=await context.newPage();await page.goto(base+"/nav-links");await page.mouse.move(1000,500);
+    await page.keyboard.press("s");
+    await expect(page.locator(".lp-title")).toHaveText("Shuffle",{timeout:10_000});
+    await expect(page.locator(".lp-count")).toHaveText("1 / 2",{timeout:10_000});
+    await expect(page.locator(".lp-signal")).toHaveText("Slideshow · 30s");
+    const first=await page.locator(".lp-image").getAttribute("src");
+    await page.keyboard.press("Space");await expect(page.locator(".lp-signal")).toHaveText("Paused · Space to resume");
+    await page.keyboard.press("ArrowRight");await expect(page.locator(".lp-count")).toHaveText("2 / 2");
+    const second=await page.locator(".lp-image").getAttribute("src");
+    expect([first,second].map(src=>/nav-gallery-(one|two)/.exec(src??"")?.[1]).sort()).toEqual(["one","two"]);
+    await expect(page.locator(".lp-signal")).toHaveText("Paused · Space to resume");
+    await page.keyboard.press("Escape");await expect(page.locator(".lp-panel")).toHaveCount(0);
+    await page.keyboard.press("s");
+    await expect(page.locator(".lp-toast")).toHaveText("Nothing new to show from here",{timeout:10_000});
+  }finally{await closeExtension(context,profile)}
+});
+
 test("Discourse hover filters page chrome and opens the whole-thread viewer",async()=>{
   const {context,profile}=await launchExtension();
   try{
