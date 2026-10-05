@@ -298,6 +298,16 @@ describe("prefetching", () => {
 
 describe("GIF bytes, downloads and housekeeping", () => {
   const bytes = (size: number, headers: Record<string, string> = {}) => new Response(new Uint8Array(size).fill(65), {headers});
+  it("checks each caller's limit even for cached and shared GIF bytes", async () => {
+    vi.stubGlobal("fetch",vi.fn(async()=>bytes(2*1024*1024)));
+    const [large,small]=await Promise.all([
+      send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/large.gif",maxMb:4}),
+      send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/large.gif",maxMb:1})
+    ]);
+    expect(large.value.bytes).toBe(2*1024*1024);
+    expect(small.value.error).toContain("larger");
+    expect((await send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/large.gif",maxMb:1})).value.error).toContain("larger");
+  });
 
   it("fetches GIF bytes once, shares the work and caches the result", async () => {
     const fetch = vi.fn(async () => bytes(3, {"content-type": "image/gif"}));

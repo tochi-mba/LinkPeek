@@ -37,7 +37,7 @@ beforeEach(() => {
   });
   send = vi.fn(async () => ({base64: btoa("abc"), mime: "image/gif", bytes: 3}));
   vi.stubGlobal("chrome", {runtime: {sendMessage: send}});
-  gif.parseGIF.mockReset().mockReturnValue({lsd: {width: 10, height: 8}});
+  gif.parseGIF.mockReset().mockReturnValue({lsd: {width: 10, height: 8}, frames: []});
   gif.decompressFrames.mockReset().mockReturnValue([frame(20), frame(30, 2), frame(40, 3)]);
   Object.defineProperty(document, "hidden", {configurable: true, value: false});
 });
@@ -61,6 +61,17 @@ describe("GIF timing helpers", () => {
 });
 
 describe("preparing GIFs", () => {
+  it("bounds expanded GIF memory before decompression and includes the download limit in its cache key", async () => {
+    gif.parseGIF.mockReturnValueOnce({lsd:{width:10000,height:10000},frames:[]});
+    await expect(prepareGif("https://x.test/large.gif",32)).rejects.toThrow("too large");
+    expect(gif.decompressFrames).not.toHaveBeenCalled();
+    gif.parseGIF.mockReturnValueOnce({lsd:{width:10,height:10},frames:[{application:{}},{image:{descriptor:{width:10000,height:10000}}}]});
+    await expect(prepareGif("https://x.test/frames.gif",32)).rejects.toThrow("too large");
+    expect(gif.decompressFrames).not.toHaveBeenCalled();
+    await prepareGif("https://x.test/a.gif",32);
+    await prepareGif("https://x.test/a.gif",1);
+    expect(send).toHaveBeenCalledTimes(4);
+  });
   it("fetches through the service worker once and keeps the three most recent", async () => {
     const a = await prepareGif("https://x.test/a.gif", 32);
     expect([a.width, a.height, a.frames.length]).toEqual([10, 8, 3]);
@@ -72,7 +83,7 @@ describe("preparing GIFs", () => {
   });
 
   it("measures the canvas from the frames when the header has no size", async () => {
-    gif.parseGIF.mockReturnValue({});
+    gif.parseGIF.mockReturnValue({frames: []});
     gif.decompressFrames.mockReturnValue([frame(20, 0, 3, 4, 5, 6)]);
     expect(await prepareGif("https://x.test/b.gif", 32)).toMatchObject({width: 8, height: 10});
   });

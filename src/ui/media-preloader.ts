@@ -162,7 +162,10 @@ export class MediaPreloader {
         }
         resolve(true);
       }, {once: true});
-      img.addEventListener("error", () => resolve(false), {once: true});
+      img.addEventListener("error", () => {
+        if (this.entries.get(url) === entry) this.entries.delete(url);
+        resolve(false);
+      }, {once: true});
     });
     img.src = url;
     this.entries.set(url, entry);

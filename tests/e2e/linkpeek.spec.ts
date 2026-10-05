@@ -8,6 +8,8 @@ import {tmpdir} from "node:os";
 let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0,logoutRequests=0;
 const extensionPath=resolve("dist");
 const animatedGif=Buffer.from("R0lGODlhBAAEAIEAANf/PwAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQIDwAAACwAAAAABAAEAIH/d00AAAAAAAAAAAAICQABCBxIsCCAgAAh+QQIFAAAACwAAAAABAAEAIERFRIAAAAAAAAAAAAICQABCBxIsCCAgAA7","base64");
+// A 64px logical canvas exercises the shipped 50px filter, not a disabled filter.
+animatedGif.writeUInt16LE(64,6);animatedGif.writeUInt16LE(64,8);
 
 async function launchExtension():Promise<{context:BrowserContext;profile:string}>{
   const profile=await mkdtemp(`${tmpdir()}/linkpeek-e2e-`);
@@ -20,11 +22,6 @@ async function launchExtension():Promise<{context:BrowserContext;profile:string}
       context.serviceWorkers().length?Promise.resolve():context.waitForEvent("serviceworker"),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error("LinkPeek service worker did not start")),12_000))
     ]);
-    const sw=context.serviceWorkers()[0];
-    await sw.evaluate(async()=>{
-      const stored=await chrome.storage.local.get("settings");
-      await chrome.storage.local.set({settings:{...(stored.settings??{}),minWidth:0,minHeight:0}});
-    });
     return {context,profile};
   }catch(error){await rm(profile,{recursive:true,force:true});throw error}
 }
@@ -60,6 +57,15 @@ test.beforeAll(async()=>{
       res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"> · <a id="video" href="/media/clip.mp4">Clip</a> · <a id="logout" href="/logout">Log out</a></body></html>`);return;
     }
     if(path==="/logout"){logoutRequests++;res.end("signed out");return}
+    if(path==="/width-check"){
+      res.setHeader("content-type","text/html");res.end('<a id="tiny" href="/media/tiny.jpg">Tiny original</a><br><a id="gallery" href="/width-gallery">Gallery</a>');return;
+    }
+    if(path==="/width-gallery"){
+      res.setHeader("content-type","text/html");res.end('<title>Thumbnail gallery</title><a class="lightbox" href="/media/full.jpg"><img src="/media/tiny.jpg" width="45" height="45"></a>');return;
+    }
+    if(path==="/media/tiny.jpg"){
+      res.setHeader("content-type","image/svg+xml");res.end('<svg xmlns="http://www.w3.org/2000/svg" width="45" height="45"><rect width="45" height="45" fill="red"/></svg>');return;
+    }
     if(path==="/media/clip.mp4"){res.setHeader("content-type","video/mp4");res.end(Buffer.alloc(64));return}
     if(path==="/scroll"){res.setHeader("content-type","text/html");res.end('<!doctype html><body style="margin:0"><div style="height:1200px"></div><a id="under" href="/t/demo/123" style="display:block;height:300px;background:#ccc">Scrolled under</a><div style="height:3000px"></div></body>');return}
     if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
@@ -94,6 +100,29 @@ test.beforeAll(async()=>{
   base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 test.afterAll(async()=>{if(server?.listening)await new Promise<void>(r=>server.close(()=>r()))});
+
+test("default hover filters tiny originals without rejecting or fetching a lightbox original",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const page=await context.newPage(), originals:string[]=[];
+    page.on("request",request=>{if(request.url().endsWith("/media/full.jpg"))originals.push(request.url())});
+    await page.goto(base+"/width-check");
+    await page.locator("#tiny").hover();
+    await expect(page.locator(".lp-panel")).toContainText("No posted media here.",{timeout:12_000});
+    await page.keyboard.press("Escape");
+    await page.locator("#gallery").hover();
+    await expect(page.locator(".lp-panel")).toContainText("1 media");
+    await expect(page.locator(".lp-image")).toHaveJSProperty("naturalWidth",45);
+    await page.keyboard.press("g");
+    await expect(page.locator(".lp-thumb")).toHaveCount(1);
+    expect(originals).toEqual([]);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("x");
+    await expect(page.getByRole("dialog",{name:"LinkPeek preload inspector"})).toHaveCount(0);
+    await page.keyboard.press("Control+x");await page.keyboard.press("x");
+    await expect(page.getByRole("dialog",{name:"LinkPeek preload inspector"})).toBeVisible();
+  }finally{await closeExtension(context,profile)}
+});
 
 test("Discourse hover filters page chrome and opens the whole-thread viewer",async()=>{
   const {context,profile}=await launchExtension();

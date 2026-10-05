@@ -1,3 +1,4 @@
+import {REX, rexCss} from "../shared/theme";
 import {escapeHtml} from "../shared/dom";
 import type {PreloadEntry, PreloadPriority, PreloadState} from "./link-prefetcher";
 
@@ -18,14 +19,14 @@ const GROUPS: Array<[PreloadState, string]> = [
 ];
 
 const OUTLINE_STYLE = `
-[data-linkpeek-preload-state="loading"]{outline:2px solid #ffb020!important;outline-offset:2px!important}
-[data-linkpeek-preload-state="queued"]{outline:2px dashed #8c7cff!important;outline-offset:2px!important}
-[data-linkpeek-preload-state="backoff"]{outline:2px dotted #ff6b6b!important;outline-offset:2px!important}
-[data-linkpeek-preload-state="prepared"]{outline:2px solid #43d17a!important;outline-offset:2px!important}
-[data-linkpeek-preload-state="not-started"]{outline:1px dashed #8a939d!important;outline-offset:2px!important}
-[data-linkpeek-preload-state="blocked"]{outline:1px dotted #6b7178!important;outline-offset:2px!important}
-[data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px #55c2ff!important}
-[data-linkpeek-preload-priority="maximum"]{box-shadow:0 0 0 3px #ff4fd8!important}
+[data-linkpeek-preload-state="loading"]{outline:2px solid ${REX.live}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="queued"]{outline:2px dashed ${REX.live}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="backoff"]{outline:2px dotted ${REX.live}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="prepared"]{outline:2px solid ${REX.signal}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="not-started"]{outline:1px dashed ${REX.muted}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="blocked"]{outline:1px dotted ${REX.muted}!important;outline-offset:2px!important}
+[data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px ${REX.signal}!important}
+[data-linkpeek-preload-priority="maximum"]{box-shadow:0 0 0 3px ${REX.live}!important}
 `;
 
 function stateLabel(entry: PreloadEntry) {
@@ -121,17 +122,23 @@ export class PreloadInspector {
 
   private render() {
     const entries = this.source.snapshot();
+    const available = new Set(entries.map(entry => entry.url));
+    for (const url of this.selected) if (!available.has(url)) this.selected.delete(url);
+    const scrollTop = this.shadow.querySelector(".pi-list")?.scrollTop ?? 0;
+    const collapsed = [...this.shadow.querySelectorAll<HTMLDetailsElement>(".pi-group")].map(group => !group.open);
+    const focus = this.shadow.activeElement as HTMLElement | null;
+    const focusKey = focus?.dataset.select ?? focus?.dataset.open ?? focus?.dataset.action;
     const counts = Object.fromEntries(GROUPS.map(([state]) => [state, entries.filter(entry => entry.state === state).length])) as Record<PreloadState, number>;
     const active = entries.find(entry => entry.state === "loading") ?? entries.find(entry => entry.state === "queued") ?? entries.find(entry => entry.state === "backoff");
     const selected = this.selected.size;
     this.shadow.innerHTML = `<style>
-      :host{all:initial}.pi{width:min(520px,calc(100vw - 24px));max-height:min(72vh,680px);overflow:hidden;display:flex;flex-direction:column;background:#111512;color:#f3f5ef;border:1px solid #344039;border-radius:14px;box-shadow:0 18px 60px #0009;font:13px/1.35 Inter,Segoe UI,system-ui,sans-serif}
-      .pi-head{display:flex;gap:10px;align-items:flex-start;padding:12px 12px 9px;border-bottom:1px solid #29332d}.pi-head b{font-size:14px}.pi-title{min-width:0;flex:1}.pi-title small{display:block;color:#9ba7a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}.pi-close{border:0;background:#232c27;color:#fff;border-radius:8px;width:28px;height:28px;cursor:pointer}
-      .pi-live{padding:8px 12px;background:#171d19;color:#c8d1cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pi-live strong{color:#d7ff3f}
-      .pi-tools{display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid #29332d}.pi-tools span{margin-right:auto;color:#9ba7a0}.pi-tools button{border:1px solid #39463f;background:#1d2521;color:#e8eee9;border-radius:8px;padding:5px 8px;cursor:pointer}.pi-tools button:hover{background:#28332d}
-      .pi-list{overflow:auto;padding:6px}.pi-group{border-bottom:1px solid #26302a}.pi-group summary{cursor:pointer;padding:8px;color:#d7dfda;font-weight:600}.pi-group summary span{float:right;color:#8e9a93}.pi-row{display:grid;grid-template-columns:24px 1fr;align-items:center;padding:3px 4px}.pi-row input{accent-color:#d7ff3f}.pi-open{width:100%;border:0;background:transparent;color:inherit;display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;padding:7px;border-radius:8px;cursor:pointer}.pi-open:hover{background:#202923}.pi-dot{width:8px;height:8px;border-radius:50%;background:#8a939d}.pi-copy{min-width:0}.pi-copy strong,.pi-copy small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pi-copy small{color:#839088;font-size:11px;margin-top:2px}.pi-state{font-size:11px;color:#aeb9b3}.pi-none{color:#69746d;padding:4px 12px 10px}
-      [data-state="prepared"] .pi-dot{background:#43d17a}[data-state="loading"] .pi-dot{background:#ffb020}[data-state="queued"] .pi-dot{background:#8c7cff}[data-state="backoff"] .pi-dot{background:#ff6b6b}[data-state="blocked"] .pi-dot{background:#5d6560}
-      [data-priority="high"] .pi-state{color:#55c2ff}[data-priority="maximum"] .pi-state{color:#ff72df}
+      ${rexCss}.pi{width:min(520px,calc(100vw - 24px));max-height:min(72vh,680px);overflow:hidden;display:flex;flex-direction:column;background:${REX.panel};color:${REX.text};border:1px solid ${REX.line};border-radius:14px;box-shadow:0 18px 60px ${REX.ink};font:13px/1.35 Inter,Segoe UI,system-ui,sans-serif}
+      .pi-head{display:flex;gap:10px;align-items:flex-start;padding:12px 12px 9px;border-bottom:1px solid ${REX.line}}.pi-head b{font-size:14px}.pi-title{min-width:0;flex:1}.pi-title small{display:block;color:${REX.muted};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}.pi-close{border:0;background:${REX.raised};color:${REX.text};border-radius:8px;width:28px;height:28px;cursor:pointer}
+      .pi-live{padding:8px 12px;background:${REX.raised};color:${REX.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pi-live strong{color:${REX.signal}}
+      .pi-tools{display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid ${REX.line}}.pi-tools span{margin-right:auto;color:${REX.muted}}.pi-tools button{border:1px solid ${REX.line};background:${REX.raised};color:${REX.text};border-radius:8px;padding:5px 8px;cursor:pointer}.pi-tools button:hover{background:${REX.raised}}
+      .pi-list{overflow:auto;padding:6px}.pi-group{border-bottom:1px solid ${REX.line}}.pi-group summary{cursor:pointer;padding:8px;color:${REX.text};font-weight:600}.pi-group summary span{float:right;color:${REX.muted}}.pi-row{display:grid;grid-template-columns:24px 1fr;align-items:center;padding:3px 4px}.pi-row input{accent-color:${REX.signal}}.pi-open{width:100%;border:0;background:transparent;color:inherit;display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;padding:7px;border-radius:8px;cursor:pointer}.pi-open:hover{background:${REX.raised}}.pi-dot{width:8px;height:8px;border-radius:50%;background:${REX.muted}}.pi-copy{min-width:0}.pi-copy strong,.pi-copy small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pi-copy small{color:${REX.muted};font-size:11px;margin-top:2px}.pi-state{font-size:11px;color:${REX.muted}}.pi-none{color:${REX.muted};padding:4px 12px 10px}
+      [data-state="prepared"] .pi-dot{background:${REX.signal}}[data-state="loading"] .pi-dot{background:${REX.live}}[data-state="queued"] .pi-dot{background:${REX.live}}[data-state="backoff"] .pi-dot{background:${REX.live}}[data-state="blocked"] .pi-dot{background:${REX.muted}}
+      [data-priority="high"] .pi-state{color:${REX.signal}}[data-priority="maximum"] .pi-state{color:${REX.live}}
     </style>
     <section class="pi" role="dialog" aria-label="LinkPeek preload inspector">
       <header class="pi-head"><div class="pi-title"><b>Preload Inspector</b><small>${escapeHtml(document.title || location.href)}</small></div><button class="pi-close" data-action="close" aria-label="Close preload inspector">×</button></header>
@@ -139,6 +146,12 @@ export class PreloadInspector {
       <div class="pi-tools"><span>${selected} selected</span><button data-action="normal">Normal</button><button data-action="high">High</button><button data-action="maximum">Maximum</button></div>
       <div class="pi-list">${GROUPS.map(([state, title]) => groupMarkup(state, title, entries, this.selected)).join("")}</div>
     </section>`;
+    this.shadow.querySelector(".pi-list")!.scrollTop = scrollTop;
+    this.shadow.querySelectorAll<HTMLDetailsElement>(".pi-group").forEach((group, index) => { group.open = !collapsed[index]; });
+    if (focusKey) {
+      [...this.shadow.querySelectorAll<HTMLElement>("[data-select],[data-open],[data-action]")]
+        .find(element => (element.dataset.select ?? element.dataset.open ?? element.dataset.action) === focusKey)?.focus({preventScroll: true});
+    }
     this.applyOutlines(entries);
   }
 
@@ -152,7 +165,11 @@ export class PreloadInspector {
     const byUrl = new Map(entries.map(entry => [entry.url, entry]));
     for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
       const entry = byUrl.get(anchor.href);
-      if (!entry) continue;
+      if (!entry) {
+        delete anchor.dataset.linkpeekPreloadState;
+        delete anchor.dataset.linkpeekPreloadPriority;
+        continue;
+      }
       anchor.dataset.linkpeekPreloadState = entry.state;
       anchor.dataset.linkpeekPreloadPriority = entry.priority;
     }

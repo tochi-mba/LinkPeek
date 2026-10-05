@@ -67,6 +67,16 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 let idle: Array<() => void>, budget: Partial<Budget>;
 
 describe("the media preloader", () => {
+  it("retries an image after a transient failure", async () => {
+    const p = new MediaPreloader(() => budget as Budget);
+    const failed = p.ensure(item(0));
+    FakeImage.all[0].fail();
+    expect(await failed).toBe(false);
+    const retried = p.ensure(item(0));
+    expect(FakeImage.all).toHaveLength(2);
+    FakeImage.all[1].load();
+    expect(await retried).toBe(true);
+  });
   beforeEach(() => {
     FakeImage.all = [];
     idle = [];

@@ -427,12 +427,30 @@ describe("keyboard", () => {
     await flush();
     expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
 
-    // Re-show the recursive result to model returning to that gallery, then previous starts at the child page's end.
-    viewer.show(recursive);
-    (controller as any).openUrl = root.href;
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().at(-1)!.url).toBe("https://dest.test/child/b");
+    expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
     expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
     await flush();
     expect(scans().at(-1)!.url).toBe("https://dest.test/child/c");
+  });
+
+  it("opens the inspector only after a complete chord and leaves Cut untouched", async () => {
+    await boot();
+    expect(key("x").defaultPrevented).toBe(false);
+    expect(controller.inspector.isOpen).toBe(false);
+    expect(key("x", {ctrlKey: true}).defaultPrevented).toBe(false);
+    expect(key("x").defaultPrevented).toBe(true);
+    expect(controller.inspector.isOpen).toBe(true);
+    expect(key("Escape").defaultPrevented).toBe(true);
+    key("x", {ctrlKey: true});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(key("x").defaultPrevented).toBe(false);
+    key("x", {ctrlKey: true});key("z");
+    expect(key("x").defaultPrevented).toBe(false);
   });
 
   it("moves between prepared links with N and Shift+N, in page order, wrapping", async () => {

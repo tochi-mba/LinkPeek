@@ -47,6 +47,12 @@ afterEach(() => vi.unstubAllGlobals());
 const runIdle = (timeRemaining = 50, didTimeout = false) => idle.shift()!({didTimeout, timeRemaining: () => timeRemaining});
 
 describe("warming preview images", () => {
+  it("retries failed warming on later intent", () => {
+    const warmer = new ImageWarmer(budget);
+    warmer.warm(["retry"], "now");FakeImage.all[0].fail();
+    warmer.warm(["retry"], "now");
+    expect(started()).toEqual(["retry", "retry"]);
+  });
   it("downloads urgent images at once within the concurrency limit, decoding the first", async () => {
     const warmer = new ImageWarmer(budget);
     warmer.warm(["a", "b", "c", ""], "now", true);

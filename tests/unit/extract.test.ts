@@ -59,9 +59,11 @@ describe("posted media", () => {
   });
 
   it("filters by type and by declared size", () => {
+    expect(extractMediaFromHtml('<a class="lightbox" href="javascript:alert(1)"><img src="data:image/png;base64,x"></a>', base)).toEqual([]);
     const html = `<img src="/a.gif"><img src="/b.webp"><img src="/c.avif"><img src="/d.svg"><img src="/e.jpg"><img src="/small.jpg" width="49" height="400"><img src="/edge.jpg" width="50" height="400"><img src="/short.jpg" height="10"><a class="lightbox" href="/tiny.jpg"><img src="/t.jpg" width="20"></a>`;
     const paths = (options = {}) => extractMediaFromHtml(html, base, {}, options).map(item => new URL(item.originalUrl).pathname);
-    expect(paths()).toEqual(["/a.gif", "/b.webp", "/c.avif", "/e.jpg", "/edge.jpg"]);
+    // A small lightbox thumbnail is not evidence that its linked original is small.
+    expect(paths()).toEqual(["/a.gif", "/b.webp", "/c.avif", "/e.jpg", "/edge.jpg", "/tiny.jpg"]);
     expect(paths({includeGif: false, includeWebp: false, includeAvif: false, includeSvg: true, includeImages: false})).toEqual(["/d.svg"]);
     expect(paths({minWidth: 0, minHeight: 0})).toContain("/small.jpg");
     expect(paths({minWidth: 51, minHeight: 0})).not.toContain("/edge.jpg");

@@ -21,7 +21,7 @@ import {VirtualGrid} from "./virtual-grid";
 
 type GifPlayerLike = {init: () => Promise<void>; destroy: () => void; key: (event: KeyboardEvent) => boolean};
 export type GifModule = {
-  GifPlayer: new (stage: HTMLElement, url: string, settings: LinkPeekSettings, onNotice?: (message: string) => void) => GifPlayerLike;
+  GifPlayer: new (stage: HTMLElement, url: string, settings: LinkPeekSettings, onNotice?: (message: string) => void, onWidth?: (width: number) => void) => GifPlayerLike;
   prepareGif: (url: string, maxMb: number) => Promise<unknown>;
 };
 export type View = markup.View;
@@ -451,7 +451,7 @@ export class Viewer {
         cell: this.gridThumbSize, current: this.index, onPick: index => this.pick(index),
         onWidth: (index, width) => {
           const candidate = this.result?.items[index];
-          if (candidate?.previewUrl === candidate.originalUrl) this.rejectIfTooNarrow(candidate, width, this.renderVersion);
+          if (candidate && candidate.previewUrl === candidate.originalUrl) this.rejectIfTooNarrow(candidate, width, version);
         }
       });
       return;
@@ -558,9 +558,8 @@ export class Viewer {
       else image.addEventListener("load", check, {once: true});
       return;
     }
-    const probe = new Image();
-    probe.addEventListener("load", () => this.rejectIfTooNarrow(item, probe.naturalWidth, version), {once: true});
-    probe.src = item.originalUrl;
+    // A thumbnail says nothing about the original's dimensions. Do not download
+    // full-resolution stills just to measure them. GIFs report their decoded size.
   }
 
   private loadGifModule() {
@@ -572,7 +571,7 @@ export class Viewer {
     try {
       const module = await this.loadGifModule();
       if (version !== this.renderVersion || this.view !== "focus" || this.result?.items[this.index] !== item) return;
-      const player = new module.GifPlayer(this.stage!, item.originalUrl, this.settings, message => this.toast(message));
+      const player = new module.GifPlayer(this.stage!, item.originalUrl, this.settings, message => this.toast(message), width => this.rejectIfTooNarrow(item, width, version));
       this.gifPlayer = player;
       await player.init();
     } catch (error) {

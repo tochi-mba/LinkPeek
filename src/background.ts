@@ -8,7 +8,7 @@
 import {ByteCache} from "./background/byte-cache";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
-import {fetchWithRetry} from "./core/http";
+import {fetchWithRetry, readBytesCapped} from "./core/http";
 import type {LinkKind, ScanResult} from "./shared/media";
 import type {BackgroundRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
@@ -70,24 +70,29 @@ function bytesToBase64(buffer: ArrayBuffer) {
 
 /** Fetches media bytes for the GIF frame player, which cannot read cross-origin pixels itself. */
 function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
-  const cached = binaries.get(url);
-  if (cached) return Promise.resolve(cached);
-  const pending = binaryTasks.get(url);
-  if (pending) return pending;
+  const maxBytes = Math.max(1, Math.min(100, Number.isFinite(maxMb) ? maxMb : 32)) * 1024 * 1024;
+  const key = url;
+  const withinLimit = (entry: BinaryEntry) => {
+    if (entry.bytes > maxBytes) throw new Error("GIF is larger than the configured frame-control limit");
+    return entry;
+  };
+  const cached = binaries.get(key);
+  if (cached) return Promise.resolve(cached).then(withinLimit);
+  const pending = binaryTasks.get(key);
+  if (pending) return pending.then(withinLimit);
   const task = (async () => {
     const parsed = new URL(url);
     if (!/^https?:$/.test(parsed.protocol)) throw new Error("Unsupported media URL");
-    const maxBytes = Math.max(1, Math.min(100, maxMb)) * 1024 * 1024, tooLarge = "GIF is larger than the configured frame-control limit";
-    const response = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, "interactive");
+    const tooLarge = "GIF is larger than the configured frame-control limit";
+    const entry = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, "interactive", undefined, async response => {
     if (!response.ok) throw new Error(`HTTP ${response.status} for media`);
-    if (Number(response.headers.get("content-length") || 0) > maxBytes) throw new Error(tooLarge);
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > maxBytes) throw new Error(tooLarge);
-    const entry: BinaryEntry = {base64: bytesToBase64(buffer), mime: response.headers.get("content-type") || "application/octet-stream", bytes: buffer.byteLength};
-    binaries.set(url, entry, entry.bytes, BINARY_BUDGET);
+    const buffer = await readBytesCapped(response, maxBytes, tooLarge);
+    return {base64: bytesToBase64(buffer), mime: response.headers.get("content-type") || "application/octet-stream", bytes: buffer.byteLength};
+    });
+    binaries.set(key, entry, entry.bytes, BINARY_BUDGET);
     return entry;
-  })().finally(() => binaryTasks.delete(url));
-  binaryTasks.set(url, task);
+  })().finally(() => binaryTasks.delete(key));
+  binaryTasks.set(key, task);
   return task;
 }
 

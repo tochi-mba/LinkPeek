@@ -35,9 +35,10 @@ function topicJsonUrl(raw: string) {
 
 async function fetchText(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {
   ensureNotAborted(signal);
-  const response = await fetchWithRetry(url, {credentials: "include", redirect: "follow", signal}, retryMode);
-  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
-  return response.text();
+  return fetchWithRetry(url, {credentials: "include", redirect: "follow", signal}, retryMode, undefined, async response => {
+    if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+    return response.text();
+  });
 }
 
 async function fetchJson(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {
@@ -96,7 +97,7 @@ function hitLimit(result: ScanResult) {
 
 /** The post ids this scan covers, honouring the thread scope and post limit. */
 function scopedStream(topic: DTopic, settings: LinkPeekSettings | undefined, maxPosts: number) {
-  const initial = topic.post_stream?.posts ?? [], all = topic.post_stream?.stream ?? [];
+  const initial = topic.post_stream?.posts ?? [], all = topic.post_stream?.stream ?? initial.map(post => post.id);
   const limit = settings?.scanScope === "first" ? Math.min(maxPosts, 50) : maxPosts;
   return {limit, stream: (settings?.scanScope === "page" ? initial.map(post => post.id) : all).slice(0, limit)};
 }
@@ -105,7 +106,8 @@ function initialState(raw: string, topic: DTopic, stream: number[], settings?: L
   const topicUrl = new URL(raw);
   topicUrl.hash = "";
   topicUrl.search = "";
-  const posts = [...new Map((topic.post_stream?.posts ?? []).map(post => [post.id, post])).values()].sort((a, b) => a.post_number - b.post_number);
+  const selected = new Set(stream);
+  const posts = [...new Map((topic.post_stream?.posts ?? []).filter(post => selected.has(post.id)).map(post => [post.id, post])).values()].sort((a, b) => a.post_number - b.post_number);
   const items = mediaFromPosts(posts, topicUrl.href, settings);
   return {topicUrl: topicUrl.href, posts, items, result: toResult(raw, topic, items, posts.length, stream.length, settings, posts.length >= stream.length, warning)};
 }

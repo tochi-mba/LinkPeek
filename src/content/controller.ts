@@ -35,6 +35,8 @@ export class PreviewController {
   private positions = new Map<string, number>();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
+  private inspectorChordKey = "";
+  private recursiveLinks?: string[];
   private disposers: Array<() => void> = [];
   readonly viewer: Viewer;
   readonly governor: ResourceGovernor;
@@ -210,6 +212,7 @@ export class PreviewController {
     this.intent.clearTimers();
     this.openAnchor = null;
     this.openUrl = null;
+    this.recursiveLinks = undefined;
   }
 
   private onPointerDown(event: PointerEvent) {
@@ -238,15 +241,20 @@ export class PreviewController {
   /** Ctrl+X, then X toggles the live preload inspector. Escape closes it. */
   private inspectorKey(event: KeyboardEvent) {
     if (this.inspector.key(event)) return true;
-    if (isTypingEvent(event)) return false;
-    const x = event.key.toLowerCase() === "x", now = performance.now();
-    if (x && event.ctrlKey && !event.altKey && !event.metaKey) {
-      this.inspectorChordUntil = now + 900;
-      return true;
+    if (!this.pageSettings().enabled || isTypingEvent(event)) {
+      this.inspectorChordUntil = 0;
+      return false;
     }
-    const armed = this.inspectorChordUntil >= now;
+    const now = performance.now();
+    if (!event.repeat && matchesCombo(event, this.pageSettings().shortcuts.preloadInspector)) {
+      this.inspectorChordKey = event.key.toLowerCase();
+      this.inspectorChordUntil = now + this.pageSettings().inspectorChordMs;
+      // Merely arming the chord must not steal Cut from the page.
+      return false;
+    }
+    const armed = this.inspectorChordUntil > 0 && this.inspectorChordUntil >= now;
     this.inspectorChordUntil = 0;
-    if (armed && x && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    if (armed && event.key.toLowerCase() === this.inspectorChordKey && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
       this.inspector.toggle();
       return true;
     }
@@ -288,19 +296,22 @@ export class PreviewController {
   /** Opens the next link in a recursively fetched child page, when the current media came from one. */
   private openAdjacentRecursive(direction: 1 | -1) {
     const result = this.viewer.result, item = result?.items[this.viewer.index];
-    if (!result || !item || item.sourceUrl === result.url) return false;
-    const context = result.linkContexts?.find(entry => entry.sourceUrl === item.sourceUrl);
-    if (!context?.links.length) return false;
+    if (!this.recursiveLinks && result && item && item.sourceUrl !== result.url) {
+      this.recursiveLinks = result.linkContexts?.find(entry => entry.sourceUrl === item.sourceUrl)?.links;
+    }
+    const links = this.recursiveLinks?.filter(url => this.settingsFor(Object.assign(document.createElement("a"), {href: url})));
+    if (!links?.length) return false;
     const current = this.openUrl;
-    const index = current ? context.links.indexOf(current) : -1;
-    const url = context.links[index < 0 ? (direction > 0 ? 0 : context.links.length - 1) : (index + direction + context.links.length) % context.links.length];
+    const index = current ? links.indexOf(current) : -1;
+    if (links.length === 1 && index === 0) return false;
+    const url = links[index < 0 ? (direction > 0 ? 0 : links.length - 1) : (index + direction + links.length) % links.length];
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.textContent = new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname;
     if (!this.settingsFor(anchor)) return false;
     this.intent.setCurrent(anchor);
     this.viewer.cancelClose();
-    void this.activate(anchor, clamp(innerWidth / 2, 8, innerWidth - 8), clamp(innerHeight / 2, 8, innerHeight - 8));
+    void this.activate(anchor, clamp(innerWidth / 2, 8, innerWidth - 8), clamp(innerHeight / 2, 8, innerHeight - 8), true);
     return true;
   }
 
@@ -345,9 +356,10 @@ export class PreviewController {
     this.cancelScan(scan);
   }
 
-  async activate(anchor: HTMLAnchorElement, x: number, y: number) {
+  async activate(anchor: HTMLAnchorElement, x: number, y: number, preserveContext = false) {
     this.intent.clearTimers();
     if (this.isOpenAnchor(anchor)) return;
+    if (!preserveContext) this.recursiveLinks = undefined;
     if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
     const settings = this.settingsFor(anchor);
     if (!settings) return;

@@ -56,6 +56,7 @@ export class LinkPrefetcher {
   private priorities = new Map<string, PreloadPriority>();
   private recursiveUrls = new Set<string>();
   private listeners = new Set<() => void>();
+  private generation = 0;
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
 
@@ -65,6 +66,16 @@ export class LinkPrefetcher {
   }
 
   private changed() {
+    // Bound history on infinite-scroll pages without discarding work still in flight.
+    if (this.states.size > RESULT_CACHE_SIZE * 3) {
+      for (const [url, state] of this.states) {
+        if (state === "loading" || state === "queued") continue;
+        this.states.delete(url);
+        this.requested.delete(url);
+        this.failedUntil.delete(url);
+        if (this.states.size <= RESULT_CACHE_SIZE * 3) break;
+      }
+    }
     for (const listener of this.listeners) listener();
   }
 
@@ -77,7 +88,7 @@ export class LinkPrefetcher {
     for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
       const url = anchor.href, allowed = Boolean(this.host.settingsFor(anchor));
       entries.set(url, {
-        url, label: anchor.textContent?.trim() || new URL(url).pathname || new URL(url).hostname,
+        url, label: anchor.textContent?.trim() || url,
         state: allowed ? this.stateFor(url) : "blocked", priority: this.priority(url), source: "page",
         retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
       });
@@ -96,7 +107,8 @@ export class LinkPrefetcher {
   private stateFor(url: string): PreloadState {
     if (this.results.has(url)) return "prepared";
     if ((this.failedUntil.get(url) ?? 0) > Date.now()) return "backoff";
-    return this.states.get(url) ?? "not-started";
+    const state = this.states.get(url);
+    return state === "backoff" || state === "prepared" ? "not-started" : state ?? "not-started";
   }
 
   setPriority(urls: Iterable<string>, priority: PreloadPriority) {
@@ -104,6 +116,7 @@ export class LinkPrefetcher {
     for (const url of selected) {
       if (priority === "normal") this.priorities.delete(url);
       else this.priorities.set(url, priority);
+      while (this.priorities.size > RESULT_CACHE_SIZE) this.priorities.delete(this.priorities.keys().next().value!);
     }
     this.changed();
     for (const url of selected) {
@@ -152,12 +165,14 @@ export class LinkPrefetcher {
 
   /** Forgets everything prepared, for example after settings change what a scan returns. */
   reset() {
+    this.generation++;
     this.requested.clear();
     this.results.clear();
     this.failedUntil.clear();
     this.childQueue.clear();
     this.states.clear();
     this.recursiveUrls.clear();
+    this.priorities.clear();
     this.changed();
     this.schedule();
   }
@@ -204,7 +219,12 @@ export class LinkPrefetcher {
     if (!result.items.length) return;
     this.results.delete(url);
     this.results.set(url, result);
-    while (this.results.size > RESULT_CACHE_SIZE) this.results.delete(this.results.keys().next().value!);
+    while (this.results.size > RESULT_CACHE_SIZE) {
+      const oldest = this.results.keys().next().value!;
+      this.results.delete(oldest);
+      this.requested.delete(oldest);
+      this.states.delete(oldest);
+    }
     this.states.set(url, "prepared");
     this.changed();
     if (queueChildren) this.queueChildLinks(result);
@@ -217,6 +237,7 @@ export class LinkPrefetcher {
       for (const url of context.links) {
         if (this.childQueue.size >= 32) break;
         this.recursiveUrls.add(url);
+        while (this.recursiveUrls.size > RESULT_CACHE_SIZE) this.recursiveUrls.delete(this.recursiveUrls.values().next().value!);
         if (!this.results.has(url) && !this.requested.has(url)) {
           this.childQueue.add(url);
           this.states.set(url, "queued");
@@ -265,7 +286,7 @@ export class LinkPrefetcher {
 
   private prepareNearest() {
     const budget = this.host.budget();
-    if (budget.nearbyLinks <= 0) return;
+    if (!budget.speculative || budget.nearbyLinks <= 0) return;
     const {x, y, vx, vy} = this.host.pointer();
     const aimX = Math.max(0, Math.min(innerWidth, x + vx * LOOKAHEAD_MS)), aimY = Math.max(0, Math.min(innerHeight, y + vy * LOOKAHEAD_MS));
     const ranked: Array<{anchor: HTMLAnchorElement; distance: number}> = [];
@@ -290,7 +311,10 @@ export class LinkPrefetcher {
   }
 
   private async slot(urgent: boolean) {
-    if (!urgent) while (this.inFlight >= this.host.budget().linkConcurrency) await new Promise<void>(resolve => this.waiters.push(resolve));
+    // Reserve one slot for pointer intent, not one unlimited slot per pointer event.
+    while (this.inFlight >= Math.max(1, this.host.budget().linkConcurrency) + (urgent ? 1 : 0)) {
+      await new Promise<void>(resolve => urgent ? this.waiters.unshift(resolve) : this.waiters.push(resolve));
+    }
     this.inFlight++;
   }
 
@@ -306,6 +330,8 @@ export class LinkPrefetcher {
   }
 
   private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, urgent: boolean, queueChildren: boolean) {
+    const generation = this.generation;
+    if (this.waiters.length >= RESULT_CACHE_SIZE) return;
     const previous = this.requested.get(url);
     if (document.hidden || previous === "deep" || (level === "shallow" && previous)) return;
     if ((this.failedUntil.get(url) ?? 0) > Date.now()) return;
@@ -314,14 +340,22 @@ export class LinkPrefetcher {
     this.changed();
     const request: PrefetchRequest = {type: "LINKPEEK_PREFETCH", url, kind: classifyLink(url), deep: level === "deep"};
     await this.slot(urgent);
+    if (generation !== this.generation || document.hidden || !this.host.budget().speculative) {
+      if (generation === this.generation) { this.requested.delete(url); this.states.delete(url); }
+      this.release();
+      return;
+    }
     this.states.set(url, "loading");
     this.changed();
     try {
       const result = await chrome.runtime.sendMessage(request) as ScanResult | null | {error: string};
+      if (generation !== this.generation) return;
       if (!result || "error" in result) throw new Error(result?.error ?? "No result");
       this.remember(url, result, queueChildren);
       this.warmThumbnails(result, urgent);
+      if (!result.items.length) { this.states.delete(url); this.changed(); }
     } catch {
+      if (generation !== this.generation) return;
       if (previous) this.requested.set(url, previous);
       else this.requested.delete(url);
       this.failedUntil.set(url, Date.now() + RETRY_AFTER_MS);

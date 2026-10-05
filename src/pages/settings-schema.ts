@@ -51,7 +51,8 @@ export const SECTIONS: SectionSpec[] = [
       {key: "closeOnOutsideClick", label: "Close when clicking elsewhere", help: "Clicking anywhere outside the preview closes it, unless it is pinned."},
       {key: "magneticBridge", label: "Forgiving path to the panel", help: "Keep the preview open while the pointer travels from the link into the panel, even across other content."},
       {key: "magneticBridgeStrength", label: "Path width", help: "How far off the direct path the pointer can wander on its way to the panel.", control: "range", percent: true, advanced: true},
-      {key: "cancelMovePx", label: "Movement that restarts the timer", help: "Moving this far across a link while waiting restarts the hover delay, so sweeping over large links does not open them.", unit: "px", advanced: true}
+      {key: "cancelMovePx", label: "Movement that restarts the timer", help: "Moving this far across a link while waiting restarts the hover delay, so sweeping over large links does not open them.", unit: "px", advanced: true},
+      {key: "inspectorChordMs", label: "Inspector shortcut interval", help: "Time to press the inspector key again without modifiers after its shortcut. Default: Ctrl+X, then X.", unit: "ms", advanced: true}
     ]
   },
   {
@@ -191,7 +192,7 @@ export const SHORTCUT_LABELS: Record<keyof LinkPeekSettings["shortcuts"], string
   next: "Next media", previous: "Previous media", nextLink: "Next prepared link on the page", previousLink: "Previous prepared link on the page",
   grid: "Grid / single media", expand: "Expand / restore", pin: "Pin open", favorite: "Save link", open: "Open original",
   download: "Download original", copy: "Copy media link", slideshow: "Slideshow", zoomIn: "Zoom in (bigger tiles in grid)",
-  zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close"
+  zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close", preloadInspector: "Preload inspector (then press the same key without modifiers)"
 };
 
 export function fieldFor(key: SettingKey): FieldSpec | undefined {

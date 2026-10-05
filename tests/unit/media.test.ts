@@ -22,6 +22,9 @@ describe("link classification", () => {
   });
 
   it("never treats sign-out, delete or cart links as previewable", () => {
+    expect(classifyLink("/%6cogout", page)).toBe("unsafe");
+    expect(classifyLink("/?%61ction=%64elete", page)).toBe("unsafe");
+    expect(classifyLink("/bad%escape", page)).toBe("generic");
     for (const url of ["/logout", "/session/sign_out", "/user/logout.php", "/posts/9/delete", "/cart/add-to-cart", "/index.php?action=logout", "/x?do=delete&id=2"]) {
       expect(classifyLink(url, page), url).toBe("unsafe");
     }

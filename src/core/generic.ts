@@ -56,10 +56,9 @@ function directItem(response: Response, requested: string, type: MediaItem["type
 }
 
 async function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive"): Promise<PageScan> {
-  try {
     const credentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
     const timeout = clamp(settings?.fetchTimeout, 8000, 500, 30000);
-    const response = await fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal}, retryMode, timeout);
+    return fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal}, retryMode, timeout, async (response): Promise<PageScan> => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     if (type.startsWith("image/")) {
@@ -78,9 +77,7 @@ async function fetchPage(url: string, settings: LinkPeekSettings | undefined, si
     const html = await readTextCapped(response);
     const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
     return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, {}, settings), html};
-  } finally {
-    // fetchWithRetry owns per-attempt timers; the caller's AbortSignal owns cancellation.
-  }
+    });
 }
 
 /** Safe links in one fetched page, kept in document order for recursion and keyboard navigation. */
@@ -177,7 +174,7 @@ export async function scanGeneric(raw: string, settings?: LinkPeekSettings, sign
       for (const page of pages) {
         if (!page) continue;
         found.push(...page.items);
-        if (!page.direct && page.html) {
+        if (!page.direct && page.html !== undefined) {
           linkContexts.push({sourceUrl: page.finalUrl, links: pageLinks(page.html, page.finalUrl, rootOrigin, options)});
           if (depth < maxDepth) next.push(...linkedPages(page.html, page.finalUrl, rootOrigin, options, seen));
         }

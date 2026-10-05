@@ -92,7 +92,10 @@ export class ImageWarmer {
       if (task.decode) img.decode().catch(() => undefined).finally(finish);
       else finish();
     }, {once: true});
-    img.addEventListener("error", finish, {once: true});
+    img.addEventListener("error", () => {
+      if (this.retained.get(task.url) === img) this.retained.delete(task.url);
+      finish();
+    }, {once: true});
     img.src = task.url;
     this.retained.set(task.url, img);
     while (this.retained.size > RETAINED_IMAGES) this.retained.delete(this.retained.keys().next().value!);

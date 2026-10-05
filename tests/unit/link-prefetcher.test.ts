@@ -64,6 +64,31 @@ function prefetcher() {
 }
 
 describe("preparing nearby links", () => {
+  it("discards scans and failures from before a reset", async () => {
+    const p = prefetcher(), a = link("https://x.test/a"), b = link("https://x.test/b");
+    p.hover(a);p.hover(b);await flush();
+    p.reset();
+    pending[0].resolve(scan(a.href));pending[1].reject(new Error("old failure"));
+    await flush();
+    expect(p.preparedCount).toBe(0);
+    expect(warmer.warm).not.toHaveBeenCalled();
+    expect(p.snapshot().every(entry => entry.state === "not-started")).toBe(true);
+    p.hover(a);await flush();
+    expect(pending).toHaveLength(3);
+  });
+
+  it("bounds urgent concurrency and does not start queued work after disabling speculation", async () => {
+    const p = prefetcher();
+    const links = Array.from({length: 5}, (_, i) => link(`https://x.test/${i}`));
+    for (const a of links) p.hover(a);
+    await flush();
+    expect(pending).toHaveLength(2);
+    budget.speculative = false;
+    pending[0].resolve(scan(links[0].href));pending[1].resolve(scan(links[1].href));
+    await flush();
+    expect(pending).toHaveLength(2);
+  });
+
   it("prepares the links closest to where the pointer is heading, one request at a time", async () => {
     const far = link("https://x.test/far", 500), near = link("https://x.test/near", 100), ahead = link("https://x.test/ahead", 300);
     const p = prefetcher();

@@ -80,7 +80,7 @@ describe("reading a page", () => {
     vi.useFakeTimers();
     routes.set("https://a.test/slow", init => new Promise((_, reject) => init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")))));
     const pending = expect(scanGeneric("https://a.test/slow", settings({fetchTimeout: 1000}))).rejects.toThrow("Aborted");
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.runAllTimersAsync();
     await pending;
   });
 

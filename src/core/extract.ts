@@ -47,7 +47,8 @@ export function attribute(tag: string, name: string): string | undefined {
 
 function absolute(raw: string, base: string) {
   try {
-    return new URL(raw, base).href;
+    const url = new URL(raw, base);
+    return /^https?:$/.test(url.protocol) ? url.href : undefined;
   } catch {
     return undefined;
   }
@@ -116,7 +117,7 @@ function lightboxMedia(source: string, base: string, options: ExtractOptions, se
     if (!original || !extensionAllowed(original, options)) continue;
     const image = /<img\b[^>]*>/i.exec(block)?.[0] ?? "";
     const canonical = canonicalMediaUrl(original), id = mediaId(image, canonical);
-    if (seen.has(id) || seen.has(canonical) || tooSmall(image, options)) continue;
+    if (seen.has(id) || seen.has(canonical)) continue;
     const raw = image ? imageSource(image) : undefined, shown = raw ? absolute(raw, base) : undefined;
     seen.add(id);
     seen.add(canonical);

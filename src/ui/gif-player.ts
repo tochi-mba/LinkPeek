@@ -20,6 +20,8 @@ export type PreparedGif = {frames: DecodedFrame[]; width: number; height: number
 
 const preparedGifs = new Map<string, Promise<PreparedGif>>();
 const PREPARED_CACHE_MAX = 3;
+// Integrity limit on expanded pixels, independent of the compressed download limit.
+const MAX_DECODED_BYTES = 32 * 1024 * 1024;
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 4];
 
 /** Browsers clamp very short GIF delays; 20 ms is the fastest frame worth honouring. */
@@ -53,26 +55,34 @@ export function clearPreparedGifCache() {
 
 /** Fetches and decodes a GIF once; the few most recent stay ready for instant replay. */
 export function prepareGif(url: string, maxMb: number): Promise<PreparedGif> {
-  const existing = preparedGifs.get(url);
+  const key = `${maxMb}:${url}`;
+  const existing = preparedGifs.get(key);
   if (existing) {
-    preparedGifs.delete(url);
-    preparedGifs.set(url, existing);
+    preparedGifs.delete(key);
+    preparedGifs.set(key, existing);
     return existing;
   }
   const promise = (async () => {
     const response = await chrome.runtime.sendMessage({type: "LINKPEEK_FETCH_BINARY", url, maxMb}) as BinaryResponse | undefined;
     if (!response || "error" in response) throw new Error(response?.error || "GIF data unavailable");
-    const parsed = parseGIF(decodeBase64(response.base64).buffer) as {lsd?: {width?: number; height?: number}};
-    const frames = decompressFrames(parsed as never, true) as DecodedFrame[];
+    const parsed = parseGIF(decodeBase64(response.base64).buffer);
+    const screenBytes = (parsed.lsd?.width ?? 0) * (parsed.lsd?.height ?? 0) * 4;
+    const frameBytes = parsed.frames.reduce((sum, frame) => {
+      if (!("image" in frame)) return sum;
+      // The decoder temporarily holds unpacked pixel indices as well as RGBA patches.
+      return sum + frame.image.descriptor.width * frame.image.descriptor.height * 16;
+    }, 0);
+    if (screenBytes * 3 + frameBytes > MAX_DECODED_BYTES) throw new Error("GIF is too large for frame controls; using native playback");
+    const frames: DecodedFrame[] = decompressFrames(parsed, true).map(({dims, patch, delay, disposalType}) => ({dims, patch, delay, disposalType}));
     if (!frames.length) throw new Error("No GIF frames found");
     const width = Number(parsed.lsd?.width) || Math.max(...frames.map(frame => frame.dims.left + frame.dims.width));
     const height = Number(parsed.lsd?.height) || Math.max(...frames.map(frame => frame.dims.top + frame.dims.height));
     return {frames, width, height};
   })().catch(error => {
-    preparedGifs.delete(url);
+    preparedGifs.delete(key);
     throw error;
   });
-  preparedGifs.set(url, promise);
+  preparedGifs.set(key, promise);
   while (preparedGifs.size > PREPARED_CACHE_MAX) preparedGifs.delete(preparedGifs.keys().next().value!);
   return promise;
 }
@@ -99,7 +109,7 @@ export class GifPlayer {
   private speedSelect?: HTMLSelectElement;
   private timeLabel?: HTMLElement;
 
-  constructor(stage: HTMLElement, private url: string, private settings: LinkPeekSettings, private onNotice: (message: string) => void = () => undefined) {
+  constructor(stage: HTMLElement, private url: string, private settings: LinkPeekSettings, private onNotice: (message: string) => void = () => undefined, private onWidth: (width: number) => void = () => undefined) {
     this.mount = stage.querySelector(".lp-gif-mount") as HTMLElement;
     this.loop = settings.gifLoop;
     this.speed = settings.gifDefaultSpeed;
@@ -108,8 +118,12 @@ export class GifPlayer {
   async init() {
     // The native image plays straight away while frames decode in the background.
     this.mount.innerHTML = `<div class="lp-gif-native-prep"><img class="lp-image lp-gif-native" src="${escapeHtml(this.url)}" alt="Animated GIF"><span class="lp-gif-preparing">Preparing frame controls…</span></div>`;
+    const native = this.mount.querySelector<HTMLImageElement>("img")!;
+    native.addEventListener("load", () => { if (!this.destroyed) this.onWidth(native.naturalWidth); }, {once: true});
     try {
       const prepared = await prepareGif(this.url, this.settings.gifDecodeMaxMb);
+      if (this.destroyed) return;
+      this.onWidth(prepared.width);
       if (this.destroyed) return;
       this.frames = prepared.frames;
       this.build(prepared.width, prepared.height);

@@ -16,7 +16,7 @@ export type Placement = "auto" | "right" | "left" | "above" | "below";
 
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
-  "open", "download", "copy", "slideshow", "zoomIn", "zoomOut", "resetZoom", "help", "close"
+  "open", "download", "copy", "slideshow", "zoomIn", "zoomOut", "resetZoom", "help", "close", "preloadInspector"
 ] as const;
 export type ShortcutAction = typeof SHORTCUT_ACTIONS[number];
 export type Shortcuts = Record<ShortcutAction, string[]>;
@@ -27,6 +27,7 @@ export interface LinkPeekSettings {
   enabled: boolean;
   activationMode: ActivationMode;
   hoverDelay: number;
+  inspectorChordMs: number;
   quickOpenWhenStill: boolean;
   ignoreScrollHover: boolean;
   cancelMovePx: number;
@@ -159,13 +160,15 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   zoomOut: ["-"],
   resetZoom: ["0"],
   help: ["?"],
-  close: ["Escape"]
+  close: ["Escape"],
+  preloadInspector: ["Ctrl+x"]
 };
 
 export const DEFAULT_SETTINGS: LinkPeekSettings = {
   enabled: true,
   activationMode: "hover",
   hoverDelay: 300,
+  inspectorChordMs: 900,
   quickOpenWhenStill: true,
   ignoreScrollHover: true,
   cancelMovePx: 18,
@@ -322,6 +325,7 @@ export const SETTING_RANGES: Partial<Record<keyof LinkPeekSettings, NumberRange>
   maxZoom: {min: 1, max: 20, step: 0.5},
   panFriction: {min: 0.1, max: 2, step: 0.05},
   minWidth: {min: 0, max: 2000, step: 1},
+  inspectorChordMs: {min: 100, max: 5000, step: 50},
   minHeight: {min: 0, max: 2000, step: 10},
   recursiveMaxDepth: {min: 1, max: 3, step: 1},
   recursiveMaxPages: {min: 1, max: 50, step: 1},

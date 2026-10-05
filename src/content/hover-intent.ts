@@ -97,6 +97,7 @@ export class HoverIntent {
       this.clearTimer("armTimer");
       this.clearTimer("stillTimer");
       this.clearTimer("lingerTimer");
+      this.clearTimer("rearmTimer");
     }
   }
 

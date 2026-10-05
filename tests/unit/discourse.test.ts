@@ -5,6 +5,15 @@ import {DEFAULT_SETTINGS} from "../../src/shared/settings";
 const makePost=(id:number)=>({id,post_number:id,username:"u",cooked:`<img src="https://files.example/${id}.jpg" width="800" height="600">`});
 
 describe("Discourse topic scanning",()=>{
+  it("applies scope to initial posts and never mistakes unrelated cached posts for completion",async()=>{
+    const topic={id:700,post_stream:{stream:[1,2,3],posts:[makePost(2),makePost(3)]}};
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify(topic))));
+    const {result}=await prefetchDiscourse("https://forum.example/t/topic/700",{...DEFAULT_SETTINGS,maxPosts:1});
+    expect(result.items).toEqual([]);expect(result.complete).toBe(false);expect(result.totalPosts).toBe(1);
+    topic.post_stream.posts=[makePost(1),makePost(2)];
+    const scoped=await prefetchDiscourse("https://forum.example/t/topic/700",{...DEFAULT_SETTINGS,maxPosts:1});
+    expect(scoped.result.items).toHaveLength(1);expect(scoped.result.complete).toBe(true);
+  });
   afterEach(()=>vi.unstubAllGlobals());
   it("parses modern data-preloaded topic payloads",()=>{
     const topic={id:700,title:"Fixture",post_stream:{stream:[11],posts:[{id:11,post_number:29,username:"user",cooked:"<p>hello</p>",post_url:"/t/fixture/700/29"}]}};
@@ -208,7 +217,7 @@ describe("Discourse fallback and scope coverage",()=>{
     expect(a.postsScanned).toBe(1);expect(a.complete).toBe(true);
     const missingStream={topic:{id:91,title:"Missing stream",post_stream:{posts:[makePost(1)]}}};
     const b=await scanDiscourse("https://forum.example/t/missing-stream/91",50,10,undefined,missingStream);
-    expect(b.totalPosts).toBe(0);expect(b.items).toHaveLength(1);
+    expect(b.totalPosts).toBe(1);expect(b.items).toHaveLength(1);
     const noStream={topic:{id:92,title:"No stream"}};
     const d=await scanDiscourse("https://forum.example/t/no-stream/92",50,10,undefined,noStream);
     expect(d.totalPosts).toBe(0);expect(d.items).toEqual([]);

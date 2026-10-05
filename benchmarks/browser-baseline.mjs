@@ -78,7 +78,7 @@ try{
   const sw=context.serviceWorkers()[0]??await context.waitForEvent("serviceworker");
   results.browser.launch_to_service_worker_ms=round(performance.now()-launchStart);
   const extensionId=new URL(sw.url()).host;
-  await sw.evaluate(async()=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),prefetch:"off",showLearningTips:false,minWidth:0,minHeight:0}})});
+  await sw.evaluate(async()=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),prefetch:"off",showLearningTips:false,minWidth:0,minHeight:0,maxMediaItems:1000}})});
   for(const p of context.pages())await p.close().catch(()=>{});
   const page=await context.newPage();
   const navStart=performance.now();await page.goto(base,{waitUntil:"domcontentloaded"});
@@ -183,7 +183,7 @@ try{
   }
   await leave();await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_close_gc=await heap();
 
-  await patchSettings({gifAutoplay:"never"});await page.reload({waitUntil:"domcontentloaded"});await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
+  await patchSettings({gifAutoplay:false});await page.reload({waitUntil:"domcontentloaded"});await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-root")));
   await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.before_gif_decode=await heap();
   t=performance.now();await page.locator("#gif").hover();await page.waitForFunction(()=>Array.from(document.documentElement.children).some(n=>n.shadowRoot?.querySelector(".lp-gif-controls")),null,{timeout:10000});
   results.latency.gif_hover_to_controls_ms=round(performance.now()-t);await cdp.send("HeapProfiler.collectGarbage").catch(()=>{});results.memory.after_gif_decode=await heap();

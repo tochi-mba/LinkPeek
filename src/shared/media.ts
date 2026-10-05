@@ -53,7 +53,9 @@ const STATE_CHANGING_PATH = /(?:^|\/)(?:log[-_]?out|sign[-_]?out|signoff|delete|
 const STATE_CHANGING_QUERY = /(?:^|&)(?:action|do|act|op|cmd)=(?:log-?out|sign-?out|delete|remove|unsubscribe|vote|purchase)(?:&|$)/i;
 
 export function isStateChangingUrl(url: URL) {
-  return STATE_CHANGING_PATH.test(url.pathname) || STATE_CHANGING_QUERY.test(url.search.slice(1));
+  let path = url.pathname;
+  try { path = decodeURIComponent(path); } catch { /* Invalid escapes remain literal. */ }
+  return STATE_CHANGING_PATH.test(path) || [...url.searchParams].some(([key, value]) => STATE_CHANGING_QUERY.test(`${key}=${value}`));
 }
 
 /** Decides how LinkPeek treats a link before anything is fetched. */

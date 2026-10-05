@@ -69,7 +69,7 @@ beforeEach(() => {
       init = vi.fn(async () => undefined);
       destroy = vi.fn();
       key = vi.fn((event: KeyboardEvent) => event.key === " ");
-      constructor(public stage: HTMLElement, public url: string, public settings: unknown, public notice: (m: string) => void) {
+      constructor(public stage: HTMLElement, public url: string, public settings: unknown, public notice: (m: string) => void, public width: (n: number) => void) {
         gifPlayers.push(this);
       }
     } as unknown as GifModule["GifPlayer"],
@@ -149,7 +149,7 @@ describe("showing results", () => {
     image.dispatchEvent(new Event("load"));
     expect(viewer.result!.items.map(entry => entry.id)).toEqual(["i1"]);
     expect(count()).toBe("1 / 1");
-    expect(q(".lp-image")!.getAttribute("src")).toBe("https://x.test/p1");
+    expect(q(".lp-image")!.getAttribute("src")).toBe("https://x.test/o1");
   });
 
   it("uses a decoded image when one is ready", () => {
@@ -287,18 +287,10 @@ describe("minimum media width runtime checks", () => {
     Object.defineProperty(visible, "naturalWidth", {configurable: true, value: 45});
     visible.dispatchEvent(new Event("load"));
     expect(viewer.result!.items).toHaveLength(1);
-    expect(probes.at(-1)!.src).toBe("https://x.test/full.jpg");
-    probes.at(-1)!.load!();
-    expect(viewer.result!.items).toHaveLength(1);
-
-    probes.at(-1)!.naturalWidth = 45;
-    const internal = viewer as unknown as {renderVersion: number; watchActualWidth: (item: MediaItem, version: number) => void};
-    internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
-    probes.at(-1)!.load!();
-    expect(viewer.result!.items).toHaveLength(0);
+    expect(probes).toHaveLength(0);
   });
 
-  it("checks GIF intrinsic width and skips runtime checks when disabled or no element exists", () => {
+  it("checks GIF intrinsic width and skips runtime checks when disabled or no element exists", async () => {
     const probes: Array<{naturalWidth: number; load?: () => void}> = [];
     class Probe {
       naturalWidth = 45;
@@ -313,7 +305,9 @@ describe("minimum media width runtime checks", () => {
     }
     vi.stubGlobal("Image", Probe);
     open({minWidth: 50}).show({...result(1), items: [item(0, "gif")]});
-    probes.at(-1)!.load!();
+    await flush();
+    gifPlayers.at(-1)!.width(45);
+    expect(probes).toHaveLength(0);
     expect(viewer.result!.items).toHaveLength(0);
 
     open({minWidth: 0}).show(result(1));

@@ -1,57 +1,59 @@
-/** Shared resilient GET policy for scanners. */
+/** Bounded retries for idempotent requests, including consumption of their bodies. */
 const TRANSIENT = new Set([408, 425, 429, 500, 502, 503, 504]);
-
 export type RetryMode = "interactive" | "background";
 
-type RetryPlan = {
-  attempts: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-  maxElapsedMs: number;
-  attemptTimeoutMs: number;
-};
-
-const PLANS: Record<RetryMode, RetryPlan> = {
-  // Hover/open work is intentionally patient. Explicit cancellation still stops immediately.
-  interactive: {attempts: 10, baseDelayMs: 400, maxDelayMs: 15_000, maxElapsedMs: 90_000, attemptTimeoutMs: 15_000},
-  // Speculative work backs off sooner so it never competes aggressively with the user.
-  background: {attempts: 4, baseDelayMs: 700, maxDelayMs: 5_000, maxElapsedMs: 15_000, attemptTimeoutMs: 8_000}
+/** Stops an unknown-length download before allocating more than its byte limit. */
+export async function readBytesCapped(response: Response, maxBytes: number, message: string) {
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    await response.body?.cancel();
+    throw new Error(message);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return new ArrayBuffer(0);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) { await reader.cancel(); throw new Error(message); }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes.buffer;
+}
+const PLANS = {
+  interactive: {attempts: 5, baseDelayMs: 400, maxDelayMs: 8000, maxElapsedMs: 30_000, attemptTimeoutMs: 8000},
+  background: {attempts: 3, baseDelayMs: 700, maxDelayMs: 3000, maxElapsedMs: 12_000, attemptTimeoutMs: 4000}
 };
 
 function aborted() {
   return new DOMException("Aborted", "AbortError");
 }
 
-function isAbort(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-/** Retry-After wins; otherwise equal-jitter exponential backoff avoids synchronized retry storms. */
-export function retryDelayMs(
-  response: Response | undefined,
-  attempt: number,
-  mode: RetryMode = "interactive",
-  now = Date.now(),
-  random = Math.random
-) {
-  const plan = PLANS[mode], raw = response?.headers.get("retry-after");
-  if (raw) {
+/** Never retry earlier than Retry-After; a delay beyond our budget ends the request. */
+export function retryDelayMs(response: Response | undefined, attempt: number, mode: RetryMode = "interactive", now = Date.now(), random = Math.random) {
+  const raw = response?.headers.get("retry-after");
+  if (raw?.trim()) {
     const seconds = Number(raw);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(plan.maxDelayMs, seconds * 1000);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
     const date = Date.parse(raw);
-    if (Number.isFinite(date)) return Math.min(plan.maxDelayMs, Math.max(0, date - now));
+    if (Number.isFinite(date)) return Math.max(0, date - now);
   }
-  const ceiling = Math.min(plan.maxDelayMs, plan.baseDelayMs * (2 ** attempt));
-  return Math.round(ceiling / 2 + random() * ceiling / 2);
+  const plan = PLANS[mode], ceiling = Math.min(plan.maxDelayMs, plan.baseDelayMs * 2 ** attempt);
+  return Math.round(ceiling * (0.5 + random() / 2));
 }
 
-async function sleep(ms: number, signal?: AbortSignal) {
+async function sleep(ms: number, signal?: AbortSignal | null) {
   if (signal?.aborted) throw aborted();
   await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(aborted());
-    };
+    const onAbort = () => { clearTimeout(timer); reject(aborted()); };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
@@ -60,51 +62,39 @@ async function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-async function oneAttempt(url: string, init: RequestInit, timeoutMs: number) {
-  if (init.signal?.aborted) throw aborted();
-  const controller = new AbortController(), external = init.signal;
-  const onAbort = () => controller.abort();
-  external?.addEventListener("abort", onAbort, {once: true});
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {...init, signal: controller.signal});
-  } catch (error) {
-    if (external?.aborted) throw aborted();
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    external?.removeEventListener("abort", onAbort);
-  }
-}
-
-/**
- * Retries idempotent GETs on rate limits, temporary server errors, timeouts and
- * network failures. Permanent HTTP errors return immediately. Interactive work
- * is deliberately patient; cancellation from the caller always wins.
- */
-export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: RetryMode = "interactive", attemptTimeoutMs?: number) {
-  const plan = PLANS[mode], started = Date.now(), timeout = Math.max(500, attemptTimeoutMs ?? plan.attemptTimeoutMs);
-  let lastError: unknown;
+/** Pass a reader to keep timeout and cancellation active until the body is consumed. */
+export async function fetchWithRetry<T = Response>(
+  url: string, init: RequestInit = {}, mode: RetryMode = "interactive", attemptTimeoutMs?: number,
+  read: (response: Response) => Promise<T> = async response => response as T
+): Promise<T> {
+  const plan = PLANS[mode], started = Date.now();
+  const timeout = Math.max(500, attemptTimeoutMs ?? plan.attemptTimeoutMs);
+  const attempts = /^(GET|HEAD)$/i.test(init.method ?? "GET") ? plan.attempts : 1;
   for (let attempt = 0; ; attempt++) {
+    if (init.signal?.aborted) throw aborted();
+    const controller = new AbortController(), external = init.signal;
+    const onAbort = () => controller.abort();
+    external?.addEventListener("abort", onAbort, {once: true});
+    const timer = setTimeout(() => controller.abort(), Math.min(timeout, plan.maxElapsedMs - (Date.now() - started)));
     let response: Response | undefined;
+    let delay = 0;
     try {
-      response = await oneAttempt(url, init, timeout);
+      response = await fetch(url, {...init, signal: controller.signal});
+      delay = retryDelayMs(response, attempt, mode);
+      if (!TRANSIENT.has(response.status) || attempt + 1 >= attempts || Date.now() - started + delay >= plan.maxElapsedMs) {
+        return await read(response);
+      }
     } catch (error) {
-      if (init.signal?.aborted) throw aborted();
-      lastError = error;
-      // A per-attempt timeout is retryable; an explicit caller abort is not.
-      if (attempt >= plan.attempts - 1) throw error;
+      if (external?.aborted) throw aborted();
+      delay = retryDelayMs(undefined, attempt, mode);
+      // Parsing/validation errors and permanent HTTP failures are not network failures.
+      const retryable = controller.signal.aborted || error instanceof TypeError;
+      if (!retryable || attempt + 1 >= attempts || Date.now() - started + delay >= plan.maxElapsedMs) throw error;
+    } finally {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", onAbort);
     }
-    if (response) {
-      if (response.ok || !TRANSIENT.has(response.status)) return response;
-      if (attempt >= plan.attempts - 1) return response;
-      void response.body?.cancel().catch(() => undefined);
-    }
-    const delay = retryDelayMs(response, attempt, mode);
-    if (Date.now() - started + delay >= plan.maxElapsedMs) {
-      if (response) return response;
-      throw lastError instanceof Error ? lastError : new Error("Request retry window exhausted");
-    }
-    await sleep(delay, init.signal);
+    await response?.body?.cancel().catch(() => undefined);
+    await sleep(delay, external);
   }
 }

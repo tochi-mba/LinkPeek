@@ -3,6 +3,8 @@ import {SETTINGS_VERSION} from "../../src/shared/settings";
 import {loadPage, settle, stubExtension, type PageHarness} from "./page-harness";
 
 let harness: PageHarness;
+let noticeObserver: MutationObserver | undefined;
+let notices: string[] = [];
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const field = (key: string) => $(`[data-field="${key}"]`);
 const saved = () => harness.store.settings as Record<string, unknown>;
@@ -10,6 +12,13 @@ const saved = () => harness.store.settings as Record<string, unknown>;
 async function open(settings: Record<string, unknown> = {}, advanced: string | null = null) {
   vi.resetModules();
   loadPage("options.html");
+  noticeObserver?.disconnect();
+  notices = [];
+  noticeObserver = new MutationObserver(() => {
+    const text = document.querySelector("#saved")?.textContent;
+    if (text) notices.push(text);
+  });
+  noticeObserver.observe(document.querySelector("#saved")!, {childList: true, characterData: true, subtree: true});
   harness = stubExtension(settings);
   localStorage.clear();
   if (advanced !== null) localStorage.setItem("linkpeek-show-advanced", advanced);
@@ -36,6 +45,7 @@ beforeEach(() => {
   vi.stubGlobal("scrollTo", vi.fn());
 });
 afterEach(() => {
+  noticeObserver?.disconnect();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -159,7 +169,7 @@ describe("the shortcut editor", () => {
     await key("Shift");
     await key("g");
     expect(saved()).toEqual({shortcuts: {grid: [], slideshow: ["s", "g"]}});
-    expect(document.querySelector("#saved")!.textContent).toContain("Moved G");
+    expect(notices).toContainEqual(expect.stringContaining("Moved G"));
     expect(row("Grid / single media").textContent).toContain("No key");
     await click(row("Slideshow").querySelector("[data-record]")!);
     await key("k", {ctrlKey: true});
@@ -268,7 +278,7 @@ describe("your data", () => {
     };
     await pick(JSON.stringify({linkpeek: 2, settings: {hoverDelay: 42, bogus: 1}}));
     expect(saved()).toEqual({hoverDelay: 42});
-    expect(document.querySelector("#saved")!.textContent).toBe("Settings imported");
+    expect(notices).toContain("Settings imported");
     await pick(JSON.stringify({blur: 9}));
     expect(saved()).toEqual({blur: 9});
     await pick("not json");
