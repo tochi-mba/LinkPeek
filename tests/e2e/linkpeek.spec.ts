@@ -52,7 +52,7 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"></body></html>`);return;
     }
     if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
     if(path==="/album/a"||path==="/album/b"){res.setHeader("content-type","text/html");res.end(`<img src="${base}/media/${path.endsWith("a")?"album-a":"album-b"}.jpg" width="800" height="600">`);return}
@@ -204,6 +204,19 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
     const page=await second.context.newPage();await page.goto(base+"/prefetch");await page.waitForTimeout(3000);
     expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(3);expect(prefetchBatchRequests).toBe(0);
   }finally{await closeExtension(second.context,second.profile)}
+});
+
+test("N cycles through prepared page links without capturing text input",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby"}})});
+    const page=await context.newPage();await page.goto(base);
+    await page.locator("#shortcut-a").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
+    await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
+    await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
+    await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
+    await page.locator("#shortcut-input").focus();await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
+  }finally{await closeExtension(context,profile)}
 });
 
 test("onboarding and settings render and persist GIF customization",async()=>{

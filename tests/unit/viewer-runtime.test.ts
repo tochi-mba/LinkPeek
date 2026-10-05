@@ -187,7 +187,8 @@ describe("Viewer runtime",()=>{
     const originalSet=(chrome.storage.local.set as any);originalSet.mockRejectedValueOnce(new Error("no"));
     v.key(new KeyboardEvent("keydown",{key:"b"}));await tick();expect(v.panel.textContent).toContain("1 / 1");
     (v as any).position(1190,890);expect(parseInt(v.panel.style.left)).toBeLessThan(1190);
-    (v.panel.querySelector(".lp-helpbtn") as HTMLButtonElement).click();expect(v.help).toBe(true);
+    v.settings.shortcuts={...v.settings.shortcuts,nextLink:[]};(v.panel.querySelector(".lp-helpbtn") as HTMLButtonElement).click();expect(v.help).toBe(true);
+    expect(v.panel.textContent).toContain("Next prepared link");
     v.show(result([item(0,"gif")],true,"https://gif.test/page"));expect((v as any).helpMarkup()).toContain("GIF play");
     v.panel.dispatchEvent(new MouseEvent("mouseenter"));v.pinned=false;v.panel.dispatchEvent(new MouseEvent("mouseleave"));vi.runAllTimers();
     vi.useRealTimers();v.close(true);
