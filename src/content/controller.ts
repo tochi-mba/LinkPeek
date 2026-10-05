@@ -38,6 +38,8 @@ export class PreviewController {
   private linkedList?: string[];
   /** Page that owns linkedList; recursive fallbacks must move to links outside this context. */
   private linkedSource?: string;
+  /** Every URL linked by that page, including links filtered out of keyboard navigation. */
+  private linkedExcluded?: Set<string>;
   /** Invalidates an asynchronous N / Shift+N search when the user changes direction or opens something else. */
   private linkNavigationId = 0;
   private linkNavigationCursor?: string;
@@ -240,6 +242,7 @@ export class PreviewController {
     this.openUrl = null;
     this.linkedList = undefined;
     this.linkedSource = undefined;
+    this.linkedExcluded = undefined;
   }
 
   private onPointerDown(event: PointerEvent) {
@@ -352,11 +355,14 @@ export class PreviewController {
   }
 
   /** The linked page's list for the item on screen, when the gallery was built from linked pages. */
-  private linkedContextForCurrent(): {source: string; links: string[]} | undefined {
+  private linkedContextForCurrent(): {source: string; links: string[]; excluded: Set<string>} | undefined {
     const result = this.viewer.result, source = result?.items[this.viewer.index]?.sourceUrl;
     const context = source !== result?.url ? result?.linkContexts?.find(entry => this.normalizeUrl(entry.sourceUrl) === this.normalizeUrl(source ?? "")) : undefined;
     const links = context && contentLinks(context).filter(url => this.settingsForUrl(url));
-    return links?.length && source ? {source, links} : undefined;
+    if (!links?.length || !source || !context) return undefined;
+    const excluded = new Set(context.links.map(url => this.normalizeUrl(url)));
+    excluded.add(this.normalizeUrl(source));
+    return {source, links, excluded};
   }
 
   /** Candidate order after the current URL, wrapping once and never returning the current item itself. */
@@ -426,11 +432,14 @@ export class PreviewController {
     if (!childItems.length) return undefined;
     const context = result.linkContexts?.find(entry => this.normalizeUrl(entry.sourceUrl) === this.normalizeUrl(child));
     const linkedList = context ? contentLinks(context).filter(url => this.settingsForUrl(url)) : undefined;
+    const linkedExcluded = context ? new Set(context.links.map(url => this.normalizeUrl(url))) : new Set<string>();
+    linkedExcluded.add(this.normalizeUrl(child));
     return {
       url: child,
       result: {...result, url: child, title: undefined, items: childItems},
       linkedSource: child,
-      linkedList: linkedList?.length ? linkedList : undefined
+      linkedList: linkedList?.length ? linkedList : undefined,
+      linkedExcluded
     };
   }
 
@@ -458,6 +467,7 @@ export class PreviewController {
       if (target.url !== candidate) {
         this.linkedSource = target.linkedSource;
         this.linkedList = target.linkedList;
+        this.linkedExcluded = target.linkedExcluded;
         this.prefetcher.remember(target.url, target.result);
         this.openOffPage(target.url, true, target.result);
         if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
@@ -483,17 +493,16 @@ export class PreviewController {
   /** Steps through a linked page's list, skipping empty/failing links. */
   private openAdjacentLinked(direction: 1 | -1) {
     const context = this.linkedList?.length && this.linkedSource
-      ? {source: this.linkedSource, links: this.linkedList}
+      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded ?? new Set([this.normalizeUrl(this.linkedSource), ...this.linkedList.map(url => this.normalizeUrl(url))])}
       : this.linkedContextForCurrent();
     if (!context) return false;
     this.linkedList = context.links;
     this.linkedSource = context.source;
+    this.linkedExcluded = context.excluded;
     const current = this.linkNavigationCursor ?? this.openUrl;
     const candidates = this.orderedCandidates(context.links, direction, current);
     if (!candidates.length) return false;
-    const excluded = new Set(context.links.map(url => this.normalizeUrl(url)));
-    excluded.add(this.normalizeUrl(context.source));
-    void this.navigateCandidates(candidates, direction, excluded, undefined, true);
+    void this.navigateCandidates(candidates, direction, new Set(context.excluded), undefined, true);
     return true;
   }
 
@@ -517,11 +526,12 @@ export class PreviewController {
   /** When a gallery built from linked pages appears, prepare the first links of its list so N is instant. */
   private warmLinkedList() {
     const context = this.linkedList?.length && this.linkedSource
-      ? {source: this.linkedSource, links: this.linkedList}
+      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded ?? new Set([this.normalizeUrl(this.linkedSource), ...this.linkedList.map(url => this.normalizeUrl(url))])}
       : this.linkedContextForCurrent();
     if (!context) return;
     this.linkedList = context.links;
     this.linkedSource = context.source;
+    this.linkedExcluded = context.excluded;
     this.prefetcher.warmAround(context.links, context.links.indexOf(this.openUrl!));
   }
 
@@ -557,6 +567,7 @@ export class PreviewController {
     if (!keepList) {
       this.linkedList = undefined;
       this.linkedSource = undefined;
+      this.linkedExcluded = undefined;
     }
     if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
     const settings = this.settingsFor(anchor);
