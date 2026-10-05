@@ -5,7 +5,7 @@ import {resolve} from "node:path";
 import {mkdtemp,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 
-let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;
+let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;const shortcutMediaRequests=new Set<string>();
 const extensionPath=resolve("dist");
 const animatedGif=Buffer.from("R0lGODlhBAAEAIEAANf/PwAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQIDwAAACwAAAAABAAEAIH/d00AAAAAAAAAAAAICQABCBxIsCCAgAAh+QQIFAAAACwAAAAABAAEAIERFRIAAAAAAAAAAAAICQABCBxIsCCAgAA7","base64");
 
@@ -24,8 +24,8 @@ async function launchExtension():Promise<{context:BrowserContext;profile:string}
   }catch(error){await rm(profile,{recursive:true,force:true});throw error}
 }
 async function closeExtension(context:BrowserContext,profile:string){
-  await Promise.race([context.close(),new Promise<void>(resolve=>setTimeout(resolve,5_000))]);
-  await rm(profile,{recursive:true,force:true});
+  await context.close();
+  await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:250});
 }
 async function wheelStage(page:Page,deltaY:number){
   await page.evaluate(delta=>{
@@ -79,7 +79,7 @@ test.beforeAll(async()=>{
       res.setHeader("content-type","text/html");res.end(`<!doctype html><meta name="generator" content="Discourse 2026"><script type="application/json" id="data-preloaded">${preload}</script>`);return;
     }
     if(path==="/media/anim.gif"||path==="/media/original/fallback.gif"||path==="/media/original/quoted.gif"){res.setHeader("content-type","image/gif");res.end(animatedGif);return}
-    if(path.startsWith("/media/")){res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
+    if(path.startsWith("/media/")){if(path.startsWith("/media/shortcut-"))shortcutMediaRequests.add(path);res.setHeader("content-type","image/svg+xml");res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="690" height="388"><rect width="100%" height="100%" fill="#181E19"/><circle cx="345" cy="194" r="100" fill="#D7FF3F"/></svg>`);return}
     res.statusCode=404;res.end("not found");
   });
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -91,7 +91,7 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
   const {context,profile}=await launchExtension();
   try{
     const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:12_000});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("3 media")),null,{timeout:12_000});
     const panel=page.locator(".lp-panel");await page.waitForTimeout(220);
     const beforePosition=await panel.evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top}));
     const before=await panel.boundingBox();expect(before).toBeTruthy();
@@ -209,10 +209,12 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
 test("N cycles through prepared page links without capturing text input",async()=>{
   const {context,profile}=await launchExtension();
   try{
-    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby"}})});
+    shortcutMediaRequests.clear();
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby",activationKeywords:["shortcut-"]}})});
     const page=await context.newPage();await page.goto(base);
     await page.locator("#shortcut-a").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
     await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
+    await expect.poll(()=>shortcutMediaRequests.size,{timeout:12_000}).toBe(2);
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
     await page.locator("#shortcut-input").focus();await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
