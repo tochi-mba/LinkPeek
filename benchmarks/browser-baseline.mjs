@@ -197,7 +197,7 @@ try{
 
   for(const [name,path,ready] of [["options","options.html",'#search'],["popup","popup.html",'#enabled'],["onboarding","onboarding.html",'.screen.active']]){
     const p=await context.newPage(),start=performance.now();await p.goto(`chrome-extension://${extensionId}/${path}`);await p.locator(ready).waitFor();results.ui[`${name}_startup_ms`]=round(performance.now()-start);
-    if(name==="options"){const input=p.locator("#search");const s=performance.now();await input.fill("gif");await p.locator('[data-section="Media Types"]').waitFor();results.ui.options_search_gif_ms=round(performance.now()-s)}
+    if(name==="options"){const input=p.locator("#search");const s=performance.now();await input.fill("gif");await p.locator('[data-section="gif"]').waitFor();results.ui.options_search_gif_ms=round(performance.now()-s)}
     await p.close();
   }
   results.memory.deltas={
