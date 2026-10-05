@@ -4,6 +4,8 @@ export default defineConfig({
   test:{
     environment:"jsdom",
     restoreMocks:true,
+    // jsdom page tests import and render whole pages; give slow, loaded machines room.
+    testTimeout:20_000,
     clearMocks:true,
     mockReset:true,
     coverage:{

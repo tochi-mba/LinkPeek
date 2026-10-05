@@ -1,3 +1,51 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>LinkPeek</title><link rel="stylesheet" href="base.css"><style>
-body{width:360px;min-height:440px}.wrap{padding:16px}.logo{display:flex;gap:11px;align-items:center;margin-bottom:18px}.quick{display:grid;gap:10px}.quick .card{padding:14px}.site{font-size:12px;word-break:break-all}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:11px}.favorites{display:grid;gap:7px;margin-top:8px;max-height:170px;overflow:auto}.favorite-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--raised)}.favorite-open{min-width:0;border:0;background:transparent;color:var(--text);text-align:left;padding:0;cursor:pointer}.favorite-open strong,.favorite-open small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.favorite-open strong{font-size:12px}.favorite-open small{font-size:10px;color:var(--muted);margin-top:2px}.favorite-remove{width:32px;height:32px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}.favorite-empty{font-size:11px;color:var(--muted);padding:4px 0}
-</style></head><body><div class="wrap"><div class="logo"><div class="mark">LP</div><div><div class="rex">REX TECHNOLOGIES</div><div class="brand">LinkPeek</div></div></div><div class="quick"><div class="card"><div class="row"><div><strong>Preview links</strong><small class="muted" style="display:block;margin-top:3px">Hover, then scroll to browse</small></div><span class="spacer"></span><input id="enabled" type="checkbox" aria-label="Enable LinkPeek"></div></div><div class="card"><div class="eyebrow">Performance</div><select id="preset" style="width:100%;margin-top:8px" aria-label="Performance preset"><option value="balanced">Balanced</option><option value="minimal">Data saver</option><option value="fast">Fast</option><option value="touchpad">Touchpad</option><option value="manual">Manual</option><option value="custom">Custom</option></select></div><div class="card"><div class="eyebrow">This site</div><div id="site" class="site muted">Loading…</div><div class="actions"><button id="disableSite" class="button ghost">Pause here</button><button id="options" class="button">Settings</button></div></div><div class="card"><div class="row"><div><div class="eyebrow">Saved links</div><small class="muted">Press B while previewing to save.</small></div><span class="spacer"></span><span id="favoriteCount" class="muted">0</span></div><div id="favorites" class="favorites"><div class="favorite-empty">No saved links yet.</div></div></div></div><div class="actions"><button id="help" class="button">Practice</button><button id="clear" class="button">Clear cache</button></div><div class="footer muted">Private by design · no LinkPeek server</div></div><script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>LinkPeek</title>
+  <link rel="stylesheet" href="base.css">
+</head>
+<body class="popup">
+  <div class="wrap">
+    <header class="logo">
+      <div class="mark">LP</div>
+      <div><div class="rex">REX TECHNOLOGIES</div><div class="brand">LinkPeek</div></div>
+      <span class="spacer"></span>
+      <label class="switch" title="Turn LinkPeek on or off"><input id="enabled" type="checkbox" aria-label="LinkPeek is on"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+    </header>
+    <div class="quick">
+      <section class="card">
+        <div class="row"><div class="eyebrow">This page</div><span class="spacer"></span><span id="site" class="site muted">Loading…</span></div>
+        <p id="status" class="status" role="status"></p>
+        <button id="pauseSite" class="button ghost wide" type="button">Pause here</button>
+      </section>
+      <section class="card">
+        <div class="eyebrow">Performance</div>
+        <div class="segmented full" role="radiogroup" aria-label="Performance">
+          <button type="button" role="radio" class="segment" data-mode="auto" title="Prepares what this device handles comfortably and eases off when busy">Auto</button>
+          <button type="button" role="radio" class="segment" data-mode="saver" title="Prepares nothing ahead">Data saver</button>
+          <button type="button" role="radio" class="segment" data-mode="fast" title="Prepares more on capable machines">Fast</button>
+        </div>
+        <div class="eyebrow spaced">Open previews by</div>
+        <div class="segmented full" role="radiogroup" aria-label="Open previews by">
+          <button type="button" role="radio" class="segment" data-open="hover">Hovering</button>
+          <button type="button" role="radio" class="segment" data-open="modifier">Alt + hover</button>
+          <button type="button" role="radio" class="segment" data-open="click">Clicking</button>
+        </div>
+      </section>
+      <section class="card">
+        <div class="row"><div class="eyebrow">Saved links</div><span class="spacer"></span><span id="favoriteCount" class="muted">0</span></div>
+        <div id="favorites" class="favorites"></div>
+      </section>
+    </div>
+    <div class="actions">
+      <button id="options" class="button" type="button">Settings</button>
+      <button id="practice" class="button" type="button">Practice</button>
+      <button id="clear" class="button" type="button">Clear cache</button>
+    </div>
+    <footer class="footer muted">Private by design · no LinkPeek server</footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

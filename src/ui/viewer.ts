@@ -1,265 +1,758 @@
-import type {MediaItem,ScanResult} from "../shared/media";
-import {uniqueMediaItems} from "../shared/media";
-import type {LinkPeekSettings} from "../shared/settings";
-import {overlayCss} from "./styles";
+/**
+ * The preview panel: a focus view (one media item, zoomable) and a virtualized
+ * grid, mounted in a Shadow DOM so the host page's CSS cannot reach it.
+ *
+ * Moving between items swaps only the media element; the panel, its listeners
+ * and the gesture controller stay in place. Buttons use one delegated click
+ * handler keyed by data-action, shared with the keyboard shortcuts.
+ */
+import type {Budget} from "../content/resource-governor";
+import {escapeHtml} from "../shared/dom";
+import {isFavorite, toggleFavorite} from "../shared/favorites";
+import {safeDownloadName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
+import {DEFAULT_SETTINGS, type LinkPeekSettings, type ShortcutAction} from "../shared/settings";
+import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {GestureController} from "./gesture";
 import {MediaPreloader} from "./media-preloader";
-import {isFavorite,toggleFavorite} from "../shared/favorites";
+import {PanelGeometry, validGeometry, type Geometry, type ResizeEdge} from "./panel-geometry";
+import {overlayCss} from "./styles";
+import * as markup from "./viewer-markup";
+import {VirtualGrid} from "./virtual-grid";
 
-type GifPlayerLike={init:()=>Promise<void>;destroy:()=>void;key:(e:KeyboardEvent)=>boolean};
-type GifModule={
-  GifPlayer:new(stage:HTMLElement,url:string,settings:LinkPeekSettings,onNotice?:(message:string)=>void)=>GifPlayerLike;
-  prepareGif:(url:string,maxMb:number)=>Promise<unknown>;
+type GifPlayerLike = {init: () => Promise<void>; destroy: () => void; key: (event: KeyboardEvent) => boolean};
+export type GifModule = {
+  GifPlayer: new (stage: HTMLElement, url: string, settings: LinkPeekSettings, onNotice?: (message: string) => void) => GifPlayerLike;
+  prepareGif: (url: string, maxMb: number) => Promise<unknown>;
 };
-type PanelGeometry={left:number;top:number;width:number;height:number};
-type ViewerState={view?:"focus"|"grid";gridThumbSize?:number;expanded?:boolean;geometry?:Partial<PanelGeometry>};
+export type View = markup.View;
+export type ViewerState = {view?: View; gridThumbSize?: number; expanded?: boolean; geometry?: Partial<Geometry>};
 
-export class Viewer{
-  host=document.createElement("div");shadow=this.host.attachShadow({mode:"open"});root=document.createElement("div");
-  panel=document.createElement("section");stage=document.createElement("div");settings!:LinkPeekSettings;result?:ScanResult;
-  index=0;zoom=1;tx=0;ty=0;pinned=false;view:"focus"|"grid"="focus";gesture?:GestureController;gifPlayer?:GifPlayerLike;closeTimer?:number;help=false;
-  onDismiss?:()=>void;private gridCleanup?:()=>void;private interactionCleanup?:()=>void;private renderVersion=0;private preloader=new MediaPreloader();private navigationVersion=0;private desiredIndex:number|null=null;private expanded=false;private gridThumbSize=120;private gridScrollTop=0;private rememberedView?:"focus"|"grid";private rememberedGridThumbSize?:number;private rememberedExpanded?:boolean;private rememberedGeometry?:PanelGeometry;private openX=0;private openY=0;private gifModulePromise?:Promise<GifModule>;private favorite=false;private favoriteVersion=0;
-  get isOpen(){return this.root.childElementCount>0}
-  containsPoint(x:number,y:number,from?:DOMRect){
-    if(!this.isOpen)return false;
-    const panel=this.panel.getBoundingClientRect(),pad=Math.max(8,Math.round(this.settings.magneticBridgeStrength*20));
-    if(x>=panel.left-pad&&x<=panel.right+pad&&y>=panel.top-pad&&y<=panel.bottom+pad)return true;
-    if(!from||!this.settings?.magneticBridge)return false;
-    const left=Math.min(from.left,panel.left)-pad,right=Math.max(from.right,panel.right)+pad,top=Math.min(from.top,panel.top)-pad,bottom=Math.max(from.bottom,panel.bottom)+pad;
-    return x>=left&&x<=right&&y>=top&&y<=bottom;
+/** Shortcut actions the viewer handles itself, in matching order. Link actions belong to the page. */
+const KEY_ACTIONS: readonly ShortcutAction[] = ["next", "previous", "grid", "expand", "pin", "favorite", "open", "download", "copy", "slideshow", "zoomIn", "zoomOut", "resetZoom", "help"];
+const TOAST_MS = 900;
+const BUSY_AFTER_MS = 120;
+const ZOOM_STEP = 1.2;
+const MIN_THUMB = 48;
+const MAX_THUMB = 320;
+const THUMB_STEP = 16;
+
+export class Viewer {
+  readonly host = document.createElement("div");
+  readonly panel = document.createElement("section");
+  private shadow = this.host.attachShadow({mode: "open"});
+  private root = document.createElement("div");
+  settings: LinkPeekSettings = DEFAULT_SETTINGS;
+  result?: ScanResult;
+  index = 0;
+  view: View = "focus";
+  zoom = 1;
+  tx = 0;
+  ty = 0;
+  pinned = false;
+  help = false;
+  onDismiss?: (explicit: boolean) => void;
+  onPosition?: (url: string, index: number) => void;
+  private expanded = false;
+  private gridThumbSize = 120;
+  private remembered: {view?: View; gridThumbSize?: number; expanded?: boolean} = {};
+  private geometry: PanelGeometry;
+  private preloader: MediaPreloader;
+  private gesture?: GestureController;
+  private grid?: VirtualGrid;
+  private gifPlayer?: GifPlayerLike;
+  private gifModule?: Promise<GifModule>;
+  private loadGifPlayer: () => Promise<GifModule>;
+  private stage?: HTMLElement;
+  private closeTimer?: number;
+  private toastTimer?: number;
+  private slideshowTimer?: number;
+  private slideshow = false;
+  private failure?: string;
+  private title = "";
+  private openX = 0;
+  private openY = 0;
+  private pendingIndex: number | null = null;
+  private pendingStart: number | null = null;
+  private navigationVersion = 0;
+  private renderVersion = 0;
+  private favorite = false;
+  private favoriteVersion = 0;
+
+  /** `loadGifPlayer` defaults to the separately built gif-player.js, loaded only when a GIF is shown. */
+  constructor(options: {budget: () => Budget; loadGifPlayer?: () => Promise<GifModule>}) {
+    this.loadGifPlayer = options.loadGifPlayer ?? (() => import(chrome.runtime.getURL("gif-player.js")) as Promise<GifModule>);
+    this.root.className = "lp-root";
+    this.shadow.append(Object.assign(document.createElement("style"), {textContent: overlayCss}), this.root);
+    document.documentElement.appendChild(this.host);
+    this.preloader = new MediaPreloader(options.budget);
+    this.geometry = new PanelGeometry(this.panel, () => this.persistState());
+    this.panel.addEventListener("click", this.onPanelClick);
+    this.panel.addEventListener("dblclick", this.onPanelDoubleClick);
+    this.panel.addEventListener("pointerdown", this.onPanelPointerDown);
+    this.panel.addEventListener("mouseenter", () => this.cancelClose());
+    this.panel.addEventListener("mouseleave", () => {
+      if (!this.pinned && !this.geometry.manipulating && this.settings.activationMode !== "click") this.scheduleClose(this.settings.closeDelay);
+    });
+    window.addEventListener("resize", () => {
+      if (this.isOpen && !this.expanded) this.geometry.reclamp(this.settings);
+    });
   }
-  constructor(){this.root.className="lp-root";this.shadow.append(Object.assign(document.createElement("style"),{textContent:overlayCss}),this.root);document.documentElement.appendChild(this.host);window.addEventListener("resize",()=>this.clampRememberedGeometry())}
-  restoreViewerState(state?:ViewerState){
-    if(state?.view==="focus"||state?.view==="grid")this.rememberedView=state.view;
-    if(Number.isFinite(state?.gridThumbSize))this.rememberedGridThumbSize=Math.max(48,Math.min(320,Number(state!.gridThumbSize)));
-    if(typeof state?.expanded==="boolean")this.rememberedExpanded=state.expanded;
-    const g=state?.geometry;if(g&&[g.left,g.top,g.width,g.height].every(Number.isFinite))this.rememberedGeometry={left:Number(g.left),top:Number(g.top),width:Number(g.width),height:Number(g.height)};
+
+  get isOpen() {
+    return this.root.childElementCount > 0;
   }
-  private persistViewerState(){
-    this.rememberedView=this.view;this.rememberedGridThumbSize=this.gridThumbSize;this.rememberedExpanded=this.expanded;
-    const viewerState:ViewerState={view:this.view,gridThumbSize:this.gridThumbSize,expanded:this.expanded};if(this.settings?.rememberPanelGeometry&&this.rememberedGeometry)viewerState.geometry=this.rememberedGeometry;
-    void chrome.storage.local.set({viewerState});
+
+  /** True inside the panel, or inside the forgiving bridge between the link and the panel. */
+  containsPoint(x: number, y: number, from?: DOMRect) {
+    if (!this.isOpen) return false;
+    const panel = this.panel.getBoundingClientRect(), pad = Math.max(8, Math.round(this.settings.magneticBridgeStrength * 20));
+    if (x >= panel.left - pad && x <= panel.right + pad && y >= panel.top - pad && y <= panel.bottom + pad) return true;
+    if (!from || !this.settings.magneticBridge) return false;
+    const left = Math.min(from.left, panel.left) - pad, right = Math.max(from.right, panel.right) + pad;
+    const top = Math.min(from.top, panel.top) - pad, bottom = Math.max(from.bottom, panel.bottom) + pad;
+    return x >= left && x <= right && y >= top && y <= bottom;
   }
-  private toggleView(){this.view=this.view==="grid"?"focus":"grid";this.persistViewerState();this.render()}
-  openLoading(x:number,y:number,settings:LinkPeekSettings,title="Scanning link…"){this.help=false;this.settings=settings;this.openX=x;this.openY=y;this.result=undefined;this.index=0;this.zoom=1;this.tx=this.ty=0;this.gridScrollTop=0;this.expanded=this.rememberedExpanded??settings.startExpanded;this.gridThumbSize=this.rememberedGridThumbSize??settings.thumbnailSize;this.view=this.rememberedView??(settings.defaultView==="grid"||settings.defaultView==="masonry"?"grid":"focus");this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;this.position(x,y);this.panel.innerHTML=this.shell(title,`<div class="lp-loading"><span class="lp-loading-dot"></span><span>Preparing media…</span></div>`,"Loading");this.root.replaceChildren(this.panel);this.bind()}
-  show(result:ScanResult){
-    const same=this.result?.url===result.url?this.result:undefined;
-    const currentId=same?.items[this.index]?.id;if(!same)this.gridScrollTop=0;
-    const merged=uniqueMediaItems(same?[...same.items,...result.items]:result.items);
-    const diagnostics=result.diagnostics?{...result.diagnostics,duplicates:Math.max(same?.diagnostics?.duplicates??0,result.diagnostics.duplicates)}:same?.diagnostics;
-    this.result={
-      ...same,...result,
-      items:merged.items,
-      complete:Boolean(same?.complete||result.complete),
-      postsScanned:Math.max(same?.postsScanned??0,result.postsScanned??0)||undefined,
-      totalPosts:Math.max(same?.totalPosts??0,result.totalPosts??0)||undefined,
-      diagnostics
-    };
-    this.index=Math.min(this.index,Math.max(0,this.result.items.length-1));
-    const progressed=Boolean(same&&(result.items.length!==same.items.length||result.postsScanned!==same.postsScanned||result.complete!==same.complete));
-    const canPreserve=Boolean(same&&!same.complete&&progressed&&this.view==="focus"&&currentId&&this.result.items[this.index]?.id===currentId&&this.panel.querySelector(".lp-stage"));
-    if(canPreserve){
-      this.preloader.reset(this.result.items,this.index,this.settings);
-      this.panel.querySelector<HTMLElement>(".lp-meta")!.textContent=String(this.result.items.length);
-      this.panel.querySelector<HTMLElement>(".lp-count")!.textContent=`${this.index+1} / ${this.result.items.length}`;
-      this.panel.querySelector<HTMLElement>(".lp-signal")!.textContent=`${this.result.items.length} media · ${this.result.complete?"Complete":`${this.result.postsScanned??0}/${this.result.totalPosts??"?"} posts`}`;
-    }else this.render();
-    void this.refreshFavorite()
+
+  restoreViewerState(state?: ViewerState) {
+    if (state?.view === "focus" || state?.view === "grid") this.remembered.view = state.view;
+    if (Number.isFinite(state?.gridThumbSize)) this.remembered.gridThumbSize = Math.max(MIN_THUMB, Math.min(MAX_THUMB, Number(state!.gridThumbSize)));
+    if (typeof state?.expanded === "boolean") this.remembered.expanded = state.expanded;
+    this.geometry.remembered = validGeometry(state?.geometry);
   }
-  error(message:string){this.panel.innerHTML=this.shell("Couldn’t preview",`<div class="lp-error"><strong>Preview unavailable</strong><span>${this.escape(message)}</span></div>`,"");this.bind()}
-  close(force=false){if(this.pinned&&!force)return;if(force)this.pinned=false;this.renderVersion++;this.navigationVersion++;this.desiredIndex=null;this.gridCleanup?.();this.gridCleanup=undefined;this.interactionCleanup?.();this.interactionCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;this.preloader.dispose();this.root.replaceChildren();this.result=undefined;this.gesture?.destroy();this.onDismiss?.()}
-  private render(){
-    if(!this.result)return;
-    const version=++this.renderVersion;
-    this.panel.className=`lp-panel${this.expanded?" lp-expanded":""}`;
-    this.gridCleanup?.();this.gridCleanup=undefined;this.gifPlayer?.destroy();this.gifPlayer=undefined;
-    const item=this.result.items[this.index];
-    const hasDecoded=item&&item.type!=="gif"&&this.preloader.isReady(item);
-    const media=item?.type==="gif"?`<div class="lp-gif-mount"></div>`:hasDecoded?`<div class="lp-image-slot"></div>`:`<img class="lp-image" src="${item?this.escape(item.previewUrl):""}" alt="${item?this.escape(item.filename||"Preview image"):""}">`;
-    const tip=item?.type==="gif"?"Scroll to browse · Space to pause":"Scroll to browse · Pinch to zoom";
-    const body=this.view==="grid"?this.grid():item?`<div class="lp-stage">${media}${this.settings.showLearningTips?`<div class="lp-tip">${tip}</div>`:""}</div>`:'<div class="lp-empty">No posted media found.</div>';
-    const progress=this.result.complete?"Complete":`${this.result.postsScanned??0}/${this.result.totalPosts??"?"} posts`;
-    this.panel.innerHTML=this.shell(this.result.title||new URL(this.result.url).hostname,body,`${this.result.items.length} media · ${progress}`);
-    this.bind();
-    this.preloader.reset(this.result.items,this.index,this.settings);
-    if(this.view==="grid"){this.setupVirtualGrid();return}
-    void this.warmGifNeighborhood();
-    if(item){
-      this.stage=this.panel.querySelector(".lp-stage") as HTMLDivElement;this.gesture?.destroy();this.gesture=new GestureController(this.stage,{
-        next:(n?:number)=>this.move(n||1),previous:(n?:number)=>this.move(-(n||1)),
-        scrub:(d:number)=>this.move(d>0?this.settings.maxImagesPerSwipe:-this.settings.maxImagesPerSwipe),
-        pan:(dx:number,dy:number)=>this.pan(dx,dy),zoom:(factor:number,x:number,y:number)=>this.applyZoom(factor,x,y),
-        doubleClick:(x:number,y:number)=>this.onDoubleClick(x,y),isZoomed:()=>this.zoom>1.01
-      },this.settings);
-      if(item.type==="gif")void this.mountGif(item,version);
-      else if(hasDecoded){
-        const decoded=this.preloader.element(item);if(decoded){const slot=this.stage.querySelector(".lp-image-slot")!;decoded.className="lp-image";decoded.alt=item.filename||"Preview image";slot.replaceWith(decoded)}
-      }
+
+  private persistState() {
+    this.remembered = {view: this.view, gridThumbSize: this.gridThumbSize, expanded: this.expanded};
+    const viewerState: ViewerState = {...this.remembered};
+    if (this.settings.rememberPanelGeometry && this.geometry.remembered) viewerState.geometry = this.geometry.remembered;
+    try {
+      chrome.storage.local.set({viewerState}).catch(() => undefined);
+    } catch {
+      // The extension was reloaded under this page; layout memory is not worth an error.
     }
   }
-  private loadGifModule(){return this.gifModulePromise??=import(chrome.runtime.getURL("gif-player.js")) as Promise<GifModule>}
-  private async warmGifNeighborhood(){
-    if(!this.result?.items.length)return;
-    const items=this.result.items,length=items.length,seen=new Set<number>(),indexes:number[]=[];
-    const add=(n:number)=>{const at=this.settings.loopMode==="wrap"?((n%length)+length)%length:n;if(at>=0&&at<length&&!seen.has(at)){seen.add(at);indexes.push(at)}};
-    add(this.index);
-    const gifs=indexes.map(i=>items[i]).filter(item=>item?.type==="gif");if(!gifs.length)return;
-    try{
-      const mod=await this.loadGifModule();
-      await Promise.allSettled(gifs.map(item=>mod.prepareGif(item.originalUrl,this.settings.gifDecodeMaxMb)));
-    }catch{}
+
+  scheduleClose(delayMs: number) {
+    if (this.pinned) return;
+    this.cancelClose();
+    this.closeTimer = window.setTimeout(() => this.close(), delayMs);
   }
-  private async mountGif(item:MediaItem,version:number){
-    try{
-      const mod=await this.loadGifModule();
-      if(version!==this.renderVersion||this.view!=="focus"||this.result?.items[this.index]!==item)return;
-      const player=new mod.GifPlayer(this.stage,item.originalUrl,this.settings,message=>this.toast(message));this.gifPlayer=player;await player.init();
-    }catch(error){
-      if(version!==this.renderVersion)return;
-      const mount=this.stage.querySelector(".lp-gif-mount");
-      if(mount)mount.innerHTML=`<div class="lp-gif-fallback"><img class="lp-image" src="${this.escape(item.originalUrl)}" alt="Animated GIF"><span>Native GIF playback</span></div>`;
-      this.toast(error instanceof Error?error.message:"GIF controls unavailable");
+
+  cancelClose() {
+    clearTimeout(this.closeTimer);
+    this.closeTimer = undefined;
+  }
+
+  /** Opens the panel in its loading state. `startIndex` resumes a gallery where it was left. */
+  openLoading(x: number, y: number, settings: LinkPeekSettings, title = "Scanning link…", startIndex?: number) {
+    this.cancelClose();
+    this.stopSlideshow();
+    this.teardownBody();
+    if (!this.host.isConnected) document.documentElement.appendChild(this.host);
+    this.settings = settings;
+    this.help = false;
+    this.result = undefined;
+    this.failure = undefined;
+    this.index = 0;
+    this.pendingIndex = null;
+    this.pendingStart = startIndex ?? null;
+    this.favorite = false;
+    this.title = title;
+    this.openX = x;
+    this.openY = y;
+    this.resetZoom();
+    this.expanded = this.remembered.expanded ?? settings.startExpanded;
+    this.gridThumbSize = this.remembered.gridThumbSize ?? settings.thumbnailSize;
+    this.view = this.remembered.view ?? settings.defaultView;
+    this.applyPanelStyle();
+    this.geometry.place(x, y, settings);
+    this.render();
+    this.root.replaceChildren(this.panel);
+  }
+
+  /** Shows a scan result, merging progressive updates for the same URL into the open gallery. */
+  show(incoming: ScanResult) {
+    if (!this.isOpen) return;
+    const previous = this.result?.url === incoming.url ? this.result : undefined;
+    if (!previous) {
+      // A different gallery starts from its first item and abandons any move in flight.
+      this.index = 0;
+      this.pendingIndex = null;
+      this.navigationVersion++;
+    }
+    const items = uniqueMediaItems(previous ? [...previous.items, ...incoming.items] : incoming.items).items;
+    const currentId = previous?.items[this.index]?.id;
+    this.result = {
+      ...previous, ...incoming, items,
+      complete: Boolean(previous?.complete || incoming.complete),
+      postsScanned: Math.max(previous?.postsScanned ?? 0, incoming.postsScanned ?? 0) || undefined,
+      totalPosts: Math.max(previous?.totalPosts ?? 0, incoming.totalPosts ?? 0) || undefined,
+      diagnostics: incoming.diagnostics ?? previous?.diagnostics
+    };
+    this.failure = undefined;
+    let jumped = false;
+    if (this.pendingStart !== null && (items.length > this.pendingStart || this.result.complete)) {
+      jumped = this.index !== Math.min(this.pendingStart, Math.max(0, items.length - 1));
+      this.index = Math.min(this.pendingStart, Math.max(0, items.length - 1));
+      this.pendingStart = null;
+    }
+    this.index = Math.min(this.index, Math.max(0, items.length - 1));
+    if (!previous?.items.length || jumped) {
+      this.render();
+      if (!previous) void this.refreshFavorite();
+      return;
+    }
+    const changed = items.length !== previous.items.length || this.result.complete !== previous.complete || this.result.postsScanned !== previous.postsScanned || items[this.index]?.id !== currentId;
+    if (!changed) return;
+    this.preloader.reset(items, this.index, this.settings);
+    if (this.view === "grid") {
+      this.grid?.setItems(items);
+      this.updateGridProgress();
+      this.updateChrome();
+    } else if (items[this.index]?.id !== currentId) {
+      this.showFocusMedia();
+    } else {
+      this.updateChrome();
     }
   }
-  private shell(title:string,body:string,status:string){const density=this.settings?.quickViewControls&&this.view==="grid"?`<button class="lp-btn lp-grid-more" title="Smaller thumbnails" aria-label="Smaller thumbnails">−</button><button class="lp-btn lp-grid-bigger" title="Larger thumbnails" aria-label="Larger thumbnails">+</button>`:"";const expand=this.settings?.quickViewControls?`<button class="lp-btn lp-expandbtn" aria-pressed="${this.expanded}" title="${this.expanded?"Restore view":"Expand view"}" aria-label="${this.expanded?"Restore view":"Expand view"}">${this.expanded?"↙":"⛶"}</button>`:"";const gridToggle=this.view==="grid"?`<button class="lp-btn lp-gridbtn" title="Single image (G)" aria-label="Back to single image">▣</button>`:`<button class="lp-btn lp-gridbtn" title="Media grid (G)" aria-label="Show image grid">▦</button>`;const browse=this.view==="focus"&&this.result?.items.length?`<button class="lp-nav lp-previous" title="Previous media" aria-label="Previous media">↑</button><span class="lp-count">${this.index+1} / ${this.result.items.length}</span><button class="lp-nav lp-next" title="Next media" aria-label="Next media">↓</button>`:`<span class="lp-count">${this.result?.items.length?this.index+1:0} / ${this.result?.items.length??0}</span>`;const resize=this.settings?.resizablePanel&&!this.expanded?["n","e","s","w","ne","se","sw","nw"].map(edge=>`<span class="lp-resize lp-resize-${edge}" data-resize="${edge}" aria-hidden="true"></span>`).join(""):"";const pinLabel=this.pinned?"Unpin preview":"Pin preview";return `<header class="lp-head"><span class="lp-title" title="Drag to move">${this.escape(title)}</span><span class="lp-meta">${this.result?.items.length??""}</span>${density}${gridToggle}${expand}<button class="lp-btn lp-favorite" aria-pressed="${this.favorite}" title="${this.favorite?"Remove saved link (B)":"Save link (B)"}" aria-label="${this.favorite?"Remove saved link":"Save link"}">${this.favorite?"★":"☆"}</button><button class="lp-btn lp-helpbtn" aria-expanded="${this.help}" title="Controls (?)" aria-label="Show controls">?</button><button class="lp-btn lp-pin" aria-pressed="${this.pinned}" title="${pinLabel} (P)" aria-label="${pinLabel}">⌖</button><button class="lp-btn lp-close" title="Close (Escape)" aria-label="Close">×</button></header>${body}<footer class="lp-foot">${browse}<span>${this.result?.items[this.index]?.postNumber?`Post #${this.result.items[this.index].postNumber}`:""}</span>${this.view==="grid"?`<span>${Math.round(this.gridThumbSize)}px tiles</span>`:""}<span class="lp-spacer"></span><span class="lp-signal">${this.escape(status)}</span></footer>${resize}${this.help?this.helpMarkup():""}`;}
-  private grid(){const r=this.result!;const scanning=!r.complete?`<div class="lp-grid-progress"><span class="lp-loading-dot"></span><span>Scanning thread · ${r.postsScanned??0}/${r.totalPosts??"?"} posts · ${r.items.length} media found</span></div>`:"";return `${scanning}<div class="lp-grid" data-total="${r.items.length}" data-complete="${r.complete}" role="grid" aria-label="Media grid"><div class="lp-grid-spacer"></div><div class="lp-grid-window"></div></div>`}
-  private setupVirtualGrid(){
-    const grid=this.panel.querySelector(".lp-grid") as HTMLDivElement|null,windowEl=this.panel.querySelector(".lp-grid-window") as HTMLDivElement|null,spacer=this.panel.querySelector(".lp-grid-spacer") as HTMLDivElement|null;
-    if(!grid||!windowEl||!spacer||!this.result)return;
-    const items=this.result.items,gap=6,pad=8,cell=Math.max(48,this.gridThumbSize),overscan=2;
-    let raf=0,lastStart=-1,lastEnd=-1,lastCols=-1;
-    const renderWindow=()=>{
-      raf=0;
-      const inner=Math.max(cell,grid.clientWidth-pad*2),cols=Math.max(1,Math.floor((inner+gap)/(cell+gap))),rowHeight=cell+gap,rows=Math.ceil(items.length/cols);
-      spacer.style.height=`${pad*2+Math.max(0,rows*rowHeight-gap)}px`;
-      const visibleStartRow=Math.max(0,Math.floor(grid.scrollTop/rowHeight)),visibleEndRow=Math.min(rows,Math.ceil((grid.scrollTop+grid.clientHeight)/rowHeight));
-      const startRow=Math.max(0,visibleStartRow-overscan),endRow=Math.min(rows,visibleEndRow+overscan);
-      const start=startRow*cols,end=Math.min(items.length,endRow*cols);
-      if(start===lastStart&&end===lastEnd&&cols===lastCols)return;lastStart=start;lastEnd=end;lastCols=cols;
-      const chunks:string[]=[];
-      for(let n=start;n<end;n++){
-        const item=items[n],row=Math.floor(n/cols),col=n%cols,left=pad+col*(cell+gap),top=pad+row*rowHeight;
-        const visible=row>=visibleStartRow&&row<visibleEndRow;
-        chunks.push(`<button class="lp-thumb" data-i="${n}" aria-current="${n===this.index}" aria-label="Open media ${n+1} of ${items.length}" title="Media ${n+1} of ${items.length}" style="left:${left}px;top:${top}px;width:${cell}px;height:${cell}px" role="gridcell"><img src="${this.escape(item.previewUrl)}" alt="" loading="${visible?"eager":"lazy"}" decoding="async" fetchpriority="${visible?"auto":"low"}"><span>${n+1}</span></button>`);
+
+  /** Reports a failed scan. A gallery already on screen stays; the problem is only mentioned. */
+  error(message: string) {
+    if (!this.isOpen) return;
+    if (this.result?.items.length) {
+      this.toast(message);
+      return;
+    }
+    this.failure = message;
+    this.render();
+  }
+
+  close(force = false) {
+    if (!this.isOpen || (this.pinned && !force)) return;
+    if (force) this.pinned = false;
+    this.cancelClose();
+    this.stopSlideshow();
+    this.geometry.cancel();
+    this.renderVersion++;
+    this.navigationVersion++;
+    this.pendingIndex = null;
+    this.teardownBody();
+    this.preloader.dispose();
+    this.root.replaceChildren();
+    this.result = undefined;
+    this.help = false;
+    this.onDismiss?.(force);
+  }
+
+  /** Handles a key press while the panel is open. Returns true when the key was used. */
+  key(event: KeyboardEvent) {
+    if (!this.isOpen || isTypingEvent(event)) return false;
+    const keys = this.settings.shortcuts, hit = (action: ShortcutAction) => matchesCombo(event, keys[action]);
+    if (this.help) {
+      if (event.key === "Escape" || hit("help") || hit("close")) {
+        this.toggleHelp();
+        return true;
       }
-      windowEl.innerHTML=chunks.join("");
-    };
-    const schedule=()=>{if(!raf)raf=requestAnimationFrame(renderWindow)};
-    const onClick=(event:Event)=>{
-      const thumb=(event.target as Element).closest?.(".lp-thumb") as HTMLElement|null;if(!thumb)return;
-      this.index=Number(thumb.dataset.i);this.view="focus";this.persistViewerState();this.render();
-    };
-    const onScroll=()=>{this.gridScrollTop=grid.scrollTop;schedule()};
-    grid.addEventListener("scroll",onScroll,{passive:true});grid.addEventListener("click",onClick);
-    const ro=new ResizeObserver(schedule);ro.observe(grid);
-    const row=Math.floor(this.index/Math.max(1,Math.floor((Math.max(cell,grid.clientWidth-pad*2)+gap)/(cell+gap))));
-    grid.scrollTop=this.gridScrollTop||Math.max(0,row*(cell+gap)-cell);
-    renderWindow();
-    this.gridCleanup=()=>{if(raf)cancelAnimationFrame(raf);ro.disconnect();grid.removeEventListener("scroll",onScroll);grid.removeEventListener("click",onClick)};
+      return false;
+    }
+    if (event.key === "Escape" || hit("close")) {
+      this.close(true);
+      return true;
+    }
+    if (this.view === "focus" && this.gifPlayer?.key(event)) return true;
+    if (this.view === "grid" && this.gridKey(event)) return true;
+    const action = KEY_ACTIONS.find(hit);
+    return action ? this.perform(action) : false;
   }
-  private helpMarkup(){const gif=this.result?.items[this.index]?.type==="gif"?`<kbd>Space</kbd><span>GIF play / pause</span><kbd>, / .</kbd><span>Previous / next GIF frame</span><kbd>[ / ]</kbd><span>GIF slower / faster</span><kbd>timeline scroll</kbd><span>Scrub GIF frames</span>`:"",nextLink=this.escape(this.settings.shortcuts.nextLink?.[0]??"N");return `<div class="lp-help" role="region" aria-label="One-hand controls"><button class="lp-btn lp-help-close" aria-label="Close controls" title="Close controls">×</button><h3>One-hand controls</h3><div class="lp-help-grid"><kbd>scroll / ↑ ↓</kbd><span>Previous / next media</span><kbd>${nextLink}</kbd><span>Next prepared link</span><kbd>horizontal scroll</kbd><span>Fast scrub</span><kbd>pinch</kbd><span>Zoom</span><kbd>double click</kbd><span>Zoom at pointer / reset</span><kbd>double-click + drag</kbd><span>Pan while zoomed</span>${gif}<kbd>G</kbd><span>Grid / focus</span><kbd>B</kbd><span>Save link</span><kbd>P</kbd><span>Pin preview</span><kbd>O</kbd><span>Open original</span><kbd>D</kbd><span>Download original</span><kbd>Esc</kbd><span>Close</span></div></div>`}
-  private bind(){
-    this.panel.querySelector(".lp-close")?.addEventListener("click",()=>this.close(true));
-    this.panel.querySelector(".lp-pin")?.addEventListener("click",()=>{this.pinned=!this.pinned;this.render()});
-    this.panel.querySelector(".lp-gridbtn")?.addEventListener("click",()=>this.toggleView());
-    this.panel.querySelector(".lp-expandbtn")?.addEventListener("click",()=>{this.expanded=!this.expanded;this.persistViewerState();this.render()});
-    this.panel.querySelector(".lp-grid-more")?.addEventListener("click",()=>{this.gridThumbSize=Math.max(48,this.gridThumbSize-16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
-    this.panel.querySelector(".lp-grid-bigger")?.addEventListener("click",()=>{this.gridThumbSize=Math.min(320,this.gridThumbSize+16);this.persistViewerState();this.render();this.toast(`${this.gridThumbSize}px tiles`)});
-    this.panel.querySelector(".lp-favorite")?.addEventListener("click",()=>void this.toggleFavorite());
-    this.panel.querySelector(".lp-previous")?.addEventListener("click",()=>this.move(-1));
-    this.panel.querySelector(".lp-next")?.addEventListener("click",()=>this.move(1));
-    this.panel.querySelector(".lp-helpbtn")?.addEventListener("click",()=>this.toggleHelp());
-    this.panel.querySelector(".lp-help-close")?.addEventListener("click",()=>this.toggleHelp());
-    this.panel.querySelector(".lp-title")?.addEventListener("dblclick",()=>{if(!this.settings.rememberPanelGeometry)return;this.rememberedGeometry=undefined;this.position(this.openX,this.openY);this.persistViewerState();this.toast("Panel layout reset")});
-    this.bindPanelGeometry();
-    this.panel.onmouseenter=()=>{if(this.closeTimer)clearTimeout(this.closeTimer)};
-    this.panel.onmouseleave=()=>{if(!this.pinned&&!this.panel.classList.contains("lp-manipulating"))this.closeTimer=window.setTimeout(()=>this.close(),this.settings.closeDelay)};
-  }
-  private bindPanelGeometry(){
-    this.interactionCleanup?.();this.interactionCleanup=undefined;if(this.expanded)return;
-    const head=this.panel.querySelector<HTMLElement>(".lp-head"),handles=[...this.panel.querySelectorAll<HTMLElement>("[data-resize]")];
-    const start=(event:PointerEvent)=>{
-      const source=event.currentTarget as HTMLElement,edge=source.dataset.resize??"move";
-      if(edge==="move"&&(!this.settings.draggablePanel||(event.target as Element).closest("button,input,select")))return;
-      event.preventDefault();event.stopPropagation();if(this.closeTimer)clearTimeout(this.closeTimer);this.panel.classList.add("lp-manipulating");
-      const rect=this.panel.getBoundingClientRect(),sx=event.clientX,sy=event.clientY,initial={left:rect.left,top:rect.top,width:rect.width,height:rect.height};
-      const move=(e:PointerEvent)=>{
-        const dx=e.clientX-sx,dy=e.clientY-sy;let {left,top,width,height}=initial;
-        if(edge==="move"){left+=dx;top+=dy}else{
-          if(edge.includes("e"))width+=dx;if(edge.includes("s"))height+=dy;
-          if(edge.includes("w")){left+=dx;width-=dx}if(edge.includes("n")){top+=dy;height-=dy}
-        }
-        this.applyGeometry({left,top,width,height});
-      };
-      const end=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",end);window.removeEventListener("pointercancel",end);this.panel.classList.remove("lp-manipulating");this.persistViewerState();this.interactionCleanup=undefined};
-      window.addEventListener("pointermove",move);window.addEventListener("pointerup",end);window.addEventListener("pointercancel",end);
-      this.interactionCleanup=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",end);window.removeEventListener("pointercancel",end)};
-    };
-    head?.addEventListener("pointerdown",start);handles.forEach(x=>x.addEventListener("pointerdown",start));
-  }
-  private applyGeometry(value:PanelGeometry){
-    const margin=8,maxWidth=Math.max(1,innerWidth-margin*2),maxHeight=Math.max(1,innerHeight-margin*2),minWidth=Math.min(280,maxWidth),minHeight=Math.min(220,maxHeight);
-    const width=Math.max(minWidth,Math.min(maxWidth,value.width)),height=Math.max(minHeight,Math.min(maxHeight,value.height));
-    const left=Math.max(margin,Math.min(innerWidth-margin-width,value.left)),top=Math.max(margin,Math.min(innerHeight-margin-height,value.top));
-    this.rememberedGeometry={left,top,width,height};this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.width=`${width}px`;this.panel.style.height=`${height}px`;this.panel.style.maxHeight=`calc(100vh - ${margin*2}px)`;this.panel.style.setProperty("--lp-width",`${width}px`);
-  }
-  private clampRememberedGeometry(){if(this.isOpen&&!this.expanded&&this.settings?.rememberPanelGeometry&&this.rememberedGeometry)this.applyGeometry(this.rememberedGeometry)}
-  private toggleHelp(){
-    this.help=!this.help;
-    if(this.help)this.panel.insertAdjacentHTML("beforeend",this.helpMarkup());else this.panel.querySelector(".lp-help")!.remove();
-    if(this.help)this.panel.querySelector(".lp-help-close")!.addEventListener("click",()=>this.toggleHelp());
-    this.panel.querySelector<HTMLButtonElement>(this.help?".lp-help-close":".lp-helpbtn")!.focus();
-  }
-  key(e:KeyboardEvent){
-    if(!this.root.childElementCount)return false;
-    const target=e.target as HTMLElement|null;if(target?.matches("input,textarea,select,[contenteditable]:not([contenteditable='false'])")&&!e.composedPath().includes(this.host))return false;
-    if(this.help){if(["Escape","?","/"].includes(e.key)){this.toggleHelp();return true}return false}
-    if(this.gifPlayer?.key(e))return true;
-    const hit=(action:string,fallback:string[]=[])=>[...(this.settings.shortcuts[action]??[]),...fallback].some(k=>k.toLowerCase()===e.key.toLowerCase());
-    if(hit("close",["Escape"])){this.close(true);return true}
-    if(hit("grid",["g"])){this.toggleView();return true}
-    if(hit("pin",["p"])){this.pinned=!this.pinned;this.render();return true}
-    if(hit("favorite",["b"])){void this.toggleFavorite();return true}
-    if(hit("help",["?","/"])){this.toggleHelp();return true}
-    if(hit("next",["ArrowDown","ArrowRight"," "])){this.move(1);return true}
-    if(hit("previous",["ArrowUp","ArrowLeft"])){this.move(-1);return true}
-    if(hit("open",["o"])){const i=this.result?.items[this.index];if(i)window.open(i.originalUrl,"_blank","noopener");return true}
-    if(hit("download",["d"])){const i=this.result?.items[this.index];if(i)chrome.runtime.sendMessage({type:"LINKPEEK_DOWNLOAD",url:i.originalUrl,filename:i.filename});return true}
-    if(hit("resetZoom",["0"])){this.zoom=1;this.tx=this.ty=0;this.paintTransform();return true}
-    if(hit("zoomIn",["+","="])){this.applyZoom(1.2,this.stage.clientWidth/2,this.stage.clientHeight/2);return true}
-    if(hit("zoomOut",["-"])){this.applyZoom(1/1.2,this.stage.clientWidth/2,this.stage.clientHeight/2);return true}
+
+  /** Spatial keys in the grid: arrows move by tile and row, Enter opens the selected media. */
+  private gridKey(event: KeyboardEvent) {
+    if (event.ctrlKey || event.metaKey || event.altKey || !this.result?.items.length) return false;
+    const columns = this.grid?.columns() ?? 1;
+    const moves: Record<string, number> = {ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns};
+    if (event.key in moves) {
+      this.moveGridSelection(this.index + moves[event.key]);
+      return true;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      this.moveGridSelection(event.key === "Home" ? 0 : this.result.items.length - 1);
+      return true;
+    }
+    if (event.key === "Enter") {
+      this.pick(this.index);
+      return true;
+    }
     return false;
   }
-  move(delta:number){void this.navigate(delta)}
-  private async navigate(delta:number){if(!this.result?.items.length)return;const items=this.result.items,max=items.length-1,base=this.desiredIndex??this.index;let n=base+delta;if(this.settings.loopMode==="wrap")n=(n+items.length)%items.length;else n=Math.max(0,Math.min(max,n));if(n===base)return;this.desiredIndex=n;const version=++this.navigationVersion;this.preloader.schedule(n,Math.sign(delta));await this.preloader.ensure(items[n]);if(version!==this.navigationVersion||this.desiredIndex!==n||!this.result)return;this.index=n;this.desiredIndex=null;if(this.settings.resetZoomPerImage){this.zoom=1;this.tx=this.ty=0}this.render()}
-  quickZoom(x:number,y:number){if(this.zoom>1.01&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}const target=Math.max(1,this.settings.doubleClickZoom);this.applyZoom(target/this.zoom,x,y)}
-  applyZoom(factor:number,x:number,y:number){const old=this.zoom;this.zoom=Math.max(this.settings.minZoom,Math.min(this.settings.maxZoom,this.zoom*factor));if(old===this.zoom&&factor>1&&old>1){this.zoom=1;this.tx=this.ty=0}else{const ratio=this.zoom/old;this.tx=x-(x-this.tx)*ratio;this.ty=y-(y-this.ty)*ratio}this.paintTransform();this.toast(`${Math.round(this.zoom*100)}%`)}
-  pan(dx:number,dy:number){if(this.zoom<=1&&this.settings.verticalGesture!=="pan")return;this.tx+=dx;this.ty+=dy;this.paintTransform()}
-  onDoubleClick(x:number,y:number){if(this.settings.doubleClick==="next"){this.move(1);return}if(this.settings.doubleClick==="fullscreen"){if(document.fullscreenElement)void document.exitFullscreen();else void this.panel.requestFullscreen?.();return}if(this.zoom>1&&this.settings.secondDoubleClick==="fit"){this.zoom=1;this.tx=this.ty=0;this.paintTransform();this.toast("Fit");return}this.applyZoom(this.settings.doubleClickZoom,x,y)}
-  private async refreshFavorite(){
-    if(!this.result)return;const version=++this.favoriteVersion,url=this.result.url;
-    try{const value=await isFavorite(url);if(version===this.favoriteVersion&&this.result?.url===url&&this.favorite!==value){this.favorite=value;this.render()}}catch{}
+
+  private moveGridSelection(target: number) {
+    this.index = Math.max(0, Math.min(this.result!.items.length - 1, target));
+    this.grid?.setCurrent(this.index, "nearest");
+    this.updateChrome();
+    this.reportPosition();
   }
-  private async toggleFavorite(){
-    if(!this.result)return;const current=this.result;
-    try{
-      const result=await toggleFavorite({url:current.url,title:current.title||new URL(current.url).hostname,mediaCount:current.items.length});
-      if(this.result?.url!==current.url)return;this.favorite=result.saved;this.render();this.toast(result.saved?"Link saved":"Saved link removed");
-    }catch{this.toast("Couldn’t update favorite")}
-  }
-  paintTransform(){const img=this.panel.querySelector(".lp-image") as HTMLElement|null;if(img)img.style.transform=`translate(${this.tx}px,${this.ty}px) scale(${this.zoom})`}
-  toast(text:string){const t=document.createElement("div");t.className="lp-toast";t.textContent=text;this.panel.appendChild(t);setTimeout(()=>t.remove(),650)}
-  position(x:number,y:number){
-    const w=Math.min(this.settings.panelWidth,innerWidth-16),h=Math.min(480,innerHeight-16),g=this.settings.pointerGap;
-    if(this.settings.rememberPanelGeometry&&this.rememberedGeometry)this.applyGeometry(this.rememberedGeometry);
-    else{
-      this.panel.style.width="";this.panel.style.height="";this.panel.style.maxHeight="";let left=x+g,top=y+g;
-      if(this.settings.placement==="left")left=x-w-g;else if(this.settings.placement==="above")top=y-h-g;
-      else if(this.settings.placement==="below")top=y+g;
-      else if(this.settings.placement==="auto"){if(left+w>innerWidth-12)left=x-w-g;if(top+h>innerHeight-12)top=y-h-g}
-      left=Math.max(8,Math.min(innerWidth-w-8,left));top=Math.max(8,Math.min(innerHeight-h-8,top));this.panel.style.left=`${left}px`;this.panel.style.top=`${top}px`;this.panel.style.setProperty("--lp-width",`${w}px`);
+
+  /** Runs a button or shortcut action. */
+  private perform(action: string): boolean {
+    const item = this.result?.items[this.index];
+    switch (action) {
+      case "next":
+      case "previous":
+        this.stopSlideshow();
+        void this.navigate(action === "next" ? 1 : -1);
+        return true;
+      case "grid":
+        this.toggleView();
+        return true;
+      case "expand":
+        this.expanded = !this.expanded;
+        this.persistState();
+        this.applyPanelStyle();
+        this.render();
+        return true;
+      case "pin":
+        this.pinned = !this.pinned;
+        this.renderHeader();
+        this.toast(this.pinned ? "Pinned open" : "Unpinned");
+        return true;
+      case "favorite":
+        void this.toggleFavorite();
+        return true;
+      case "open":
+      case "post":
+        if (item) window.open(action === "post" ? item.sourceUrl : item.originalUrl, "_blank", "noopener");
+        return true;
+      case "download":
+        if (item) this.download(item);
+        return true;
+      case "copy":
+        if (item) void this.copyLink(item);
+        return true;
+      case "slideshow":
+        if (this.slideshow) this.stopSlideshow(true);
+        else this.startSlideshow();
+        return true;
+      case "zoomIn":
+      case "zoomOut":
+        if (this.view === "grid") this.resizeTiles(action === "zoomIn" ? THUMB_STEP : -THUMB_STEP);
+        else this.applyZoom(action === "zoomIn" ? ZOOM_STEP : 1 / ZOOM_STEP, (this.stage?.clientWidth ?? 0) / 2, (this.stage?.clientHeight ?? 0) / 2);
+        return true;
+      case "resetZoom":
+        this.resetZoom();
+        this.paintTransform();
+        return true;
+      case "grid-smaller":
+      case "grid-bigger":
+        this.resizeTiles(action === "grid-bigger" ? THUMB_STEP : -THUMB_STEP);
+        return true;
+      case "help":
+        this.toggleHelp();
+        return true;
+      case "close":
+        this.close(true);
+        return true;
+      default:
+        return false;
     }
-    this.panel.style.setProperty("--lp-maxh",`${this.settings.panelMaxVh}vh`);this.panel.style.setProperty("--lp-stageh",`${this.settings.focusHeightVh}vh`);this.panel.style.setProperty("--lp-expandedw",`${this.settings.expandedWidthVw}vw`);this.panel.style.setProperty("--lp-expandedh",`${this.settings.expandedHeightVh}vh`);this.panel.style.setProperty("--lp-thumb",`${this.gridThumbSize}px`);this.panel.style.opacity=String(this.settings.panelOpacity);this.panel.style.background=`rgba(17,21,18,${Math.max(.1,1-this.settings.transparency)})`;this.panel.style.backdropFilter=`blur(${this.settings.blur}px)`;this.panel.style.animationDuration=`${Math.max(0,this.settings.animationMs)}ms`;if(this.settings.motion==="none"||this.settings.reducedMotion)this.panel.style.animation="none"
   }
-  private escape(v:string){return v.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}
+
+  private onPanelClick = (event: MouseEvent) => {
+    const control = (event.target as Element).closest?.<HTMLElement>("[data-action]");
+    if (control) this.perform(control.dataset.action!);
+  };
+
+  private onPanelDoubleClick = (event: MouseEvent) => {
+    if (!(event.target as Element).closest?.(".lp-title") || !this.settings.rememberPanelGeometry) return;
+    this.geometry.remembered = undefined;
+    this.geometry.place(this.openX, this.openY, this.settings);
+    this.persistState();
+    this.toast("Panel layout reset");
+  };
+
+  private onPanelPointerDown = (event: PointerEvent) => {
+    if (this.expanded || event.button !== 0) return;
+    const target = event.target as Element, handle = target.closest?.<HTMLElement>("[data-resize]");
+    if (handle && this.settings.resizablePanel) {
+      this.cancelClose();
+      this.geometry.begin(event, handle.dataset.resize as ResizeEdge);
+    } else if (this.settings.draggablePanel && target.closest?.(".lp-head") && !target.closest("button,input,select")) {
+      this.cancelClose();
+      this.geometry.begin(event, "move");
+    }
+  };
+
+  private applyPanelStyle() {
+    const s = this.settings, style = this.panel.style;
+    this.panel.className = `lp-panel${this.expanded ? " lp-expanded" : ""}${s.reducedMotion ? " lp-calm" : ""}`;
+    this.panel.setAttribute("role", "dialog");
+    style.setProperty("--lp-maxh", `${s.panelMaxVh}vh`);
+    style.setProperty("--lp-stageh", `${s.focusHeightVh}vh`);
+    style.setProperty("--lp-expandedw", `${s.expandedWidthVw}vw`);
+    style.setProperty("--lp-expandedh", `${s.expandedHeightVh}vh`);
+    style.background = `rgba(17, 21, 18, ${Math.max(0.1, 1 - s.transparency)})`;
+    style.backdropFilter = `blur(${s.blur}px)`;
+  }
+
+  private headerTitle() {
+    if (!this.result) return this.title;
+    try {
+      return this.result.title || new URL(this.result.url).hostname;
+    } catch {
+      return this.result.url;
+    }
+  }
+
+  private headerMarkup() {
+    return markup.headerMarkup({
+      title: this.headerTitle(), count: this.result?.items.length, view: this.view, expanded: this.expanded, pinned: this.pinned,
+      favorite: this.favorite, slideshow: this.slideshow, help: this.help, settings: this.settings
+    });
+  }
+
+  private footerMarkup() {
+    return markup.footerMarkup({result: this.result, index: this.pendingIndex ?? this.index, view: this.view, gridThumbSize: this.gridThumbSize, slideshow: this.slideshow, settings: this.settings});
+  }
+
+  private bodyMarkup() {
+    const result = this.result, item = result?.items[this.index];
+    if (this.failure) return markup.errorMarkup(this.failure);
+    if (!result || (!result.items.length && !result.complete)) return markup.loadingMarkup;
+    if (!item) return markup.emptyMarkup;
+    if (this.view === "grid") return markup.gridMarkup(result);
+    return markup.stageMarkup(item, this.settings, item.type === "image" && this.preloader.isReady(item));
+  }
+
+  private teardownBody() {
+    this.grid?.destroy();
+    this.grid = undefined;
+    this.gesture?.destroy();
+    this.gesture = undefined;
+    this.gifPlayer?.destroy();
+    this.gifPlayer = undefined;
+    this.stage = undefined;
+  }
+
+  /** Rebuilds the whole panel. Used when the view changes; moving between items does not come here. */
+  private render() {
+    const version = ++this.renderVersion;
+    this.teardownBody();
+    this.panel.setAttribute("aria-label", `LinkPeek preview: ${this.headerTitle()}`);
+    const resize = this.settings.resizablePanel && !this.expanded ? markup.resizeHandles() : "";
+    this.panel.innerHTML = this.headerMarkup() + this.bodyMarkup() + this.footerMarkup() + resize
+      + `<div class="lp-live" aria-live="polite"></div><div class="lp-toast" role="status"></div>`
+      + (this.help ? markup.helpMarkup(this.settings.shortcuts, this.result?.items[this.index]?.type === "gif") : "");
+    const result = this.result, item = result?.items[this.index];
+    if (!result || !item || this.failure) return;
+    this.preloader.reset(result.items, this.index, this.settings);
+    if (this.view === "grid") {
+      this.grid = new VirtualGrid(this.panel.querySelector<HTMLElement>(".lp-grid")!, result.items, {cell: this.gridThumbSize, current: this.index, onPick: index => this.pick(index)});
+      return;
+    }
+    this.stage = this.panel.querySelector<HTMLElement>(".lp-stage")!;
+    this.gesture = new GestureController(this.stage, {
+      next: count => this.navigateFromGesture(count ?? 1),
+      previous: count => this.navigateFromGesture(-(count ?? 1)),
+      scrub: delta => this.navigateFromGesture(delta > 0 ? this.settings.maxImagesPerSwipe : -this.settings.maxImagesPerSwipe),
+      pan: (dx, dy) => this.pan(dx, dy),
+      zoom: (factor, x, y) => this.applyZoom(factor, x, y),
+      doubleClick: (x, y) => this.onDoubleClick(x, y),
+      isZoomed: () => this.zoom > 1.01
+    }, this.settings);
+    this.fillMedia(item, version);
+  }
+
+  private renderHeader() {
+    this.panel.querySelector(".lp-head")?.replaceWith(this.fragment(this.headerMarkup()));
+  }
+
+  private fragment(html: string) {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    return template.content;
+  }
+
+  /** Refreshes the counter, status and actions after navigation or a progress update. */
+  private updateChrome() {
+    this.panel.querySelector(".lp-foot")?.replaceWith(this.fragment(this.footerMarkup()));
+    const meta = this.panel.querySelector(".lp-meta");
+    if (meta) meta.textContent = String(this.result?.items.length ?? "");
+  }
+
+  private updateGridProgress() {
+    const bar = this.panel.querySelector(".lp-grid-progress");
+    if (!bar || !this.result) return;
+    if (this.result.complete) bar.remove();
+    else bar.lastElementChild!.textContent = `Still scanning · ${markup.progressText(this.result)}`;
+  }
+
+  /** Places the item's media in the stage: the decoded image, a GIF player or a video. */
+  private fillMedia(item: MediaItem, version: number) {
+    const slot = this.stage?.querySelector(".lp-image-slot");
+    const decoded = slot ? this.preloader.element(item) : undefined;
+    if (slot && decoded) {
+      decoded.className = "lp-image";
+      decoded.alt = item.filename || "Preview image";
+      slot.replaceWith(decoded);
+    }
+    if (item.type === "gif") void this.mountGif(item, version);
+    this.paintTransform();
+    void this.prepareNextGif();
+  }
+
+  /** Swaps the media for the current item without rebuilding the panel. */
+  private showFocusMedia(failed = false) {
+    const item = this.result!.items[this.index], holder = this.stage?.querySelector(".lp-media");
+    if (!holder) return this.render();
+    const version = ++this.renderVersion;
+    this.gifPlayer?.destroy();
+    this.gifPlayer = undefined;
+    holder.innerHTML = markup.mediaMarkup(item, this.settings, !failed && item.type === "image" && this.preloader.isReady(item), failed);
+    const tip = this.stage!.querySelector(".lp-tip");
+    if (tip) tip.textContent = markup.tipText(item);
+    this.fillMedia(item, version);
+    this.updateChrome();
+    const live = this.panel.querySelector(".lp-live");
+    if (live) live.textContent = `Media ${this.index + 1} of ${this.result!.items.length}`;
+  }
+
+  private loadGifModule() {
+    this.gifModule ??= this.loadGifPlayer();
+    return this.gifModule;
+  }
+
+  private async mountGif(item: MediaItem, version: number) {
+    try {
+      const module = await this.loadGifModule();
+      if (version !== this.renderVersion || this.view !== "focus" || this.result?.items[this.index] !== item) return;
+      const player = new module.GifPlayer(this.stage!, item.originalUrl, this.settings, message => this.toast(message));
+      this.gifPlayer = player;
+      await player.init();
+    } catch (error) {
+      if (version !== this.renderVersion) return;
+      const mount = this.stage?.querySelector(".lp-gif-mount");
+      if (mount) mount.innerHTML = `<div class="lp-gif-fallback"><img class="lp-image" src="${escapeHtml(item.originalUrl)}" alt="Animated GIF"><span>Native GIF playback</span></div>`;
+      this.toast(error instanceof Error ? error.message : "GIF controls unavailable");
+    }
+  }
+
+  /** Starts decoding the next GIF's frames in the background so its controls are ready on arrival. */
+  private async prepareNextGif() {
+    const items = this.result?.items ?? [], next = items[this.settings.wrapAround ? (this.index + 1) % items.length : this.index + 1];
+    if (next?.type !== "gif") return;
+    try {
+      const module = await this.loadGifModule();
+      await module.prepareGif(next.originalUrl, this.settings.gifDecodeMaxMb);
+    } catch {
+      // Preparation is opportunistic; the player retries when the GIF is shown.
+    }
+  }
+
+  private navigateFromGesture(delta: number) {
+    this.stopSlideshow();
+    void this.navigate(delta);
+  }
+
+  /** Moves through the gallery. The counter updates at once; the media swaps when it is decoded. */
+  private async navigate(delta: number) {
+    const items = this.result?.items;
+    if (!items?.length) return;
+    const base = this.pendingIndex ?? this.index;
+    const target = this.settings.wrapAround ? ((base + delta) % items.length + items.length) % items.length : Math.max(0, Math.min(items.length - 1, base + delta));
+    this.pendingStart = null;
+    if (target === base) {
+      if (!this.settings.wrapAround) this.toast(delta > 0 ? "Last item" : "First item");
+      return;
+    }
+    if (this.view === "grid") {
+      this.moveGridSelection(target);
+      return;
+    }
+    const version = ++this.navigationVersion;
+    this.pendingIndex = target;
+    this.updateChrome();
+    this.preloader.schedule(target, Math.sign(delta));
+    const busy = window.setTimeout(() => this.stage?.classList.add("lp-busy"), BUSY_AFTER_MS);
+    const loaded = await this.preloader.ensure(items[target]);
+    clearTimeout(busy);
+    // Progress updates replace the item list while a long thread scans; only a different item cancels the move.
+    if (version !== this.navigationVersion || this.result?.items[target]?.id !== items[target].id) return;
+    this.stage?.classList.remove("lp-busy");
+    this.index = target;
+    this.pendingIndex = null;
+    if (this.settings.resetZoomPerImage) this.resetZoom();
+    this.showFocusMedia(!loaded);
+    this.reportPosition();
+  }
+
+  private reportPosition() {
+    if (this.result) this.onPosition?.(this.result.url, this.index);
+  }
+
+  private pick(index: number) {
+    this.index = index;
+    this.view = "focus";
+    this.persistState();
+    this.render();
+    this.reportPosition();
+  }
+
+  private toggleView() {
+    this.stopSlideshow();
+    this.view = this.view === "grid" ? "focus" : "grid";
+    this.persistState();
+    this.render();
+  }
+
+  private resizeTiles(step: number) {
+    this.gridThumbSize = Math.max(MIN_THUMB, Math.min(MAX_THUMB, this.gridThumbSize + step));
+    this.persistState();
+    this.grid?.setCell(this.gridThumbSize);
+    this.updateChrome();
+    this.toast(`${this.gridThumbSize}px tiles`);
+  }
+
+  private startSlideshow() {
+    if (!this.result?.items.length) return;
+    this.slideshow = true;
+    if (this.view === "grid") {
+      this.view = "focus";
+      this.render();
+    } else {
+      this.renderHeader();
+      this.updateChrome();
+    }
+    this.toast(`Slideshow · every ${this.settings.slideshowSeconds}s`);
+    this.queueSlide();
+  }
+
+  private queueSlide() {
+    clearTimeout(this.slideshowTimer);
+    this.slideshowTimer = window.setTimeout(async () => {
+      const items = this.result?.items ?? [];
+      if (!this.settings.wrapAround && this.index >= items.length - 1) {
+        this.stopSlideshow();
+        this.toast("End of gallery");
+        return;
+      }
+      await this.navigate(1);
+      if (this.slideshow) this.queueSlide();
+    }, this.settings.slideshowSeconds * 1000);
+  }
+
+  private stopSlideshow(announce = false) {
+    if (!this.slideshow) return;
+    this.slideshow = false;
+    clearTimeout(this.slideshowTimer);
+    if (!this.isOpen) return;
+    this.renderHeader();
+    this.updateChrome();
+    if (announce) this.toast("Slideshow stopped");
+  }
+
+  private toggleHelp() {
+    this.help = !this.help;
+    if (this.help) this.panel.append(this.fragment(markup.helpMarkup(this.settings.shortcuts, this.result?.items[this.index]?.type === "gif")));
+    else this.panel.querySelector(".lp-help")?.remove();
+    this.panel.querySelector(".lp-helpbtn")?.setAttribute("aria-expanded", String(this.help));
+    this.panel.querySelector<HTMLElement>(this.help ? ".lp-help-close" : ".lp-helpbtn")?.focus();
+  }
+
+  private download(item: MediaItem) {
+    chrome.runtime.sendMessage({type: "LINKPEEK_DOWNLOAD", url: item.originalUrl, filename: safeDownloadName(item)})
+      .then((response: {error?: string} | undefined) => this.toast(response?.error ? "Download failed" : "Downloading…"))
+      .catch(() => this.toast("Download failed"));
+  }
+
+  private async copyLink(item: MediaItem) {
+    try {
+      await navigator.clipboard.writeText(item.originalUrl);
+      this.toast("Media link copied");
+    } catch {
+      this.toast("Couldn’t copy the link");
+    }
+  }
+
+  private resetZoom() {
+    this.zoom = 1;
+    this.tx = this.ty = 0;
+  }
+
+  applyZoom(factor: number, x: number, y: number) {
+    this.stopSlideshow();
+    const old = this.zoom;
+    this.zoom = Math.max(1, Math.min(this.settings.maxZoom, this.zoom * factor));
+    if (old === this.zoom && factor > 1 && old > 1) {
+      this.resetZoom();
+    } else {
+      const ratio = this.zoom / old;
+      this.tx = x - (x - this.tx) * ratio;
+      this.ty = y - (y - this.ty) * ratio;
+    }
+    if (this.zoom === 1) this.tx = this.ty = 0;
+    this.paintTransform();
+    this.toast(`${Math.round(this.zoom * 100)}%`);
+  }
+
+  pan(dx: number, dy: number) {
+    if (this.zoom <= 1) return;
+    this.tx += dx;
+    this.ty += dy;
+    this.paintTransform();
+  }
+
+  onDoubleClick(x: number, y: number) {
+    const mode = this.settings.doubleClick;
+    if (mode === "next") {
+      this.navigateFromGesture(1);
+    } else if (mode === "fullscreen") {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void this.panel.requestFullscreen?.();
+    } else if (this.zoom > 1 && this.settings.secondDoubleClick === "fit") {
+      this.resetZoom();
+      this.paintTransform();
+      this.toast("Fit");
+    } else {
+      this.applyZoom(this.settings.doubleClickZoom, x, y);
+    }
+  }
+
+  paintTransform() {
+    const media = this.stage?.querySelector<HTMLElement>(".lp-image");
+    if (media) media.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.zoom})`;
+  }
+
+  private async refreshFavorite() {
+    const url = this.result?.url, version = ++this.favoriteVersion;
+    if (!url) return;
+    try {
+      const value = await isFavorite(url);
+      if (version !== this.favoriteVersion || this.result?.url !== url || this.favorite === value) return;
+      this.favorite = value;
+      this.renderHeader();
+    } catch {
+      // Storage unavailable: the star simply stays empty.
+    }
+  }
+
+  private async toggleFavorite() {
+    const current = this.result;
+    if (!current) return;
+    try {
+      const outcome = await toggleFavorite({url: current.url, title: this.headerTitle(), mediaCount: current.items.length});
+      if (this.result?.url !== current.url) return;
+      this.favorite = outcome.saved;
+      this.renderHeader();
+      this.toast(outcome.saved ? "Link saved" : "Saved link removed");
+    } catch {
+      this.toast("Couldn’t update saved links");
+    }
+  }
+
+  toast(text: string) {
+    const toast = this.panel.querySelector(".lp-toast");
+    if (!toast) return;
+    toast.textContent = text;
+    toast.classList.add("lp-on");
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => toast.classList.remove("lp-on"), TOAST_MS);
+  }
 }

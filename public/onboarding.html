@@ -1,1 +1,92 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Welcome to LinkPeek</title><link rel="stylesheet" href="base.css"><style>body{overflow-x:hidden}.flow{min-height:100vh;display:grid;grid-template-rows:64px 1fr}.screen{display:none;grid-template-columns:1fr 1fr;gap:52px;align-items:center;padding:54px 0 80px}.screen.active{display:grid}.copy{display:grid;gap:20px}.copy p{font-size:18px;line-height:1.6;color:var(--muted);max-width:55ch}.demo{min-height:430px;display:grid;place-items:center;position:relative}.fake{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 32px 100px rgba(0,0,0,.4)}.fakebar{display:flex;gap:6px;margin-bottom:28px}.dot{width:8px;height:8px;border-radius:50%;background:var(--line)}.demo-link{color:var(--signal);font-weight:800;text-decoration:underline;text-underline-offset:4px;cursor:pointer}.peek{display:none;margin-top:16px;background:#050605;border:1px solid var(--line);border-radius:14px;overflow:hidden}.peek.on{display:block}.peekhead{padding:10px 12px;border-bottom:1px solid var(--line);font-size:10px;color:var(--signal);letter-spacing:.12em}.peekimg{height:230px;display:grid;place-items:center;background:linear-gradient(140deg,#151a16,#252d21)}.orb{width:120px;height:120px;border:2px solid var(--signal);border-radius:32% 68% 48% 52%;box-shadow:0 0 60px rgba(215,255,63,.18)}.progress{display:flex;gap:7px}.progress i{width:32px;height:3px;background:var(--line);border-radius:9px}.progress i.on{background:var(--signal)}.choicegrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.choice{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;text-align:left;color:var(--text)}.choice strong{display:block}.choice span{display:block;color:var(--muted);font-size:12px;margin-top:5px}.choice.selected{border-color:var(--signal);background:var(--wash)}.cheat{display:grid;grid-template-columns:1fr 1fr;gap:10px}.cheat div{padding:12px;border-bottom:1px solid var(--line)}.cheat kbd{color:var(--signal)}@media(max-width:820px){.screen{grid-template-columns:1fr}.demo{min-height:300px}}</style></head><body><div class="flow"><header class="top shell"><div class="mark">LP</div><div><div class="rex">REX TECHNOLOGIES</div><div class="brand">LinkPeek</div></div><span class="spacer"></span><div id="progress" class="progress"></div></header><main class="shell"><section class="screen active" data-step="0"><div class="copy"><div class="rex">WELCOME TO LINKPEEK</div><h1>See what’s behind a link <span>before you open it.</span></h1><p>Hover a thread or page, browse its posted media, zoom in, and keep your place. Designed first for one-handed touchpad use.</p><div><button class="button primary next">Show me</button></div></div><div class="demo"><div class="fake"><div class="fakebar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="muted">A forum thread with 24 photos</div><p style="margin:14px 0"><span id="demoLink" class="demo-link">Hover this thread</span></p><div id="peek" class="peek"><div class="peekhead">REX · LINKPEEK · 24 MEDIA</div><div class="peekimg"><div class="orb"></div></div></div></div></div></section><section class="screen" data-step="1"><div class="copy"><div class="rex">CALIBRATE</div><h1>Your hand, <span>your direction.</span></h1><p>Two-finger vertical scrolling changes images. Pick the direction that feels natural to you.</p><div class="choicegrid"><button class="choice selected" data-direction="normal"><strong>Scroll down → next</strong><span>Natural feed-style navigation</span></button><button class="choice" data-direction="reverse"><strong>Scroll up → next</strong><span>Reverse the image direction</span></button></div><div><button class="button primary next">Continue</button></div></div><div class="card"><div class="eyebrow">Touchpad first</div><h2 style="margin:10px 0">No precision controls required.</h2><p class="muted">↕ browse · ↔ fast scrub · pinch zoom · drag the header · resize any edge</p></div></section><section class="screen" data-step="2"><div class="copy"><div class="rex">STARTING STYLE</div><h1>Choose a <span>feel.</span></h1><p>This only sets your starting point. Every value remains individually editable later.</p><div id="presetChoices" class="choicegrid"></div><div><button class="button primary next">Continue</button></div></div><div class="card"><div class="eyebrow">POWER WITHOUT CLUTTER</div><h2 style="margin:10px 0">Simple by default. Deep when you want it.</h2><p class="muted">Searchable settings, per-site profiles, remappable shortcuts, media filters, performance controls, privacy controls, gesture sensitivity, accessibility, and developer diagnostics.</p></div></section><section class="screen" data-step="3"><div class="copy"><div class="rex">YOU’RE READY</div><h1>One hand is <span>enough.</span></h1><p>Press <kbd>?</kbd> any time the viewer is open to bring this control sheet back.</p><div class="cheat card"><div><kbd>Hover</kbd><br><span class="muted">Preview</span></div><div><kbd>↕ Scroll</kbd><br><span class="muted">Previous / next</span></div><div><kbd>Pinch</kbd><br><span class="muted">Zoom</span></div><div><kbd>Double click</kbd><br><span class="muted">Zoom here</span></div><div><kbd>G</kbd><br><span class="muted">Grid</span></div><div><kbd>?</kbd><br><span class="muted">Help</span></div></div><div class="row"><button id="finish" class="button primary">Start browsing</button><button id="settings" class="button">Open settings</button></div></div><div class="card"><div class="rex">REX TECHNOLOGIES</div><h2 style="margin:12px 0">LinkPeek</h2><p class="muted">Private by design. Link scanning and media extraction happen locally in your browser.</p></div></section></main></div><script src="onboarding.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Welcome to LinkPeek</title>
+  <link rel="stylesheet" href="base.css">
+</head>
+<body class="onboarding">
+  <div class="flow">
+    <header class="top shell">
+      <div class="mark">LP</div>
+      <div><div class="rex">REX TECHNOLOGIES</div><div class="brand">LinkPeek</div></div>
+      <span class="spacer"></span>
+      <div id="progress" class="progress" aria-hidden="true"></div>
+    </header>
+    <main class="shell">
+      <section class="screen active" data-step="0">
+        <div class="copy">
+          <div class="rex">WELCOME TO LINKPEEK</div>
+          <h1>See what’s behind a link <span>before you open it.</span></h1>
+          <p>Hover a thread or page and browse its posted media right there: scroll through it, zoom in, switch to a grid. Built for one hand on a touchpad.</p>
+          <div><button class="button primary next" type="button">Show me</button></div>
+        </div>
+        <div class="demo">
+          <div class="fake">
+            <div class="fakebar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+            <div class="muted">A forum thread with 24 photos</div>
+            <p class="demo-line"><span id="demoLink" class="demo-link" tabindex="0">Hover this thread</span></p>
+            <div id="peek" class="peek"><div class="peekhead">REX · LINKPEEK · 24 MEDIA</div><div class="peekimg"><div class="orb"></div></div></div>
+          </div>
+        </div>
+      </section>
+      <section class="screen" data-step="1">
+        <div class="copy">
+          <div class="rex">YOUR HAND</div>
+          <h1>Which way is <span>next?</span></h1>
+          <p>Two-finger scrolling over a preview moves between items. Pick the direction that feels natural.</p>
+          <div class="choicegrid">
+            <button class="choice selected" type="button" data-direction="normal"><strong>Scroll down → next</strong><span>Like a feed. Most people pick this.</span></button>
+            <button class="choice" type="button" data-direction="reverse"><strong>Scroll up → next</strong><span>Reversed.</span></button>
+          </div>
+          <div><button class="button primary next" type="button">Continue</button></div>
+        </div>
+        <div class="card side-note">
+          <div class="eyebrow">Touchpad first</div>
+          <h2>No precision needed.</h2>
+          <p class="muted">↕ browse · ↔ fast scrub · pinch to zoom · drag the title to move · pull an edge to resize. LinkPeek remembers where you put it.</p>
+        </div>
+      </section>
+      <section class="screen" data-step="2">
+        <div class="copy">
+          <div class="rex">MAKE IT YOURS</div>
+          <h1>How should previews <span>open?</span></h1>
+          <div class="choicegrid three">
+            <button class="choice" type="button" data-open="hover"><strong>Hover</strong><span>Rest on a link. One-handed.</span></button>
+            <button class="choice" type="button" data-open="modifier"><strong>Alt + hover</strong><span>Only while Alt is held.</span></button>
+            <button class="choice" type="button" data-open="click"><strong>Click</strong><span>Ctrl-click still opens links.</span></button>
+          </div>
+          <div class="eyebrow">Performance</div>
+          <div class="choicegrid three">
+            <button class="choice" type="button" data-mode="auto"><strong>Auto</strong><span>Prepares what this device handles and eases off when busy.</span></button>
+            <button class="choice" type="button" data-mode="saver"><strong>Data saver</strong><span>Prepares nothing ahead.</span></button>
+            <button class="choice" type="button" data-mode="fast"><strong>Fast</strong><span>Prepares more on capable machines.</span></button>
+          </div>
+          <div><button class="button primary next" type="button">Continue</button></div>
+        </div>
+        <div class="card side-note">
+          <div class="eyebrow">Instant by design</div>
+          <h2>Ready before you hover.</h2>
+          <p class="muted">LinkPeek quietly prepares the links near your pointer, so most previews open with their first image already on screen. If the page or your computer gets busy, it backs off by itself.</p>
+        </div>
+      </section>
+      <section class="screen" data-step="3">
+        <div class="copy">
+          <div class="rex">YOU’RE READY</div>
+          <h1>One hand is <span>enough.</span></h1>
+          <p>Press <kbd>?</kbd> in any preview to see every control.</p>
+          <div id="cheat" class="cheat card"></div>
+          <div class="row"><button id="finish" class="button primary" type="button">Start browsing</button><button id="settings" class="button" type="button">Open settings</button></div>
+        </div>
+        <div class="card side-note">
+          <div class="rex">REX TECHNOLOGIES</div>
+          <h2>LinkPeek</h2>
+          <p class="muted">Private by design. Scanning happens in your browser; there is no LinkPeek server and no analytics.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="onboarding.js"></script>
+</body>
+</html>

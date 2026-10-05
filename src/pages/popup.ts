@@ -1,23 +1,116 @@
-import {DEFAULT_SETTINGS,PRESETS,loadSettings,saveSettings,type LinkPeekSettings} from "../shared/settings";
-import {loadFavorites,removeFavorite} from "../shared/favorites";
-let s:LinkPeekSettings=DEFAULT_SETTINGS;let host="";
-const $=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
-const escapeHtml=(v:string)=>v.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
-async function renderFavorites(){
-  const favorites=await loadFavorites();$("favoriteCount").textContent=String(favorites.length);
-  $("favorites").innerHTML=favorites.length?favorites.map((f,i)=>`<div class="favorite-row"><button class="favorite-open" data-open-favorite="${i}" title="${escapeHtml(f.url)}"><strong>${escapeHtml(f.title)}</strong><small>${escapeHtml(new URL(f.url).hostname)}${f.mediaCount!=null?` · ${f.mediaCount} media`:""}</small></button><button class="favorite-remove" data-remove-favorite="${i}" aria-label="Remove favorite">×</button></div>`).join(""):'<div class="favorite-empty">No saved links yet.</div>';
-  document.querySelectorAll<HTMLElement>("[data-open-favorite]").forEach(el=>el.addEventListener("click",()=>{const f=favorites[Number(el.dataset.openFavorite)];if(f)chrome.tabs.create({url:f.url})}));
-  document.querySelectorAll<HTMLElement>("[data-remove-favorite]").forEach(el=>el.addEventListener("click",async()=>{const f=favorites[Number(el.dataset.removeFavorite)];if(!f)return;await removeFavorite(f.url);await renderFavorites()}));
+/** The toolbar popup: on/off, this site, performance and opening style at a glance, and saved links. */
+import {escapeHtml} from "../shared/dom";
+import {loadFavorites, removeFavorite} from "../shared/favorites";
+import type {TabStatus} from "../shared/messages";
+import {loadSettings, saveSettings, siteProfileFor, type LinkPeekSettings} from "../shared/settings";
+
+let settings: LinkPeekSettings;
+let host = "";
+let status: TabStatus | undefined;
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+function pausedHere() {
+  return Boolean(host) && siteProfileFor(settings.siteProfiles, host)?.enabled === false;
 }
-(async()=>{
-  s=await loadSettings();$("enabled").toggleAttribute("checked",s.enabled);($("enabled") as HTMLInputElement).checked=s.enabled;($("preset") as HTMLSelectElement).value=s.preset;
-  const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.url?.startsWith("http")){host=new URL(tab.url).hostname;$("site").textContent=host;const disabled=s.siteProfiles[host]?.enabled===false;$("disableSite").textContent=disabled?"Enable here":"Pause here"}else $("site").textContent="Not a web page";
+
+/** One line describing what LinkPeek is doing on this tab right now. */
+function statusLine(): string {
+  if (!host) return "Previews work on web pages.";
+  if (!settings.enabled) return "LinkPeek is off.";
+  if (pausedHere()) return "Paused on this site.";
+  if (!status) return "Reload this page to start previews here.";
+  const ready = `${status.prepared} link${status.prepared === 1 ? "" : "s"} ready`;
+  if (status.reason) return `${ready} · easing off: ${status.reason}`;
+  return `${ready} · running at full speed on this ${status.tier} device`;
+}
+
+function renderSegments(name: "mode" | "open", value: string) {
+  document.querySelectorAll<HTMLButtonElement>(`[data-${name}]`).forEach(button => {
+    const active = button.dataset[name] === value;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+}
+
+function render() {
+  ($("enabled") as HTMLInputElement).checked = settings.enabled;
+  $("site").textContent = host || "Not a web page";
+  $("status").textContent = statusLine();
+  const pause = $("pauseSite") as HTMLButtonElement;
+  pause.hidden = !host;
+  pause.textContent = pausedHere() ? "Resume here" : "Pause here";
+  renderSegments("mode", settings.performanceMode);
+  renderSegments("open", settings.activationMode);
+}
+
+async function renderFavorites() {
+  const favorites = await loadFavorites();
+  $("favoriteCount").textContent = String(favorites.length);
+  $("favorites").innerHTML = favorites.length
+    ? favorites.map((favorite, i) => `<div class="favorite-row"><button type="button" class="favorite-open" data-open-favorite="${i}" title="${escapeHtml(favorite.url)}"><strong>${escapeHtml(favorite.title)}</strong><small>${escapeHtml(new URL(favorite.url).hostname)}${favorite.mediaCount != null ? ` · ${favorite.mediaCount} media` : ""}</small></button><button type="button" class="favorite-remove" data-remove-favorite="${i}" aria-label="Remove ${escapeHtml(favorite.title)}">×</button></div>`).join("")
+    : `<div class="favorite-empty">No saved links yet. Press B while previewing to save one.</div>`;
+  document.querySelectorAll<HTMLElement>("[data-open-favorite]").forEach(el => el.addEventListener("click", () => {
+    void chrome.tabs.create({url: favorites[Number(el.dataset.openFavorite)].url});
+  }));
+  document.querySelectorAll<HTMLElement>("[data-remove-favorite]").forEach(el => el.addEventListener("click", async () => {
+    await removeFavorite(favorites[Number(el.dataset.removeFavorite)].url);
+    await renderFavorites();
+  }));
+}
+
+async function save() {
+  await saveSettings(settings);
+  render();
+}
+
+async function togglePause() {
+  const sites = {...settings.siteProfiles}, rule = {...sites[host]};
+  if (pausedHere()) {
+    delete rule.enabled;
+    if (Object.keys(rule).length) sites[host] = rule;
+    else delete sites[host];
+    // A wildcard rule may also pause this host; an explicit rule resumes it.
+    if (siteProfileFor(sites, host)?.enabled === false) sites[host] = {...rule, enabled: true};
+  } else {
+    sites[host] = {...rule, enabled: false};
+  }
+  settings = {...settings, siteProfiles: sites};
+  await save();
+}
+
+async function start() {
+  settings = await loadSettings();
+  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  if (tab?.url?.startsWith("http")) {
+    host = new URL(tab.url).hostname;
+    status = await chrome.tabs.sendMessage(tab.id!, {type: "LINKPEEK_STATUS"}).catch(() => undefined) as TabStatus | undefined;
+  }
+  render();
   await renderFavorites();
-})();
-$("enabled").addEventListener("change",async e=>{s.enabled=(e.target as HTMLInputElement).checked;await saveSettings(s)});
-$("preset").addEventListener("change",async e=>{const p=(e.target as HTMLSelectElement).value;s={...s,...(PRESETS[p]??{}),preset:p as LinkPeekSettings["preset"]};await saveSettings(s)});
-$("options").addEventListener("click",()=>chrome.runtime.openOptionsPage());
-$("help").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("onboarding.html")}));
-$("clear").addEventListener("click",async()=>{await chrome.runtime.sendMessage({type:"LINKPEEK_CLEAR_CACHE"});$("clear").textContent="Cleared"});
-$("disableSite").addEventListener("click",async()=>{if(!host)return;const cur=s.siteProfiles[host]??{};s.siteProfiles={...s.siteProfiles,[host]:{...cur,enabled:cur.enabled===false?true:false}};await saveSettings(s);$("disableSite").textContent=s.siteProfiles[host].enabled===false?"Enable here":"Pause here"});
-chrome.storage.onChanged.addListener(changes=>{if(changes.favorites)void renderFavorites()});
+}
+
+$("enabled").addEventListener("change", event => {
+  settings = {...settings, enabled: (event.target as HTMLInputElement).checked};
+  void save();
+});
+$("pauseSite").addEventListener("click", () => void togglePause());
+document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
+  settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};
+  void save();
+}));
+document.querySelectorAll<HTMLButtonElement>("[data-open]").forEach(button => button.addEventListener("click", () => {
+  settings = {...settings, activationMode: button.dataset.open as LinkPeekSettings["activationMode"]};
+  void save();
+}));
+$("options").addEventListener("click", () => void chrome.runtime.openOptionsPage());
+$("practice").addEventListener("click", () => void chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")}));
+$("clear").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({type: "LINKPEEK_CLEAR_CACHE"});
+  $("clear").textContent = "Cache cleared";
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.favorites) void renderFavorites();
+});
+
+void start();
