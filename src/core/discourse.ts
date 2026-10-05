@@ -8,6 +8,7 @@
 import type {MediaItem, ScanResult} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml} from "./extract";
+import {fetchWithRetry} from "./http";
 
 export type DPost = {id: number; post_number: number; username?: string; cooked?: string; post_url?: string};
 export type DTopic = {id: number; title?: string; post_stream?: {posts?: DPost[]; stream?: number[]}};
@@ -34,7 +35,7 @@ function topicJsonUrl(raw: string) {
 
 async function fetchText(url: string, signal?: AbortSignal) {
   ensureNotAborted(signal);
-  const response = await fetch(url, {credentials: "include", redirect: "follow", signal});
+  const response = await fetchWithRetry(url, {credentials: "include", redirect: "follow", signal});
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   return response.text();
 }
