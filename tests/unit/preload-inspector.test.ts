@@ -5,7 +5,7 @@ import {PreloadInspector, type PreloadInspectorHost} from "../../src/content/pre
 let entries: PreloadEntry[], listeners: Array<() => void>, frames: Array<() => void>, source: PreloadInspectorHost & {[K in "setPriority" | "openUrl"]: ReturnType<typeof vi.fn>};
 
 const entry = (name: string, state: PreloadEntry["state"], patch: Partial<PreloadEntry> = {}): PreloadEntry => ({
-  url: `https://x.test/${name}`, label: name, state, priority: "normal", source: "page", ...patch
+  url: `https://x.test/${name}`, label: name, state, priority: "normal", source: "page", hasGif: false, ...patch
 });
 function link(name: string) {
   const a = document.createElement("a");
@@ -56,6 +56,19 @@ describe("the preload inspector", () => {
     expect(ready.dataset.linkpeekPreloadPriority).toBeUndefined();
     expect(q(inspector, '[data-group="prepared"] small')!.textContent).toBe("Ready gallery");
     expect(q(inspector, '[data-group="loading"] .pi-state')!.textContent).toBe("loading · maximum");
+  });
+
+  it("shows a play badge only for links known to contain GIFs", () => {
+    const gif = link("gif"), still = link("still");
+    entries = [entry("gif", "prepared", {hasGif: true}), entry("still", "prepared")];
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    expect(gif.dataset.linkpeekPreloadGif).toBe("true");
+    expect(still.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(panel(inspector).querySelectorAll(".pi-gif")).toHaveLength(1);
+    expect(q(inspector, ".pi-gif")!.getAttribute("title")).toBe("Contains GIF");
+    inspector.close();
+    expect(gif.dataset.linkpeekPreloadGif).toBeUndefined();
   });
 
   it("keeps closed accordion groups as counts only, caps long groups and shows empty ones", () => {
