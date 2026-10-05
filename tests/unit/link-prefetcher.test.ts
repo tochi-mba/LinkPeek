@@ -303,6 +303,15 @@ describe("the inspector's view", () => {
     expect(byUrl.get("idle")).toMatchObject({state: "not-started", priority: "normal", label: "https://x.test/idle"});
   });
 
+  it("reports GIF presence for prepared galleries and direct GIF links only", () => {
+    const p = prefetcher(), gallery = link("https://x.test/gallery"), direct = link("https://x.test/direct.gif"), still = link("https://x.test/still.jpg");
+    p.remember(gallery.href, scan(gallery.href, [{type: "image"}, {type: "gif"}]));
+    const byUrl = new Map(p.snapshot().map(entry => [entry.url, entry]));
+    expect(byUrl.get(gallery.href)!.hasGif).toBe(true);
+    expect(byUrl.get(direct.href)!.hasGif).toBe(true);
+    expect(byUrl.get(still.href)!.hasGif).toBe(false);
+  });
+
   it("tells subscribers about changes until they unsubscribe", () => {
     const p = prefetcher(), listener = vi.fn(), unsubscribe = p.subscribe(listener);
     p.remember("https://x.test/a", scan("https://x.test/a"));
