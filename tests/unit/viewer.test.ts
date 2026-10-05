@@ -271,6 +271,7 @@ describe("minimum media width runtime checks", () => {
     class Probe {
       naturalWidth = 45;
       src = "";
+      load?: () => void;
       addEventListener(type: string, callback: () => void) {
         if (type === "load") this.load = callback;
       }
