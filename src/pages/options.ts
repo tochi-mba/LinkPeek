@@ -1,149 +1,377 @@
-import {DEFAULT_SETTINGS,PRESETS,loadSettings,saveSettings,type LinkPeekSettings} from "../shared/settings";
-type Primitive=string|number|boolean;
-const categories=[
-  ["General",["enabled","activationMode","defaultView","preset","onboardingComplete","showLearningTips"]],
-  ["Hover & Activation",["activationKeywords","hoverDelay","closeDelay","intentDetection","slowdownDetection","requirePointerStop","cancelMovePx","magneticBridge","magneticBridgeStrength"]],
-  ["Panel",["panelSize","panelWidth","panelMaxVh","focusHeightVh","expandedWidthVw","expandedHeightVh","startExpanded","quickViewControls","draggablePanel","resizablePanel","rememberPanelGeometry","placement","pointerGap","autoExpand","panelOpacity","inactiveOpacity","animationMs"]],
-  ["Gallery",["navAxis","snap","loopMode","showCounter","showPostCounter","showFilename","showAuthor","showDimensions","groupByPost","sort","startAt"]],
-  ["Gestures",["verticalGesture","horizontalGesture","pinchZoom","doubleClick","navSensitivity","gestureThreshold","momentumFiltering","gestureCooldown","fastSwipeAcceleration","maxImagesPerSwipe","reverseVertical","reverseHorizontal","deliberateGesture","ignoreTinyMotion"]],
-  ["Zoom & Pan",["fit","maxZoom","minZoom","pinchSensitivity","doubleClickZoom","secondDoubleClick","zoomCenter","doubleClickDragPan","panWhenZoomed","panFriction","edgeResistance","edgeNext","edgeDwell","resetZoomPerImage","rememberZoom"]],
-  ["Media Detection",["includeImages","includeGif","includeWebp","includeAvif","includeSvg","includeVideoThumbs","includeAvatars","includeEmoji","minWidth","minHeight","minBytes","preferVersion","thumbQuality","relevanceStrength","dedupe","quotedDuplicates","perceptualHash","customIgnoreSelectors","customPreferredSelectors"]],
-  ["Linked-page Fallback",["recursiveSearch","recursiveTrigger","recursiveMaxDepth","recursiveMaxPages","maxMediaItems"]],
-  ["Threads",["scanScope","maxPosts","progressiveScan","prioritizeLinkedPost","fetchDirection","continueAfterClose","cacheThreads"]],
-  ["Prefetch & Performance",["prefetch","prefetchRadius","idlePrefetch","maxRequests","batchSize","networkMode","meteredOff","cacheMinutes","maxCacheMb","preloadNext","preloadPrevious","preloadConcurrency","preloadMemoryMb","preloadRest","preloadRestLimit","preloadOriginals"]],
-  ["Media Types",["gifAutoplay","gifLoop","gifDefaultSpeed","gifPauseWhenHidden","gifDecodeMaxMb","gifControls","gifScrubWheel","gifFrameStepKeyboard","videoAutoplay","videoMuted","videoLoopShort"]],
-  ["Appearance",["theme","customAccent","blur","transparency","imageBackground","thumbnailShape","thumbnailSize","density","labels","scrollbar","motion"]],
-  ["Keyboard & Mouse",["shortcuts","mouseWheel","ctrlWheel","middleClick"]],
-  ["Sites",["siteProfiles"]],
-  ["Privacy",["stripTracking","referrerPolicy","clearCache"]],
-  ["Downloads",["downloadOriginal","downloadPattern","downloadFolder","downloadMetadata"]],
-  ["Accessibility",["reducedMotion","highContrast","largeControls","minTextSize","alwaysShowControls","screenReader","announcePosition","announceLoaded","touchTarget"]],
-  ["Advanced",["fetchTimeout","retryCount","followRedirects","lazyDetection","srcsetLargest","stripFragments","canonicalizeQuery","mutationObserver","spaDetection"]]
-] as const;
-const choices:Record<string,string[]>={
-  activationMode:["hover","click","modifier"],panelSize:["tiny","small","medium","large","custom"],placement:["auto","right","left","above","below"],defaultView:["focus","grid","filmstrip","masonry"],navAxis:["vertical","horizontal"],loopMode:["stop","resist","wrap"],sort:["thread","upload","largest","newest"],startAt:["first","linked","remember"],
-  verticalGesture:["navigate","pan","scroll","disabled"],horizontalGesture:["scrub","navigate","disabled"],doubleClick:["zoom","fullscreen","next","none"],fit:["contain","width","height","actual"],secondDoubleClick:["fit","increase"],zoomCenter:["pointer","center"],preferVersion:["original","largest","displayed"],thumbQuality:["auto","low","high"],
-  quotedDuplicates:["hide","mark","show"],recursiveSearch:["off","same-origin","all"],recursiveTrigger:["empty","always"],scanScope:["whole","page","nearby","first"],fetchDirection:["linked","start","end"],continueAfterClose:["no","brief","always"],prefetch:["off","nearby","visible","all"],networkMode:["adaptive","data","aggressive"],preloadRest:["off","idle","all"],preloadOriginals:["never","next","three","aggressive"],
-  gifAutoplay:["focus","always","never"],gifControls:["always","hover","minimal"],theme:["rex","system","custom"],imageBackground:["black","checker","theme","custom"],thumbnailShape:["square","ratio","rounded"],density:["compact","comfortable","spacious"],labels:["both","icons","text"],scrollbar:["normal","minimal","hidden"],motion:["full","reduced","none"],
-  mouseWheel:["navigate","scroll","zoom"],ctrlWheel:["zoom","browser"],middleClick:["original","post","pin"],referrerPolicy:["default","same-origin","never"],clearCache:["close","daily","never"],touchTarget:["normal","large","xl"]
-};
-const descriptions:Record<string,string>={
-  hoverDelay:"Milliseconds before a hover becomes an intentional preview.",
-  activationKeywords:"Optional comma- or line-separated words/phrases. When set, LinkPeek only activates for destination URLs containing at least one entry (case-insensitive). Leave empty to allow every supported link.",
-  prefetch:"Warm likely links before you hover them. Nearby is the recommended balance.",
-  prefetchRadius:"How far around the current viewport LinkPeek considers links for prefetching.",
-  idlePrefetch:"Only prefetch when the page/browser has spare time.",
-  maxRequests:"Maximum simultaneous LinkPeek network requests.",
-  batchSize:"Posts requested per Discourse batch. Larger batches reduce round trips.",
-  networkMode:"Adaptive balances responsiveness and bandwidth; Data Saver is conservative; Aggressive favors speed.",
-  meteredOff:"Disable background prefetch when the browser reports a constrained connection.",
-  cacheMinutes:"How long completed thread scans stay reusable before expiring.",
-  maxCacheMb:"Maximum approximate LinkPeek result-cache memory budget.",
-  preloadNext:"How many upcoming media items to decode before you reach them.",
-  preloadPrevious:"How many previous media items to keep decoded for instant back-navigation.",
-  preloadConcurrency:"Maximum simultaneous media preload/decode jobs.",
-  preloadMemoryMb:"Approximate decoded-image memory budget for the focus-view preload ring.",
-  preloadRest:"After nearby media is ready, optionally preload the rest of the gallery in idle time or immediately.",
-  preloadRestLimit:"Only idle-preload the full gallery when it has at most this many items. The 120-item default makes large grids fast while the memory cap prevents runaway decoding. Use 0 for no item-count limit.",
-  preloadOriginals:"Choose when full-resolution originals are prepared instead of previews.",
-  recursiveSearch:"Choose which linked pages fallback may inspect. Same site is the recommended privacy-safe mode.",
-  recursiveTrigger:"Choose whether linked pages are searched only when no media is found, or on every generic page.",
-  recursiveMaxDepth:"Maximum number of link levels followed after the opened page.",
-  recursiveMaxPages:"Maximum total pages read for one fallback search, including the opened page.",
-  maxMediaItems:"Maximum unique media items kept in any gallery, including forum threads.",
-  focusHeightVh:"Height of the normal focus viewer as a percentage of the browser viewport.",
-  expandedWidthVw:"Width used by the quick Expand control.",
-  expandedHeightVh:"Height used by the quick Expand control.",
-  startExpanded:"Open media viewers in the expanded layout by default.",
-  quickViewControls:"Show quick Expand and grid-density controls directly in the viewer.",
-  draggablePanel:"Drag the viewer by its header to place it anywhere in the viewport.",
-  resizablePanel:"Resize the viewer from any edge or corner.",
-  rememberPanelGeometry:"Reuse your last dragged position and size for future previews.",
-  doubleClickDragPan:"When zoomed, double-click-and-hold then drag to pan the media directly.",
-  gifAutoplay:"Choose whether focused GIFs start playing automatically.",gifLoop:"Loop GIF playback at the final frame.",gifDefaultSpeed:"Initial GIF playback speed multiplier.",gifPauseWhenHidden:"Pause decoded GIF playback while the tab is hidden.",gifDecodeMaxMb:"Largest GIF LinkPeek will decode for frame controls; larger files fall back to native playback.",gifControls:"How prominently GIF playback controls stay visible.",gifScrubWheel:"Two-finger horizontal scrolling over the GIF timeline scrubs frames.",gifFrameStepKeyboard:"Enable comma/period frame stepping and bracket speed shortcuts.",gestureThreshold:"Trackpad movement required before one navigation step fires.",magneticBridgeStrength:"How forgiving the invisible bridge is when moving from the link into the panel.",relevanceStrength:"How strict generic-page media filtering should be.",siteProfiles:"JSON map of hostnames or wildcard hosts to setting overrides.",shortcuts:"JSON map of actions to one or more keys. The nextLink action cycles through prepared page links and defaults to N.",customIgnoreSelectors:"Selectors whose images should never count as content.",customPreferredSelectors:"Selectors that should be treated as high-confidence content."
-};
-const choiceLabels:Record<string,Record<string,string>>={
-  prefetch:{off:"Off",nearby:"Nearby",visible:"Visible",all:"All visible links"},
-  networkMode:{adaptive:"Adaptive",data:"Data Saver",aggressive:"Aggressive"},
-  preloadRest:{off:"Nearby only",idle:"Whole gallery when idle",all:"Whole gallery immediately"},
-  preloadOriginals:{never:"Never",next:"Next",three:"Next 3",aggressive:"Aggressive"},
-  activationMode:{hover:"Hover",click:"Click",modifier:"Modifier + hover"},
-  continueAfterClose:{no:"Stop",brief:"Briefly",always:"Always"},
-  recursiveSearch:{off:"Off","same-origin":"Same site",all:"Any site"},
-  recursiveTrigger:{empty:"No media found",always:"Always"}
-};
-const segmentedKeys=new Set(["prefetch"]);
-const numberMeta:Record<string,{min?:number;max?:number;step?:number;unit?:string}>={
-  hoverDelay:{min:0,max:2000,step:25,unit:"ms"},closeDelay:{min:0,max:2000,step:25,unit:"ms"},
-  prefetchRadius:{min:0,max:6,step:1},maxRequests:{min:1,max:12,step:1},batchSize:{min:10,max:100,step:10},
-  cacheMinutes:{min:1,max:1440,step:5,unit:"min"},maxCacheMb:{min:16,max:2048,step:16,unit:"MB"},preloadNext:{min:0,max:30,step:1},preloadPrevious:{min:0,max:20,step:1},preloadConcurrency:{min:1,max:8,step:1},preloadMemoryMb:{min:32,max:1024,step:16,unit:"MB"},preloadRestLimit:{min:0,max:5000,step:10},
-  maxPosts:{min:20,max:10000,step:20},gifDecodeMaxMb:{min:1,max:100,step:1,unit:"MB"},
-  maxMediaItems:{min:1,max:5000,step:25},recursiveMaxDepth:{min:1,max:3,step:1},recursiveMaxPages:{min:1,max:50,step:1},
-  panelWidth:{min:280,max:1600,step:10,unit:"px"},panelMaxVh:{min:40,max:98,step:1,unit:"vh"},focusHeightVh:{min:30,max:90,step:1,unit:"vh"},expandedWidthVw:{min:50,max:98,step:1,unit:"vw"},expandedHeightVh:{min:50,max:98,step:1,unit:"vh"},pointerGap:{min:0,max:48,step:1,unit:"px"},
-  animationMs:{min:0,max:1000,step:10,unit:"ms"},fetchTimeout:{min:500,max:30000,step:500,unit:"ms"},
-  retryCount:{min:0,max:10,step:1},thumbnailSize:{min:48,max:320,step:4,unit:"px"}
-};
-let state:LinkPeekSettings;
-const title=(k:string)=>k.replace(/([A-Z])/g," $1").replace(/^./,x=>x.toUpperCase());
-const $=<T extends HTMLElement>(id:string)=>document.getElementById(id) as T;
-function same(a:unknown,b:unknown){return JSON.stringify(a)===JSON.stringify(b)}
-function categoryModified(keys:readonly string[]){return keys.some(k=>!same((state as any)[k],(DEFAULT_SETTINGS as any)[k]))}
-function choiceLabel(key:string,value:string){return choiceLabels[key]?.[value]??title(value)}
-function control(key:string,value:any){
-  if(key==="activationKeywords")return `<textarea class="json" data-key="${key}" data-format="keywords" placeholder="gallery, photos, /media/">${escapeHtml((value as string[]).join("\n"))}</textarea>`;
-  if(typeof value==="boolean")return `<label class="switch"><input type="checkbox" data-key="${key}" ${value?"checked":""}><span class="switch-track"><span class="switch-thumb"></span></span></label>`;
-  if(choices[key]){
-    if(segmentedKeys.has(key))return `<div class="segmented" role="radiogroup" aria-label="${title(key)}">${choices[key].map(x=>`<button type="button" class="segment ${x===value?"active":""}" data-choice-key="${key}" data-choice-value="${x}" aria-pressed="${x===value}">${choiceLabel(key,x)}</button>`).join("")}</div>`;
-    return `<span class="select-shell"><select data-key="${key}" aria-label="${title(key)}">${choices[key].map(x=>`<option value="${x}" ${x===value?"selected":""}>${choiceLabel(key,x)}</option>`).join("")}</select><span class="select-chevron">⌄</span></span>`;
+/**
+ * The settings page, rendered from SECTIONS. Every change saves immediately;
+ * only values that differ from the defaults are stored.
+ */
+import {escapeHtml} from "../shared/dom";
+import {
+  DEFAULT_SETTINGS, SETTING_CHOICES, SETTING_RANGES, SETTINGS_VERSION, SHORTCUT_ACTIONS, loadSettings, normalizeKeywords,
+  resolveSettings, saveSettings, settingsOverrides, type LinkPeekSettings, type ShortcutAction, type SiteProfiles
+} from "../shared/settings";
+import {comboLabel, eventCombo} from "../shared/shortcuts";
+import {SECTIONS, SHORTCUT_LABELS, fieldFor, type Control, type FieldSpec, type SectionSpec, type SettingKey} from "./settings-schema";
+
+const ADVANCED_KEY = "linkpeek-show-advanced";
+const MAX_KEYS_PER_ACTION = 4;
+
+let state: LinkPeekSettings = DEFAULT_SETTINGS;
+let query = "";
+let showAdvanced = false;
+let recording: ShortcutAction | null = null;
+let savedTimer: number | undefined;
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+function same(a: unknown, b: unknown) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function isDefault(key: SettingKey) {
+  return same(state[key], DEFAULT_SETTINGS[key]);
+}
+
+function readAdvancedPreference() {
+  try {
+    return localStorage.getItem(ADVANCED_KEY) === "1";
+  } catch {
+    return false;
   }
-  if(typeof value==="number"){
-    const range=/opacity|Strength|Sensitivity|Friction|transparency/i.test(key);if(range){const max=/opacity|transparency/i.test(key)?1:1;return `<div class="range-control"><input type="range" min="0" max="${max}" step=".05" value="${value}" data-key="${key}"><span class="value-num">${value}</span></div>`}
-    const meta=numberMeta[key]??{},attrs=[meta.min!=null?`min="${meta.min}"`:"",meta.max!=null?`max="${meta.max}"`:"",meta.step!=null?`step="${meta.step}"`:""].filter(Boolean).join(" ");
-    return `<div class="number-shell"><button type="button" class="number-step" data-step-key="${key}" data-step-dir="-1" aria-label="Decrease ${title(key)}">−</button><input type="number" value="${value}" data-key="${key}" ${attrs}><button type="button" class="number-step" data-step-key="${key}" data-step-dir="1" aria-label="Increase ${title(key)}">+</button>${meta.unit?`<span class="number-unit">${meta.unit}</span>`:""}</div>`;
+}
+
+function writeAdvancedPreference(value: boolean) {
+  try {
+    localStorage.setItem(ADVANCED_KEY, value ? "1" : "0");
+  } catch {
+    // Private windows can refuse storage; the toggle still works for this visit.
   }
-  if(typeof value==="object")return `<textarea class="json" data-key="${key}">${escapeHtml(JSON.stringify(value,null,2))}</textarea>`;
-  return `<input type="text" value="${escapeHtml(String(value))}" data-key="${key}">`;
 }
-function escapeHtml(v:string){return v.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]!))}
-function render(filter=""){
-  const q=filter.trim().toLowerCase();$("nav").innerHTML=categories.map(([name])=>`<button data-jump="${name}">${name}</button>`).join("");
-  $("sections").innerHTML=categories.map(([name,keys])=>{
-    const visible=keys.filter(k=>!q||name.toLowerCase().includes(q)||title(k).toLowerCase().includes(q)||(descriptions[k]||"").toLowerCase().includes(q));if(!visible.length)return "";
-    const open=q||["General","Hover & Activation","Gestures","Linked-page Fallback","Prefetch & Performance"].includes(name);
-    return `<details class="section card" data-section="${name}" ${open?"open":""}><summary class="section-head"><h2>${name}</h2>${categoryModified(keys)?'<span class="modified" title="Modified"></span>':""}<span class="spacer"></span><span class="section-count">${visible.length}</span></summary><div class="section-body">${visible.map(k=>`<label class="field"><span><strong>${title(k)}</strong><small>${descriptions[k]||""}</small></span><span class="field-control">${control(k,(state as any)[k])}<button class="reset" data-reset="${k}" ${same((state as any)[k],(DEFAULT_SETTINGS as any)[k])?"hidden":""}>↺</button></span></label>`).join("")}<button class="reset section-reset" data-reset-section="${name}">Reset this section ↺</button></div></details>`;
-  }).join("");
-  bind();
+
+function controlFor(field: FieldSpec): Control {
+  if (field.control) return field.control;
+  const value = DEFAULT_SETTINGS[field.key];
+  // String settings always declare a labelled choice control; the schema test
+  // enforces that invariant, leaving only booleans and numbers to infer here.
+  return typeof value === "boolean" ? "toggle" : "number";
 }
-function rerenderKeepingSections(){
-  const open=new Set([...document.querySelectorAll<HTMLDetailsElement>("details[data-section][open]")].map(x=>x.dataset.section));
-  render($<HTMLInputElement>("search").value);
-  document.querySelectorAll<HTMLDetailsElement>("details[data-section]").forEach(x=>{if(open.has(x.dataset.section))x.open=true});
+
+function choicesFor(field: FieldSpec) {
+  // Choice fields are schema-checked to label every allowed value.
+  return SETTING_CHOICES[field.key]!.map(value => [value, field.options![value]] as const);
 }
-function bind(){
-  document.querySelectorAll<HTMLElement>("[data-choice-key]").forEach(el=>el.addEventListener("click",async()=>{
-    const key=el.dataset.choiceKey!,v=el.dataset.choiceValue!;(state as any)[key]=v;if(key!=="preset")state.preset="custom";
-    el.parentElement?.querySelectorAll<HTMLElement>("[data-choice-key]").forEach(x=>{const active=x===el;x.classList.toggle("active",active);x.setAttribute("aria-pressed",String(active))});el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same((state as any)[key],(DEFAULT_SETTINGS as any)[key]));await persist();
-  }));
-  document.querySelectorAll<HTMLElement>("[data-step-key]").forEach(el=>el.addEventListener("click",async()=>{
-    const key=el.dataset.stepKey!,dir=Number(el.dataset.stepDir||0),meta=numberMeta[key]??{},current=Number((state as any)[key]),step=meta.step??1;
-    const next=Math.min(meta.max??Infinity,Math.max(meta.min??-Infinity,current+dir*step));(state as any)[key]=next;state.preset="custom";const input=el.parentElement?.querySelector<HTMLInputElement>(`[data-key="${key}"]`);if(input)input.value=String(next);el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same(next,(DEFAULT_SETTINGS as any)[key]));await persist();
-  }));
-  document.querySelectorAll<HTMLElement>("[data-key]").forEach(el=>el.addEventListener("change",async()=>{
-    const key=el.dataset.key!;let v:any;
-    if(el instanceof HTMLInputElement&&el.type==="checkbox")v=el.checked;
-    else if(el instanceof HTMLInputElement&&el.type==="number")v=Number(el.value);
-    else if(el instanceof HTMLInputElement&&el.type==="range")v=Number(el.value);
-    else if(el instanceof HTMLTextAreaElement&&el.dataset.format==="keywords")v=el.value.split(/[\n,]+/).map(x=>x.trim()).filter(Boolean);
-    else if(el instanceof HTMLTextAreaElement){try{v=JSON.parse(el.value)}catch{el.style.borderColor="var(--live)";return}}
-    else v=(el as HTMLInputElement|HTMLSelectElement).value;
-    (state as any)[key]=v;if(key!=="preset")state.preset="custom";el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same(v,(DEFAULT_SETTINGS as any)[key]));await persist();
-  }));
-  document.querySelectorAll<HTMLInputElement>('input[type="range"][data-key]').forEach(el=>el.addEventListener("input",()=>{const value=el.parentElement?.querySelector<HTMLElement>(".value-num");if(value)value.textContent=el.value}));
-  document.querySelectorAll<HTMLElement>("[data-reset]").forEach(b=>b.addEventListener("click",async()=>{const k=b.dataset.reset!;(state as any)[k]=(DEFAULT_SETTINGS as any)[k];state.preset="custom";await persist();rerenderKeepingSections()}));
-  document.querySelectorAll<HTMLElement>("[data-reset-section]").forEach(b=>b.addEventListener("click",async()=>{const cat=categories.find(x=>x[0]===b.dataset.resetSection);cat?.[1].forEach(k=>(state as any)[k]=(DEFAULT_SETTINGS as any)[k]);state.preset="custom";await persist();rerenderKeepingSections()}));
-  document.querySelectorAll<HTMLElement>("[data-jump]").forEach(b=>b.addEventListener("click",()=>{const section=document.querySelector<HTMLDetailsElement>(`[data-section="${b.dataset.jump}"]`);if(section){section.open=true;section.scrollIntoView({behavior:"smooth"})}}));
+
+function formatNumber(_field: FieldSpec, value: number) {
+  // Every slider is a 0–1 percentage; ordinary numeric settings use a number input.
+  return `${Math.round(value * 100)}%`;
 }
-async function persist(){await saveSettings(state);$("saved").textContent="Saved";setTimeout(()=>$("saved").textContent="",900)}
-(async()=>{state=await loadSettings();const presetLabels:Record<string,string>={balanced:"Balanced",minimal:"Data saver",fast:"Fast",touchpad:"Touchpad",manual:"Manual"};$("presets").innerHTML=Object.keys(PRESETS).map(p=>`<button class="button ${state.preset===p?"active":""}" data-preset="${p}">${presetLabels[p]}</button>`).join("");document.querySelectorAll<HTMLElement>("[data-preset]").forEach(b=>b.onclick=async()=>{const p=b.dataset.preset!;state={...state,...PRESETS[p],preset:p as LinkPeekSettings["preset"]};await persist();location.reload()});render()})();
-$("search").addEventListener("input",e=>render((e.target as HTMLInputElement).value));
-$("tutorial").addEventListener("click",()=>location.href=chrome.runtime.getURL("onboarding.html"));
+
+function toggleMarkup(field: FieldSpec) {
+  const id = `field-${field.key}`;
+  return `<label class="switch"><input id="${id}" type="checkbox" data-key="${field.key}" ${state[field.key] ? "checked" : ""}><span class="switch-track"><span class="switch-thumb"></span></span></label>`;
+}
+
+function segmentedMarkup(field: FieldSpec) {
+  const value = state[field.key];
+  return `<div class="segmented" role="radiogroup" aria-label="${escapeHtml(field.label)}">${choicesFor(field).map(([option, label]) =>
+    `<button type="button" role="radio" class="segment${option === value ? " active" : ""}" aria-checked="${option === value}" data-choice-key="${field.key}" data-choice-value="${option}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
+function selectMarkup(field: FieldSpec) {
+  const value = state[field.key];
+  return `<span class="select-shell"><select id="field-${field.key}" data-key="${field.key}">${choicesFor(field).map(([option, label]) =>
+    `<option value="${option}" ${option === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select><span class="select-chevron">⌄</span></span>`;
+}
+
+function numberMarkup(field: FieldSpec) {
+  const range = SETTING_RANGES[field.key]!, value = state[field.key] as number;
+  return `<div class="number-shell"><button type="button" class="number-step" data-step-key="${field.key}" data-step-dir="-1" aria-label="Decrease ${escapeHtml(field.label)}">−</button>`
+    + `<input id="field-${field.key}" type="number" value="${value}" min="${range.min}" max="${range.max}" step="${range.step}" data-key="${field.key}">`
+    + `<button type="button" class="number-step" data-step-key="${field.key}" data-step-dir="1" aria-label="Increase ${escapeHtml(field.label)}">+</button>`
+    + `${field.unit ? `<span class="number-unit">${escapeHtml(field.unit)}</span>` : ""}</div>`;
+}
+
+function rangeMarkup(field: FieldSpec) {
+  const range = SETTING_RANGES[field.key]!, value = state[field.key] as number;
+  return `<div class="range-control"><input id="field-${field.key}" type="range" min="${range.min}" max="${range.max}" step="${range.step}" value="${value}" data-key="${field.key}"><span class="value-num">${formatNumber(field, value)}</span></div>`;
+}
+
+function keywordsMarkup(field: FieldSpec) {
+  return `<textarea id="field-${field.key}" class="text-area" rows="3" data-key="${field.key}" data-format="keywords" placeholder="gallery, photos, /media/">${escapeHtml(state.activationKeywords.join("\n"))}</textarea>`;
+}
+
+function shortcutsMarkup() {
+  return `<div class="shortcuts">${SHORTCUT_ACTIONS.map(action => {
+    const keys = state.shortcuts[action], label = SHORTCUT_LABELS[action];
+    const chips = keys.map(combo => `<span class="chip"><kbd>${escapeHtml(comboLabel(combo))}</kbd><button type="button" data-remove-key="${action}" data-combo="${escapeHtml(combo)}" aria-label="Remove ${escapeHtml(comboLabel(combo))} from ${escapeHtml(label)}">×</button></span>`).join("");
+    const add = recording === action
+      ? `<span class="chip recording" role="status">Press keys… <button type="button" data-cancel-record>Cancel</button></span>`
+      : keys.length < MAX_KEYS_PER_ACTION ? `<button type="button" class="chip-add" data-record="${action}" aria-label="Add a key for ${escapeHtml(label)}">+</button>` : "";
+    const reset = same(keys, DEFAULT_SETTINGS.shortcuts[action]) ? "" : `<button type="button" class="reset" data-reset-shortcut="${action}" title="Reset to default">↺</button>`;
+    return `<div class="shortcut-row"><span class="shortcut-label">${escapeHtml(label)}</span><span class="chips">${chips || '<span class="muted">No key</span>'}${add}${reset}</span></div>`;
+  }).join("")}</div>`;
+}
+
+function describeRule(rule: Partial<LinkPeekSettings>) {
+  if (rule.enabled === false) return "LinkPeek is paused here";
+  const count = Object.keys(rule).filter(key => key !== "enabled").length;
+  return count ? `${count} custom setting${count === 1 ? "" : "s"}` : "No changes";
+}
+
+function sitesMarkup() {
+  const entries = Object.entries(state.siteProfiles);
+  const list = entries.length
+    ? entries.map(([host, rule]) => `<li class="site-row"><span><strong>${escapeHtml(host)}</strong><small>${describeRule(rule)}</small></span>`
+      + `<button type="button" class="button ghost" data-site-toggle="${escapeHtml(host)}">${rule.enabled === false ? "Resume" : "Pause"}</button>`
+      + `<button type="button" class="button ghost" data-site-remove="${escapeHtml(host)}" aria-label="Remove the rule for ${escapeHtml(host)}">Remove</button></li>`).join("")
+    : `<li class="site-empty muted">No site rules yet. Pause a site here or from the toolbar button while you are on it.</li>`;
+  const json = showAdvanced
+    ? `<details class="site-json"><summary>Edit rules as JSON</summary><textarea class="text-area code" rows="6" data-sites-json>${escapeHtml(JSON.stringify(state.siteProfiles, null, 2))}</textarea><small>Any setting can be changed per site, for example {"forum.example.com": {"hoverDelay": 150}}.</small></details>`
+    : "";
+  return `<div class="sites"><form class="site-add" data-site-form><input name="host" aria-label="Website" placeholder="example.com or *.example.com" autocomplete="off"><button type="submit" class="button">Pause LinkPeek there</button></form><ul class="site-list">${list}</ul>${json}</div>`;
+}
+
+function controlMarkup(field: FieldSpec) {
+  switch (controlFor(field)) {
+    case "toggle": return toggleMarkup(field);
+    case "segmented": return segmentedMarkup(field);
+    case "number": return numberMarkup(field);
+    case "range": return rangeMarkup(field);
+    case "keywords": return keywordsMarkup(field);
+    case "shortcuts": return shortcutsMarkup();
+    case "sites": return sitesMarkup();
+    default: return selectMarkup(field);
+  }
+}
+
+function matches(section: SectionSpec, field: FieldSpec) {
+  if (!query) return !field.advanced || showAdvanced;
+  const text = `${section.title} ${field.label} ${field.help} ${field.key}`.toLowerCase();
+  return query.split(/\s+/).every(word => text.includes(word));
+}
+
+function fieldMarkup(field: FieldSpec) {
+  const control = controlFor(field), wide = control === "shortcuts" || control === "sites" || control === "keywords";
+  const reset = control === "shortcuts" || control === "sites" ? "" : `<button type="button" class="reset" data-reset="${field.key}" title="Reset to default" ${isDefault(field.key) ? "hidden" : ""}>↺</button>`;
+  return `<div class="field${wide ? " wide" : ""}" data-field="${field.key}"><div class="field-text"><label for="field-${field.key}"><strong>${escapeHtml(field.label)}</strong></label>`
+    + `${field.advanced ? '<span class="tag">Advanced</span>' : ""}<small>${escapeHtml(field.help)}</small></div>`
+    + `<div class="field-control">${controlMarkup(field)}${reset}</div></div>`;
+}
+
+function render() {
+  const visible = SECTIONS.map(section => ({section, fields: section.fields.filter(field => matches(section, field))})).filter(entry => entry.fields.length);
+  $("nav").innerHTML = visible.map(({section}) => `<a href="#section-${section.id}">${escapeHtml(section.title)}</a>`).join("");
+  $("sections").innerHTML = visible.length ? visible.map(({section, fields}) => {
+    const modified = section.fields.some(field => !isDefault(field.key));
+    return `<section class="section card" id="section-${section.id}" data-section="${section.id}"><header class="section-head"><div><h2>${escapeHtml(section.title)}${modified ? '<span class="modified" title="Changed from the defaults"></span>' : ""}</h2><p class="muted">${escapeHtml(section.summary)}</p></div>`
+      + `${modified ? `<button type="button" class="reset section-reset" data-reset-section="${section.id}">Reset section ↺</button>` : ""}</header>`
+      + `<div class="section-body">${fields.map(fieldMarkup).join("")}</div></section>`;
+  }).join("") : `<p class="muted empty-search">No setting matches “${escapeHtml(query)}”.</p>`;
+  ($("advanced") as HTMLInputElement).checked = showAdvanced;
+}
+
+/** Re-renders while keeping the scroll position, so a change never jumps the page. */
+function rerender() {
+  const scroll = scrollY;
+  render();
+  scrollTo(0, scroll);
+}
+
+function flashSaved(text = "Saved") {
+  const saved = $("saved");
+  saved.textContent = text;
+  clearTimeout(savedTimer);
+  savedTimer = window.setTimeout(() => saved.textContent = "", 1200);
+}
+
+async function persist(text?: string) {
+  await saveSettings(state);
+  flashSaved(text);
+}
+
+async function update<K extends SettingKey>(key: K, value: LinkPeekSettings[K], rerenderAfter = false) {
+  state = resolveSettings({...settingsOverrides(state), [key]: value});
+  await persist();
+  if (rerenderAfter) rerender();
+  else document.querySelector(`[data-reset="${key}"]`)?.toggleAttribute("hidden", isDefault(key));
+}
+
+function readControl(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) {
+  if (el instanceof HTMLInputElement && el.type === "checkbox") return el.checked;
+  if (el instanceof HTMLInputElement && (el.type === "number" || el.type === "range")) return Number(el.value);
+  if (el.dataset.format === "keywords") return normalizeKeywords(el.value.split(/[\n,]+/));
+  return el.value;
+}
+
+function normalizeHost(raw: string) {
+  const text = raw.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").split(/[/?#]/)[0].replace(/:\d+$/, "");
+  return /^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(text) ? text : "";
+}
+
+async function setSites(sites: SiteProfiles) {
+  await update("siteProfiles", sites, true);
+}
+
+async function onClick(event: MouseEvent) {
+  const target = (event.target as Element).closest<HTMLElement>("button");
+  if (!target) return;
+  const data = target.dataset;
+  if (data.choiceKey) return update(data.choiceKey as SettingKey, data.choiceValue as never, true);
+  if (data.stepKey) {
+    const key = data.stepKey as SettingKey, range = SETTING_RANGES[key]!, current = state[key] as number;
+    const next = Math.round(Math.min(range.max, Math.max(range.min, current + Number(data.stepDir) * range.step)) * 1000) / 1000;
+    const input = document.querySelector<HTMLInputElement>(`input[data-key="${key}"]`)!;
+    input.value = String(next);
+    return update(key, next as never);
+  }
+  if (data.reset) return update(data.reset as SettingKey, DEFAULT_SETTINGS[data.reset as SettingKey] as never, true);
+  if (data.resetSection) {
+    const section = SECTIONS.find(entry => entry.id === data.resetSection)!;
+    const overrides = settingsOverrides(state) as Record<string, unknown>;
+    for (const field of section.fields) delete overrides[field.key];
+    state = resolveSettings(overrides);
+    await persist("Section reset");
+    return rerender();
+  }
+  if (data.record) {
+    recording = data.record as ShortcutAction;
+    return rerender();
+  }
+  if (data.cancelRecord !== undefined) {
+    recording = null;
+    return rerender();
+  }
+  if (data.removeKey) {
+    const action = data.removeKey as ShortcutAction;
+    return update("shortcuts", {...state.shortcuts, [action]: state.shortcuts[action].filter(combo => combo !== data.combo)}, true);
+  }
+  if (data.resetShortcut) {
+    const action = data.resetShortcut as ShortcutAction;
+    return update("shortcuts", {...state.shortcuts, [action]: DEFAULT_SETTINGS.shortcuts[action]}, true);
+  }
+  if (data.siteToggle) {
+    const rule = state.siteProfiles[data.siteToggle];
+    return setSites({...state.siteProfiles, [data.siteToggle]: {...rule, enabled: rule.enabled === false}});
+  }
+  if (data.siteRemove) {
+    const sites = {...state.siteProfiles};
+    delete sites[data.siteRemove];
+    return setSites(sites);
+  }
+}
+
+async function onChange(event: Event) {
+  const el = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+  if (el.matches("[data-sites-json]")) {
+    try {
+      await setSites(JSON.parse(el.value));
+    } catch {
+      el.classList.add("invalid");
+      flashSaved("That JSON is not valid");
+    }
+    return;
+  }
+  const key = el.dataset.key as SettingKey | undefined;
+  if (!key) return;
+  const value = readControl(el);
+  await update(key, value as never, el.dataset.format === "keywords" || el.type === "number");
+}
+
+function onInput(event: Event) {
+  const el = event.target as HTMLInputElement;
+  if (el.type !== "range") return;
+  el.parentElement!.querySelector(".value-num")!.textContent = formatNumber(fieldFor(el.dataset.key as SettingKey)!, Number(el.value));
+}
+
+async function onSubmit(event: SubmitEvent) {
+  const form = event.target as HTMLFormElement;
+  if (!form.matches("[data-site-form]")) return;
+  event.preventDefault();
+  const input = form.elements.namedItem("host") as HTMLInputElement, host = normalizeHost(input.value);
+  if (!host) {
+    input.classList.add("invalid");
+    flashSaved("Enter a site like example.com");
+    return;
+  }
+  await setSites({...state.siteProfiles, [host]: {...state.siteProfiles[host], enabled: false}});
+}
+
+/** While recording, the next key press becomes a shortcut; it moves from any action that already had it. */
+async function onKeyDown(event: KeyboardEvent) {
+  if (!recording) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    recording = null;
+    return rerender();
+  }
+  const combo = eventCombo(event);
+  if (!combo) return;
+  const action = recording, shortcuts = {...state.shortcuts}, previous = SHORTCUT_ACTIONS.find(other => other !== action && shortcuts[other].includes(combo));
+  if (previous) shortcuts[previous] = shortcuts[previous].filter(existing => existing !== combo);
+  shortcuts[action] = [...new Set([...shortcuts[action], combo])];
+  recording = null;
+  state = resolveSettings({...settingsOverrides(state), shortcuts});
+  await persist(previous ? `Moved ${comboLabel(combo)} from “${SHORTCUT_LABELS[previous]}”` : "Saved");
+  rerender();
+}
+
+function exportSettings() {
+  const blob = new Blob([JSON.stringify({linkpeek: SETTINGS_VERSION, settings: settingsOverrides(state)}, null, 2)], {type: "application/json"});
+  const link = Object.assign(document.createElement("a"), {href: URL.createObjectURL(blob), download: "linkpeek-settings.json"});
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+async function importSettings(file: File) {
+  try {
+    const parsed = JSON.parse(await file.text()) as {settings?: unknown};
+    state = resolveSettings(parsed && typeof parsed === "object" && "settings" in parsed ? parsed.settings : parsed);
+    await persist("Settings imported");
+    rerender();
+  } catch {
+    flashSaved("That file is not a LinkPeek settings file");
+  }
+}
+
+async function resetEverything() {
+  if (!confirm("Reset every LinkPeek setting to its default? Saved links are kept.")) return;
+  state = resolveSettings({onboardingComplete: state.onboardingComplete});
+  await persist("Everything reset");
+  rerender();
+}
+
+async function start() {
+  showAdvanced = readAdvancedPreference();
+  state = await loadSettings();
+  render();
+  const sections = $("sections");
+  sections.addEventListener("click", event => void onClick(event));
+  sections.addEventListener("change", event => void onChange(event));
+  sections.addEventListener("input", onInput);
+  sections.addEventListener("submit", event => void onSubmit(event as SubmitEvent));
+  document.addEventListener("keydown", event => void onKeyDown(event), true);
+  $("search").addEventListener("input", event => {
+    query = (event.target as HTMLInputElement).value.trim().toLowerCase();
+    render();
+  });
+  $("advanced").addEventListener("change", event => {
+    showAdvanced = (event.target as HTMLInputElement).checked;
+    writeAdvancedPreference(showAdvanced);
+    rerender();
+  });
+  $("tutorial").addEventListener("click", () => location.href = chrome.runtime.getURL("onboarding.html"));
+  $("export").addEventListener("click", exportSettings);
+  $("import").addEventListener("change", event => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (file) void importSettings(file);
+  });
+  $("resetAll").addEventListener("click", () => void resetEverything());
+  // Changes made in the popup or another settings tab show up here too.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.settings) return;
+    const fresh = resolveSettings(changes.settings.newValue);
+    if (same(fresh, state)) return;
+    state = fresh;
+    rerender();
+  });
+}
+
+void start();

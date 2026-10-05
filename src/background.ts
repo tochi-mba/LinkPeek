@@ -1,155 +1,252 @@
-import {prefetchDiscourse,scanDiscourse,type DiscourseSeed} from "./core/discourse";
+/**
+ * The service worker: every cross-origin request LinkPeek makes happens here.
+ *
+ * It scans destinations (Discourse topics, generic pages, direct media), shares
+ * one scan between every tab that asks for the same URL, streams progress for
+ * long threads, and keeps a byte-bounded cache of results and GIF bytes.
+ */
+import {ByteCache} from "./background/byte-cache";
+import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
-import {DEFAULT_SETTINGS,effectiveSettings,loadSettings,type LinkPeekSettings} from "./shared/settings";
-import type {ScanResult} from "./shared/media";
+import type {LinkKind, ScanResult} from "./shared/media";
+import type {BackgroundRequest, ScanRequest} from "./shared/messages";
+import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
 
-type CacheEntry={at:number;bytes:number;settingsKey:string;result:ScanResult;discourseSeed?:DiscourseSeed};
-type Consumer={token:string;tabId?:number;frameId?:number};
-type ScanTask={controller:AbortController;consumers:Map<string,Consumer>;promise:Promise<ScanResult>};
+type CachedScan = {at: number; scanKey: string; result: ScanResult; seed?: DiscourseSeed};
+type BinaryEntry = {base64: string; mime: string; bytes: number};
+type Consumer = {token: string; tabId?: number; frameId?: number};
+type ScanTask = {controller: AbortController; consumers: Map<string, Consumer>; promise: Promise<ScanResult>};
 
-const cache=new Map<string,CacheEntry>();let cacheBytes=0;
-const tasks=new Map<string,ScanTask>(),prefetchTasks=new Map<string,Promise<ScanResult|null>>();
-type BinaryEntry={at:number;base64:string;mime:string;bytes:number};
-const binaryCache=new Map<string,BinaryEntry>(),binaryTasks=new Map<string,Promise<BinaryEntry>>();let binaryBytes=0;
+const BINARY_BUDGET = 64 * 1024 * 1024;
+const PROGRESS_FIRST_DELAY_MS = 60;
 
-function bytesToBase64(buffer:ArrayBuffer){
-  const bytes=new Uint8Array(buffer);let binary="";const size=0x8000;
-  for(let i=0;i<bytes.length;i+=size)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+size,bytes.length)));
+const scans = new ByteCache<CachedScan>();
+const binaries = new ByteCache<BinaryEntry>();
+const scanTasks = new Map<string, ScanTask>();
+const prefetchTasks = new Map<string, Promise<ScanResult | null>>();
+const binaryTasks = new Map<string, Promise<BinaryEntry>>();
+let settingsPromise: Promise<LinkPeekSettings> | undefined;
+
+/** Settings stay in memory until they change, instead of being read from storage on every message. */
+function currentSettings() {
+  settingsPromise ??= loadSettings().catch(error => {
+    settingsPromise = undefined;
+    throw error;
+  });
+  return settingsPromise;
+}
+
+/** Only the settings that change what a scan returns; others never invalidate the cache. */
+export function scanKey(settings: LinkPeekSettings) {
+  return JSON.stringify(SCAN_SETTING_KEYS.map(key => settings[key]));
+}
+
+function estimateBytes(value: unknown) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function cachedScan(url: string, settings: LinkPeekSettings) {
+  const entry = scans.get(url);
+  if (!entry) return undefined;
+  if (entry.scanKey !== scanKey(settings) || Date.now() - entry.at >= settings.cacheMinutes * 60_000) {
+    scans.delete(url);
+    return undefined;
+  }
+  return entry;
+}
+
+function cacheScan(url: string, result: ScanResult, settings: LinkPeekSettings, seed?: DiscourseSeed) {
+  const entry: CachedScan = {at: Date.now(), scanKey: scanKey(settings), result, seed};
+  scans.set(url, entry, estimateBytes(entry), Math.max(1, settings.maxCacheMb) * 1024 * 1024);
+}
+
+function bytesToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer), chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(binary);
 }
-function estimateBytes(result:ScanResult,seed?:DiscourseSeed){
-  try{return new TextEncoder().encode(JSON.stringify(seed?{result,seed}:{result})).byteLength}catch{return result.items.length*256+1024}
-}
-function settingsKey(settings:LinkPeekSettings){return JSON.stringify(settings)}
-function removeCache(url:string){
-  const entry=cache.get(url);if(!entry)return;cache.delete(url);cacheBytes=Math.max(0,cacheBytes-entry.bytes);
-}
-function cachedEntry(url:string,settings:LinkPeekSettings){
-  const entry=cache.get(url);if(!entry)return undefined;
-  if(entry.settingsKey!==settingsKey(settings)||Date.now()-entry.at>=settings.cacheMinutes*60_000){removeCache(url);return undefined}
-  cache.delete(url);cache.set(url,entry);return entry;
-}
-function putCache(url:string,result:ScanResult,settings:LinkPeekSettings,discourseSeed?:DiscourseSeed){
-  removeCache(url);
-  const bytes=estimateBytes(result,discourseSeed),limit=Math.max(1,settings.maxCacheMb)*1024*1024;
-  if(bytes>limit)return;
-  cache.set(url,{at:Date.now(),bytes,settingsKey:settingsKey(settings),result,discourseSeed});cacheBytes+=bytes;
-  while(cacheBytes>limit&&cache.size){
-    const oldest=cache.keys().next().value as string;removeCache(oldest);
-  }
-}
-function removeBinary(url:string){const entry=binaryCache.get(url);if(!entry)return;binaryCache.delete(url);binaryBytes=Math.max(0,binaryBytes-entry.bytes)}
-async function fetchBinary(urlRaw:string,maxMb:number){
-  const existing=binaryCache.get(urlRaw);if(existing){binaryCache.delete(urlRaw);binaryCache.set(urlRaw,existing);return existing}
-  const pending=binaryTasks.get(urlRaw);if(pending)return pending;
-  const task=(async()=>{
-    const url=new URL(urlRaw);if(!/^https?:$/.test(url.protocol))throw new Error("Unsupported media URL");
-    const maxBytes=Math.max(1,Math.min(100,Number(maxMb)))*1024*1024;
-    const response=await fetch(url.href,{credentials:"include",redirect:"follow"});if(!response.ok)throw new Error(`HTTP ${response.status} for media`);
-    const announced=Number(response.headers.get("content-length")||0);if(announced>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
-    const buffer=await response.arrayBuffer();if(buffer.byteLength>maxBytes)throw new Error("GIF is larger than the configured frame-control limit");
-    const entry:BinaryEntry={at:Date.now(),base64:bytesToBase64(buffer),mime:response.headers.get("content-type")||"application/octet-stream",bytes:buffer.byteLength};
-    const limit=64*1024*1024;removeBinary(urlRaw);binaryCache.set(urlRaw,entry);binaryBytes+=entry.bytes;
-    while(binaryBytes>limit&&binaryCache.size){const oldest=binaryCache.keys().next().value as string;removeBinary(oldest)}
+
+/** Fetches media bytes for the GIF frame player, which cannot read cross-origin pixels itself. */
+function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
+  const cached = binaries.get(url);
+  if (cached) return Promise.resolve(cached);
+  const pending = binaryTasks.get(url);
+  if (pending) return pending;
+  const task = (async () => {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("Unsupported media URL");
+    const maxBytes = Math.max(1, Math.min(100, maxMb)) * 1024 * 1024, tooLarge = "GIF is larger than the configured frame-control limit";
+    const response = await fetch(parsed.href, {credentials: "include", redirect: "follow"});
+    if (!response.ok) throw new Error(`HTTP ${response.status} for media`);
+    if (Number(response.headers.get("content-length") || 0) > maxBytes) throw new Error(tooLarge);
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) throw new Error(tooLarge);
+    const entry: BinaryEntry = {base64: bytesToBase64(buffer), mime: response.headers.get("content-type") || "application/octet-stream", bytes: buffer.byteLength};
+    binaries.set(url, entry, entry.bytes, BINARY_BUDGET);
     return entry;
-  })().finally(()=>binaryTasks.delete(urlRaw));
-  binaryTasks.set(urlRaw,task);return task;
-}
-function directResult(url:string):ScanResult{
-  return {url,kind:"direct-image",items:[{id:url,type:/\.gif/i.test(url)?"gif":"image",originalUrl:url,previewUrl:url,sourceUrl:url,score:1}],complete:true,diagnostics:{adapter:"Direct media",ignored:0,duplicates:0,warnings:[]}};
-}
-function addConsumer(task:ScanTask,msg:any,sender:chrome.runtime.MessageSender){
-  const token=String(msg.token||`${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  task.consumers.set(token,{token,tabId:sender.tab?.id,frameId:sender.frameId});return token;
-}
-function broadcast(task:ScanTask,url:string,result:ScanResult){
-  for(const c of task.consumers.values()){
-    if(c.tabId==null)continue;
-    chrome.tabs.sendMessage(c.tabId,{type:"LINKPEEK_SCAN_PROGRESS",token:c.token,url,result},{frameId:c.frameId??0}).catch(()=>{});
-  }
-}
-async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task:ScanTask,seed?:DiscourseSeed){
-  let result:ScanResult;
-  if(kind==="discourse"){
-    let progressTimer:ReturnType<typeof setTimeout>|undefined,pendingProgress:ScanResult|undefined,progressStarted=false;
-    const onProgress=settings.progressiveScan?(progress:ScanResult)=>{
-      if(progressStarted){broadcast(task,url,progress);return}
-      pendingProgress=progress;
-      if(!progressTimer)progressTimer=setTimeout(()=>{progressTimer=undefined;progressStarted=true;broadcast(task,url,pendingProgress!)},60);
-    }:undefined;
-    try{
-      result=await scanDiscourse(url,settings.batchSize,settings.maxPosts,settings,seed,{signal:task.controller.signal,onProgress});
-    }finally{if(progressTimer)clearTimeout(progressTimer)}
-  }else if(kind==="direct-image")result=directResult(url);
-  else result=await scanGeneric(url,settings,task.controller.signal);
-  if(settings.cacheThreads)putCache(url,result,settings);
-  return result;
-}
-async function shallowPrefetch(url:string,kind:string,settings:LinkPeekSettings,deep=false){
-  const existing=cachedEntry(url,settings);if(existing)return existing.result;
-  if(kind!=="discourse"){
-    if(kind==="direct-image"){const result=directResult(url);putCache(url,result,settings);return result}
-    if(kind==="generic"){
-      const pending=prefetchTasks.get(url);if(pending){const result=await pending;if(deep&&!result?.items.length&&!cachedEntry(url,settings))return shallowPrefetch(url,kind,settings,true);return result}
-      let promise:Promise<ScanResult|null>;promise=scanGeneric(url,{...settings,preferVersion:"displayed",progressiveScan:false},undefined,deep).then(result=>{if(deep||(result.items.length&&settings.recursiveTrigger!=="always")||settings.recursiveSearch==="off")putCache(url,result,settings);return result}).finally(()=>{if(prefetchTasks.get(url)===promise)prefetchTasks.delete(url)});
-      prefetchTasks.set(url,promise);return promise;
-    }
-    return null;
-  }
-  const pending=prefetchTasks.get(url);if(pending)return pending;
-  const promise=prefetchDiscourse(url,settings).then(({result,seed})=>{putCache(url,result,settings,seed);return result}).finally(()=>prefetchTasks.delete(url));
-  prefetchTasks.set(url,promise);return promise;
+  })().finally(() => binaryTasks.delete(url));
+  binaryTasks.set(url, task);
+  return task;
 }
 
-chrome.runtime.onInstalled.addListener(async details=>{
-  if(details.reason==="install"){
-    await chrome.storage.local.set({settings:DEFAULT_SETTINGS});
-    chrome.tabs.create({url:chrome.runtime.getURL("onboarding.html")});
+function directResult(url: string, kind: LinkKind, settings: LinkPeekSettings): ScanResult {
+  const video = kind === "direct-video";
+  const items = video && !settings.includeVideo ? [] : [{
+    id: url, type: video ? "video" as const : /\.gif(?:$|[?#])/i.test(url) ? "gif" as const : "image" as const,
+    originalUrl: url, previewUrl: url, sourceUrl: url, score: 1
+  }];
+  return {url, kind, items, complete: true, diagnostics: {adapter: "Direct media", ignored: 0, duplicates: 0, warnings: []}};
+}
+
+function broadcast(task: ScanTask, url: string, result: ScanResult) {
+  for (const consumer of task.consumers.values()) {
+    if (consumer.tabId == null) continue;
+    chrome.tabs.sendMessage(consumer.tabId, {type: "LINKPEEK_SCAN_PROGRESS", token: consumer.token, url, result}, {frameId: consumer.frameId ?? 0}).catch(() => undefined);
+  }
+}
+
+async function executeScan(url: string, kind: LinkKind, settings: LinkPeekSettings, task: ScanTask, seed?: DiscourseSeed) {
+  let result: ScanResult;
+  if (kind === "discourse") {
+    // Hold the first progress update briefly so a fast scan answers once instead of twice.
+    let timer: ReturnType<typeof setTimeout> | undefined, pending: ScanResult | undefined, streaming = false;
+    const onProgress = settings.progressiveScan ? (progress: ScanResult) => {
+      if (streaming) return broadcast(task, url, progress);
+      pending = progress;
+      timer ??= setTimeout(() => {
+        streaming = true;
+        broadcast(task, url, pending!);
+      }, PROGRESS_FIRST_DELAY_MS);
+    } : undefined;
+    try {
+      result = await scanDiscourse(url, settings.batchSize, settings.maxPosts, settings, seed, {signal: task.controller.signal, onProgress});
+    } finally {
+      clearTimeout(timer);
+    }
+  } else if (kind === "direct-image" || kind === "direct-video") {
+    result = directResult(url, kind, settings);
+  } else {
+    result = await scanGeneric(url, settings, task.controller.signal);
+  }
+  cacheScan(url, result, settings, seed);
+  return result;
+}
+
+/** Cheap work done before hover. `deep` also runs the linked-page search for empty generic pages. */
+async function prefetch(url: string, kind: LinkKind, settings: LinkPeekSettings, deep: boolean): Promise<ScanResult | null> {
+  const cached = cachedScan(url, settings);
+  if (cached) return cached.result;
+  if (kind === "direct-image" || kind === "direct-video") {
+    const result = directResult(url, kind, settings);
+    cacheScan(url, result, settings);
+    return result;
+  }
+  if (kind !== "discourse" && kind !== "generic") return null;
+  const pending = prefetchTasks.get(url);
+  if (pending) {
+    const result = await pending;
+    // A shallow check found nothing; the deeper search still has to run.
+    if (deep && kind === "generic" && !result?.items.length && !cachedScan(url, settings)) return prefetch(url, kind, settings, true);
+    return result;
+  }
+  const promise: Promise<ScanResult | null> = kind === "discourse"
+    ? prefetchDiscourse(url, settings).then(({result, seed}) => {
+      cacheScan(url, result, settings, seed);
+      return result;
+    })
+    : scanGeneric(url, settings, undefined, deep).then(result => {
+      // An empty shallow result is not final while a linked-page search could still find media.
+      const final = deep || settings.recursiveSearch === "off" || (result.items.length > 0 && settings.recursiveTrigger !== "always");
+      if (final) cacheScan(url, result, settings);
+      return result;
+    });
+  const tracked = promise.finally(() => {
+    if (prefetchTasks.get(url) === tracked) prefetchTasks.delete(url);
+  });
+  prefetchTasks.set(url, tracked);
+  return tracked;
+}
+
+async function scan(msg: ScanRequest, sender: chrome.runtime.MessageSender) {
+  const settings = effectiveSettings(await currentSettings(), msg.url);
+  // Reuse a prefetch that is already running instead of starting the same requests twice.
+  let warming: Promise<unknown> | undefined;
+  while ((warming = prefetchTasks.get(msg.url))) await warming.catch(() => null);
+  const cached = cachedScan(msg.url, settings);
+  if (cached?.result.complete) return cached.result;
+  let task = scanTasks.get(msg.url);
+  if (task?.controller.signal.aborted) {
+    scanTasks.delete(msg.url);
+    task = undefined;
+  }
+  if (!task) {
+    const created: ScanTask = {controller: new AbortController(), consumers: new Map(), promise: Promise.resolve(undefined as unknown as ScanResult)};
+    scanTasks.set(msg.url, created);
+    created.promise = executeScan(msg.url, msg.kind, settings, created, cached?.seed).finally(() => {
+      if (scanTasks.get(msg.url) === created) scanTasks.delete(msg.url);
+    });
+    task = created;
+  }
+  task.consumers.set(msg.token, {token: msg.token, tabId: sender.tab?.id, frameId: sender.frameId});
+  return task.promise;
+}
+
+function cancelScan(url: string, token: string) {
+  const task = scanTasks.get(url);
+  if (!task) return;
+  task.consumers.delete(token);
+  if (task.consumers.size === 0) task.controller.abort();
+}
+
+async function download(url: string, filename?: string) {
+  try {
+    return await chrome.downloads.download({url, filename, conflictAction: "uniquify", saveAs: false});
+  } catch (error) {
+    // The browser rejects some names; the original file name always works.
+    if (!filename) throw error;
+    return chrome.downloads.download({url, conflictAction: "uniquify", saveAs: false});
+  }
+}
+
+function respond(work: Promise<unknown>, sendResponse: (response: unknown) => void, onError: (error: Error) => unknown = error => ({error: error.message})) {
+  work.then(sendResponse, (error: Error) => sendResponse(onError(error)));
+  return true;
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && (changes.settings || changes.settingsVersion)) settingsPromise = undefined;
+});
+
+chrome.runtime.onInstalled.addListener(async details => {
+  if (details.reason === "install") {
+    await chrome.storage.local.set({settings: {}, settingsVersion: SETTINGS_VERSION});
+    await chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")});
+  } else if (details.reason === "update") {
+    await loadSettings();
   }
 });
 
-chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
-  if(msg?.type==="LINKPEEK_PREFETCH"){
-    (async()=>{
-      const global=await loadSettings(),settings=effectiveSettings(global,msg.url);
-      return shallowPrefetch(msg.url,msg.kind,settings,Boolean(msg.deep));
-    })().then(sendResponse).catch((e:Error)=>sendResponse({error:e.message}));
-    return true;
-  }
-  if(msg?.type==="LINKPEEK_SCAN"){
-    (async()=>{
-      const global=await loadSettings(),settings=effectiveSettings(global,msg.url);
-      let warm:Promise<ScanResult|null>|undefined;while((warm=prefetchTasks.get(msg.url)))await warm.catch(()=>null);
-      const cached=cachedEntry(msg.url,settings);
-      if(cached?.result.complete)return cached.result;
-      let task=tasks.get(msg.url);
-      if(task?.controller.signal.aborted){tasks.delete(msg.url);task=undefined}
-      if(!task){
-        const controller=new AbortController(),created:ScanTask={controller,consumers:new Map(),promise:Promise.resolve(null as unknown as ScanResult)};
-        task=created;tasks.set(msg.url,created);addConsumer(created,msg,sender);
-        created.promise=executeScan(msg.url,msg.kind,settings,created,cached?.discourseSeed).finally(()=>{if(tasks.get(msg.url)===created)tasks.delete(msg.url)});
-      }else addConsumer(task,msg,sender);
-      return task.promise;
-    })().then(sendResponse).catch((e:Error)=>sendResponse(e.name==="AbortError"?{cancelled:true}:{error:e.message}));
-    return true;
-  }
-  if(msg?.type==="LINKPEEK_CANCEL_SCAN"){
-    const task=tasks.get(msg.url);if(task){
-      task.consumers.delete(String(msg.token));
-      if(task.consumers.size===0)task.controller.abort();
-    }
-    sendResponse({ok:true});return;
-  }
-  if(msg?.type==="LINKPEEK_FETCH_BINARY"||msg?.type==="LINKPEEK_PREFETCH_BINARY"){
-    fetchBinary(msg.url,Number(msg.maxMb)||32)
-      .then(entry=>sendResponse(msg.type==="LINKPEEK_PREFETCH_BINARY"?{ok:true,bytes:entry.bytes}:entry))
-      .catch((e:Error)=>sendResponse({error:e.message}));
-    return true;
-  }
-  if(msg?.type==="LINKPEEK_CLEAR_CACHE"){cache.clear();cacheBytes=0;binaryCache.clear();binaryBytes=0;sendResponse({ok:true});return;}
-  if(msg?.type==="LINKPEEK_OPEN_OPTIONS"){chrome.runtime.openOptionsPage();sendResponse({ok:true});return;}
-  if(msg?.type==="LINKPEEK_DOWNLOAD"){
-    chrome.downloads.download({url:msg.url,filename:msg.filename,saveAs:false}).then(id=>sendResponse({id})).catch((e:Error)=>sendResponse({error:e.message}));
-    return true;
+chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
+  switch (msg?.type) {
+    case "LINKPEEK_PREFETCH":
+      return respond(currentSettings().then(settings => prefetch(msg.url, msg.kind, effectiveSettings(settings, msg.url), Boolean(msg.deep))), sendResponse);
+    case "LINKPEEK_SCAN":
+      return respond(scan(msg, sender), sendResponse, error => error.name === "AbortError" ? {cancelled: true} : {error: error.message});
+    case "LINKPEEK_CANCEL_SCAN":
+      cancelScan(msg.url, String(msg.token));
+      sendResponse({ok: true});
+      return false;
+    case "LINKPEEK_FETCH_BINARY":
+      return respond(fetchBinary(msg.url, Number(msg.maxMb) || 32), sendResponse);
+    case "LINKPEEK_DOWNLOAD":
+      return respond(download(msg.url, msg.filename).then(id => ({id})), sendResponse);
+    case "LINKPEEK_CLEAR_CACHE":
+      scans.clear();
+      binaries.clear();
+      sendResponse({ok: true});
+      return false;
+    default:
+      return false;
   }
 });

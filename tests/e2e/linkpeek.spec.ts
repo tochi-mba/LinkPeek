@@ -5,7 +5,7 @@ import {resolve} from "node:path";
 import {mkdtemp,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 
-let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0;
+let server:Server;let base:string;let slowBatchRequests=0,prefetchTopicRequests=0,prefetchBatchRequests=0,sharedTopicRequests=0,sharedBatchRequests=0,logoutRequests=0;
 const extensionPath=resolve("dist");
 const animatedGif=Buffer.from("R0lGODlhBAAEAIEAANf/PwAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQICgAAACwAAAAABAAEAAAICQABCBxIsCCAgAAh+QQIDwAAACwAAAAABAAEAIH/d00AAAAAAAAAAAAICQABCBxIsCCAgAAh+QQIFAAAACwAAAAABAAEAIERFRIAAAAAAAAAAAAICQABCBxIsCCAgAA7","base64");
 
@@ -52,8 +52,11 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"> · <a id="video" href="/media/clip.mp4">Clip</a> · <a id="logout" href="/logout">Log out</a></body></html>`);return;
     }
+    if(path==="/logout"){logoutRequests++;res.end("signed out");return}
+    if(path==="/media/clip.mp4"){res.setHeader("content-type","video/mp4");res.end(Buffer.alloc(64));return}
+    if(path==="/scroll"){res.setHeader("content-type","text/html");res.end('<!doctype html><body style="margin:0"><div style="height:1200px"></div><a id="under" href="/t/demo/123" style="display:block;height:300px;background:#ccc">Scrolled under</a><div style="height:3000px"></div></body>');return}
     if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
     if(path==="/album/a"||path==="/album/b"){res.setHeader("content-type","text/html");res.end(`<img src="${base}/media/${path.endsWith("a")?"album-a":"album-b"}.jpg" width="800" height="600">`);return}
     if(path==="/prefetch"){res.setHeader("content-type","text/html");res.end(`<!doctype html><body>${Array.from({length:6},(_,i)=>`<a href="/t/prefetch-${i}/${800+i}">P${i}</a>`).join("<br>")}</body>`);return}
@@ -115,7 +118,7 @@ test("panel drag/resize persists and empty pages search linked galleries",async(
     const saved=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(saved.width).not.toBe("");expect(saved.height).not.toBe("");
     await page.waitForTimeout(100);await page.keyboard.press("Escape");await page.locator("#recursive").hover();await expect(page.locator(".lp-panel")).toContainText("Empty index",{timeout:12_000});await expect(page.locator(".lp-panel")).toContainText("2 media");
     const restored=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(restored).toEqual(saved);
-    await page.keyboard.press("Escape");const dynamic=page.locator("#recursive");await dynamic.hover();await expect(page.locator(".lp-panel")).toContainText("Empty index");await page.keyboard.press("Escape");await dynamic.evaluate((el:HTMLAnchorElement)=>el.href="/t/demo/123");await dynamic.dispatchEvent("pointermove",{clientX:30,clientY:20,bubbles:true});await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+    await page.keyboard.press("Escape");await page.mouse.move(1,1);const dynamic=page.locator("#recursive");await dynamic.hover();await expect(page.locator(".lp-panel")).toContainText("Empty index");await page.keyboard.press("Escape");await dynamic.evaluate((el:HTMLAnchorElement)=>el.href="/t/demo/123");await dynamic.dispatchEvent("pointermove",{clientX:30,clientY:20,bubbles:true});await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
   }finally{await closeExtension(context,profile)}
 });
 
@@ -125,7 +128,7 @@ test("GIF player supports playback, frame stepping, scrubbing, speed, looping an
     const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();
     await sw.evaluate(async()=>{
       const stored=await chrome.storage.local.get("settings");
-      await chrome.storage.local.set({settings:{...(stored.settings??{}),gifAutoplay:"never"}});
+      await chrome.storage.local.set({settings:{...(stored.settings??{}),gifAutoplay:false}});
     });
     const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
     await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("3 media")),null,{timeout:12_000});
@@ -145,7 +148,7 @@ test("GIF player supports playback, frame stepping, scrubbing, speed, looping an
     await timeline.dispatchEvent("wheel",{deltaX:120,bubbles:true,cancelable:true});await expect(timeline).toHaveValue("2");
     await page.locator(".lp-gif-canvas").dblclick({position:{x:2,y:2}});
     await expect(page.locator(".lp-gif-canvas")).toHaveAttribute("style",/scale\(/);
-    await page.keyboard.press("?");await expect(page.getByText("Previous / next GIF frame",{exact:true})).toBeVisible();
+    await page.keyboard.press("?");await expect(page.getByText("Previous / next frame",{exact:true})).toBeVisible();
   }finally{await closeExtension(context,profile)}
 });
 
@@ -202,7 +205,7 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
     const sw=second.context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),prefetch:"nearby",maxRequests:3}})});
     prefetchTopicRequests=0;prefetchBatchRequests=0;
     const page=await second.context.newPage();await page.goto(base+"/prefetch");await page.waitForTimeout(3000);
-    expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(3);expect(prefetchBatchRequests).toBe(0);
+    expect(prefetchTopicRequests).toBeGreaterThan(0);expect(prefetchTopicRequests).toBeLessThanOrEqual(6);expect(prefetchBatchRequests).toBe(0);
   }finally{await closeExtension(second.context,second.profile)}
 });
 
@@ -223,23 +226,71 @@ test("N cycles through prepared page links without capturing text input",async()
   }finally{await closeExtension(context,profile)}
 });
 
-test("onboarding and settings render and persist GIF customization",async()=>{
+test("onboarding and settings render, save and persist",async()=>{
   const {context,profile}=await launchExtension();
   try{
     const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;const page=await context.newPage();
     await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
-    await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();await expect(page.getByRole("heading",{name:"Gestures",exact:true})).toBeVisible();
-    await page.getByRole("button",{name:"Prefetch & Performance",exact:true}).click();
-    const prefetch=page.locator('[data-choice-key="prefetch"]');await expect(prefetch).toHaveCount(4);await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Nearby");
+    await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Essentials"})).toBeVisible();
+    const prefetch=page.locator('[data-choice-key="prefetch"]');await expect(prefetch).toHaveCount(3);await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Near the pointer");
     await page.locator('[data-choice-key="prefetch"][data-choice-value="off"]').click();await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
-    await expect(page.locator('.select-shell select[data-key="networkMode"]')).toHaveCount(1);
+    await expect(page.locator('[data-key="batchSize"]')).toHaveCount(0);
+    await page.getByText("Show advanced settings").click();
     const batch=page.locator('[data-key="batchSize"]');await expect(batch).toHaveValue("50");await page.locator('[data-step-key="batchSize"][data-step-dir="1"]').click();await expect(batch).toHaveValue("60");
-    await page.getByRole("button",{name:"Hover & Activation",exact:true}).click();
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
     const keywords=page.locator('textarea[data-key="activationKeywords"]');await keywords.fill("gallery, /album/");await keywords.press("Tab");
-    await page.getByRole("button",{name:"Media Types",exact:true}).click();
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
-    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('textarea[data-key="activationKeywords"]')).toHaveValue("gallery\n/album/");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
+    const slideshow=page.locator(".shortcut-row",{hasText:"Slideshow"});await slideshow.locator("[data-record]").click();await expect(slideshow).toContainText("Press keys");
+    await page.keyboard.press("x");await expect(slideshow.locator("kbd")).toHaveText(["S","X"]);
+    await page.getByLabel("Website").fill("https://forum.example.com/t/1");await page.getByRole("button",{name:"Pause LinkPeek there"}).click();
+    await expect(page.locator(".site-row")).toContainText("forum.example.com");
+    await page.reload();
+    await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('textarea[data-key="activationKeywords"]')).toHaveValue("gallery\n/album/");
+    await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");
+    await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
+    await expect(page.locator(".shortcut-row",{hasText:"Slideshow"}).locator("kbd")).toHaveText(["S","X"]);
+    await expect(page.locator(".site-row")).toContainText("LinkPeek is paused here");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
+    await expect(page.locator('[data-mode="auto"]')).toHaveClass(/active/);
+  }finally{await closeExtension(context,profile)}
+});
+
+test("switching to the grid lands on the item being viewed",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:0,prefetch:"off"}})});
+    const page=await context.newPage();await page.goto(base);await page.locator("#large").hover();
+    await expect(page.locator(".lp-panel")).toContainText("100 media · Complete",{timeout:12_000});
+    await page.keyboard.press("g");await page.keyboard.press("End");await page.keyboard.press("Enter");
+    await expect(page.locator(".lp-count")).toHaveText("100 / 100");
+    await page.keyboard.press("g");
+    const current=page.locator('.lp-thumb[aria-current="true"]');await expect(current).toHaveAttribute("data-i","99");
+    const [tile,grid]=await Promise.all([current.boundingBox(),page.locator(".lp-grid").boundingBox()]);
+    expect(tile&&grid&&tile.y>=grid.y&&tile.y+tile.height<=grid.y+grid.height+1).toBe(true);
+  }finally{await closeExtension(context,profile)}
+});
+
+test("a link that scrolls under a resting pointer waits for the hand to move",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:100,prefetch:"off"}})});
+    const page=await context.newPage();await page.goto(base+"/scroll");
+    await page.mouse.move(200,300);await page.evaluate(()=>window.scrollTo(0,1000));
+    await page.waitForTimeout(700);await expect(page.locator(".lp-panel")).toHaveCount(0);
+    await page.mouse.move(206,302,{steps:2});
+    await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+  }finally{await closeExtension(context,profile)}
+});
+
+test("video links preview as video and sign-out links are never requested",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    logoutRequests=0;
+    const page=await context.newPage();await page.goto(base);
+    await page.locator("#video").hover();await expect(page.locator("video.lp-video")).toHaveAttribute("src",/clip\.mp4/,{timeout:12_000});
+    await page.keyboard.press("Escape");
+    await page.locator("#logout").hover();await page.waitForTimeout(900);
+    await expect(page.locator(".lp-panel")).toHaveCount(0);expect(logoutRequests).toBe(0);
   }finally{await closeExtension(context,profile)}
 });

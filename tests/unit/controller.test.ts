@@ -1,0 +1,508 @@
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import type {ScanResult} from "../../src/shared/media";
+import {SETTINGS_VERSION} from "../../src/shared/settings";
+
+const viewers = vi.hoisted(() => [] as any[]);
+vi.mock("../../src/ui/viewer", () => ({
+  Viewer: class {
+    host = document.createElement("div");
+    isOpen = false;
+    pinned = false;
+    help = false;
+    onDismiss?: (explicit: boolean) => void;
+    onPosition?: (url: string, index: number) => void;
+    restoreViewerState = vi.fn();
+    openLoading = vi.fn(() => {
+      this.isOpen = true;
+    });
+    show = vi.fn();
+    error = vi.fn();
+    scheduleClose = vi.fn();
+    cancelClose = vi.fn();
+    containsPoint = vi.fn(() => false);
+    key = vi.fn(() => false);
+    budget: () => unknown;
+    close = vi.fn((force = false) => {
+      if (!this.isOpen || (this.pinned && !force)) return;
+      this.isOpen = false;
+      this.onDismiss?.(force);
+    });
+    constructor(options: {budget: () => unknown}) {
+      this.budget = options.budget;
+      viewers.push(this);
+    }
+  }
+}));
+
+import {PreviewController} from "../../src/content/controller";
+
+type Message = {type: string; url?: string; token?: string; kind?: string; deep?: boolean};
+let store: Record<string, unknown>, messages: Message[], respond: (msg: Message) => unknown;
+let storageListeners: Array<(changes: Record<string, unknown>, area: string) => void>, runtimeListeners: Array<(msg: unknown, sender: unknown, send: (v: unknown) => void) => unknown>;
+let mutations: MutationCallback, frames: Array<() => void>, idle: Array<() => void>, observed: Element[], runtime: {id?: string};
+let controller: PreviewController, viewer: any;
+
+const scan = (url: string, items = 1, patch: Partial<ScanResult> = {}): ScanResult => ({
+  url, kind: "generic", complete: true, items: Array.from({length: items}, (_, i) => ({id: `${url}#${i}`, type: "image" as const, originalUrl: `${url}/${i}.jpg`, previewUrl: `${url}/p${i}.jpg`, sourceUrl: url, score: 1})), ...patch
+});
+const flush = () => vi.advanceTimersByTimeAsync(0);
+
+function link(id: string, href = `https://dest.test/${id}`, top = 10) {
+  const a = document.createElement("a");
+  a.id = id;
+  a.href = href;
+  a.textContent = id;
+  a.getBoundingClientRect = () => ({left: 10, top, right: 60, bottom: top + 10, width: 50, height: 10, x: 10, y: top, toJSON: () => ({})});
+  document.body.append(a);
+  return a;
+}
+const pointer = (type: string, target: Element, x = 20, y = 15, init: MouseEventInit = {}) => target.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, ...init}));
+const key = (k: string, init: KeyboardEventInit = {}, target: EventTarget = document.body) => {
+  const event = new KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true, composed: true, ...init});
+  target.dispatchEvent(event);
+  return event;
+};
+const scans = () => messages.filter(msg => msg.type === "LINKPEEK_SCAN");
+const setSettings = async (settings: Record<string, unknown>) => {
+  store.settings = settings;
+  for (const listener of storageListeners) listener({settings: {newValue: settings}}, "local");
+  await flush();
+};
+
+async function boot(settings: Record<string, unknown> = {}) {
+  store = {settings: {hoverDelay: 100, closeDelay: 50, ...settings}, settingsVersion: SETTINGS_VERSION, viewerState: {view: "grid"}};
+  controller = new PreviewController();
+  viewer = viewers.at(-1);
+  await controller.boot();
+  return controller;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({toFake: ["setTimeout", "clearTimeout", "performance", "Date"]});
+  document.body.innerHTML = "";
+  viewers.length = 0;
+  messages = [];
+  storageListeners = [];
+  runtimeListeners = [];
+  frames = [];
+  idle = [];
+  observed = [];
+  runtime = {id: "linkpeek"};
+  respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!) : msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2) : {ok: true};
+  history.replaceState(null, "", "/page");
+  vi.stubGlobal("chrome", {
+    storage: {
+      local: {get: vi.fn(async (keys: string | string[]) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(k => [k, store[k]]))), set: vi.fn(async (v: Record<string, unknown>) => Object.assign(store, v))},
+      onChanged: {addListener: vi.fn(listener => storageListeners.push(listener)), removeListener: vi.fn(listener => storageListeners.splice(storageListeners.indexOf(listener), 1))}
+    },
+    runtime: Object.assign(runtime, {
+      onMessage: {addListener: vi.fn(listener => runtimeListeners.push(listener)), removeListener: vi.fn(listener => runtimeListeners.splice(runtimeListeners.indexOf(listener), 1))},
+      sendMessage: vi.fn(async (msg: Message) => {
+        messages.push(msg);
+        return respond(msg);
+      })
+    })
+  });
+  vi.stubGlobal("MutationObserver", class {
+    constructor(callback: MutationCallback) {
+      mutations = callback;
+    }
+    observe() {}
+    disconnect() {}
+  });
+  vi.stubGlobal("IntersectionObserver", class {
+    observe(el: Element) {
+      observed.push(el);
+    }
+  });
+  vi.stubGlobal("requestAnimationFrame", vi.fn((callback: () => void) => frames.push(callback)));
+  vi.stubGlobal("requestIdleCallback", vi.fn((callback: () => void) => idle.push(callback)));
+  vi.stubGlobal("cancelIdleCallback", vi.fn());
+});
+afterEach(() => {
+  // Old controllers notice the extension is gone and detach, so they cannot react in the next test.
+  runtime.id = undefined;
+  document.dispatchEvent(new Event("visibilitychange"));
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  delete (document as Partial<Document>).elementFromPoint;
+});
+
+describe("starting up", () => {
+  it("restores the viewer, wires its callbacks and starts tracking links", async () => {
+    const a = link("a");
+    await boot();
+    expect(viewer.restoreViewerState).toHaveBeenCalledWith({view: "grid"});
+    expect(viewer.onDismiss).toBeTypeOf("function");
+    expect(observed).toEqual([a]);
+    expect(controller.status()).toMatchObject({enabled: true, mode: "auto", prepared: 0, headroom: 1});
+    expect(viewer.budget()).toMatchObject({speculative: true});
+    const intentHost = (controller.intent as unknown as {host: {isPrepared: (url: string) => boolean; isScanning: () => boolean}}).host;
+    expect(intentHost.isPrepared(a.href)).toBe(false);
+    expect(intentHost.isScanning()).toBe(false);
+    const prefetchHost = (controller.prefetcher as unknown as {host: {pointer: () => {x: number; y: number}}}).host;
+    expect(prefetchHost.pointer()).toMatchObject({x: innerWidth / 2, y: innerHeight / 2});
+  });
+
+  it("answers the popup's status question", async () => {
+    await boot();
+    const send = vi.fn();
+    expect(runtimeListeners[0]({type: "LINKPEEK_STATUS"}, {}, send)).toBe(false);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({tier: expect.any(String)}));
+    expect(runtimeListeners[0](undefined, {}, send)).toBe(false);
+  });
+});
+
+describe("hover previews", () => {
+  it("opens a preview after the hover delay and shows the scan", async () => {
+    await boot();
+    const a = link("a");
+    pointer("pointerover", a);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(viewer.openLoading).toHaveBeenCalledWith(20, 15, expect.objectContaining({hoverDelay: 100}), "a", undefined);
+    expect(scans()).toEqual([expect.objectContaining({url: a.href, kind: "generic"})]);
+    expect(viewer.show).toHaveBeenLastCalledWith(scan(a.href));
+    expect(controller.prefetcher.isPrepared(a.href)).toBe(true);
+  });
+
+  it("shows a prepared gallery in the first frame, then the full scan", async () => {
+    await boot();
+    const a = link("a");
+    pointer("pointerover", a);
+    await flush();
+    expect(messages[0]).toMatchObject({type: "LINKPEEK_PREFETCH", deep: false});
+    let finish!: (value: ScanResult) => void;
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(resolve => finish = resolve) : scan(msg.url!, 2);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(viewer.show).toHaveBeenCalledWith(scan(a.href, 2));
+    finish(scan(a.href, 5));
+    await flush();
+    expect(viewer.show).toHaveBeenLastCalledWith(scan(a.href, 5));
+  });
+
+  it("schedules a close when the pointer leaves the link, unless pinned or in click mode", async () => {
+    await boot();
+    const a = link("a"), away = link("away", "https://dest.test/logout");
+    pointer("pointerover", a);
+    await vi.advanceTimersByTimeAsync(100);
+    pointer("pointerout", a, 20, 15, {relatedTarget: away});
+    expect(viewer.scheduleClose).toHaveBeenCalledWith(50);
+    viewer.pinned = true;
+    pointer("pointerover", a);
+    pointer("pointerout", a, 20, 15, {relatedTarget: away});
+    expect(viewer.scheduleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the page's own site rule: a paused site gets no previews", async () => {
+    await boot({siteProfiles: {localhost: {enabled: false}}});
+    pointer("pointerover", link("a"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(viewer.openLoading).not.toHaveBeenCalled();
+    expect(controller.status().enabled).toBe(false);
+  });
+
+  it("previews only links that match the keywords and are safe and supported", async () => {
+    await boot({activationKeywords: ["gallery"], includeVideo: false});
+    const anchors = [link("a"), link("gallery-video", "https://dest.test/gallery/clip.mp4"), link("gallery-logout", "https://dest.test/gallery/logout"), link("gallery-ok", "https://dest.test/gallery/ok")];
+    expect(anchors.map(anchor => Boolean(controller.settingsFor(anchor)))).toEqual([false, false, false, true]);
+  });
+
+  it("follows settings changes and starts preparation over", async () => {
+    await boot();
+    controller.prefetcher.remember("https://dest.test/a", scan("https://dest.test/a"));
+    await setSettings({enabled: false});
+    expect(controller.pageSettings().enabled).toBe(false);
+    expect(controller.prefetcher.preparedCount).toBe(0);
+    for (const listener of storageListeners) {
+      listener({favorites: {}}, "local");
+      listener({settings: {}}, "sync");
+    }
+  });
+});
+
+describe("scans", () => {
+  it("report errors, ignore cancellations and stale answers", async () => {
+    await boot();
+    const a = link("a"), b = link("b"), c = link("c"), d = link("d");
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? {error: "HTTP 404"} : null;
+    await controller.activate(a, 0, 0);
+    expect(viewer.error).toHaveBeenLastCalledWith("HTTP 404");
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? {cancelled: true} : null;
+    await controller.activate(b, 0, 0);
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? undefined : null;
+    await controller.activate(c, 0, 0);
+    expect(viewer.error).toHaveBeenLastCalledWith(expect.stringContaining("did not answer"));
+    respond = () => {
+      throw "plain failure";
+    };
+    await controller.activate(d, 0, 0);
+    expect(viewer.error).toHaveBeenLastCalledWith("plain failure");
+    expect(viewer.error).toHaveBeenCalledTimes(3);
+  });
+
+  it("drop an answer that arrives after a newer preview started", async () => {
+    await boot();
+    let finish!: (value: ScanResult) => void;
+    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url!.endsWith("/a") ? new Promise(resolve => finish = resolve) : scan(msg.url!);
+    const first = controller.activate(link("a"), 0, 0);
+    await controller.activate(link("b"), 0, 0);
+    finish(scan("https://dest.test/a"));
+    await first;
+    expect(viewer.show).not.toHaveBeenCalledWith(scan("https://dest.test/a"));
+    let fail!: (error: Error) => void;
+    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url!.endsWith("/c") ? new Promise((_, reject) => fail = reject) : scan(msg.url!);
+    const failing = controller.activate(link("c"), 0, 0);
+    await controller.activate(link("d"), 0, 0);
+    fail(new Error("late"));
+    await failing;
+    expect(viewer.error).not.toHaveBeenCalled();
+  });
+
+  it("ignore activating the open link again, and links that may not be previewed", async () => {
+    await boot();
+    const a = link("a");
+    await controller.activate(a, 0, 0);
+    await controller.activate(a, 0, 0);
+    await controller.activate(link("out", "https://dest.test/logout"), 0, 0);
+    expect(scans()).toHaveLength(1);
+  });
+
+  it("show progress for the open scan only", async () => {
+    await boot();
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(() => undefined) : null;
+    const a = link("a");
+    void controller.activate(a, 0, 0);
+    await flush();
+    const {token, url} = scans()[0];
+    const listener = runtimeListeners[0];
+    listener({type: "LINKPEEK_SCAN_PROGRESS", token: "other", url, result: scan(url!)}, {}, vi.fn());
+    listener({type: "LINKPEEK_SCAN_PROGRESS", token, url, result: undefined}, {}, vi.fn());
+    expect(viewer.show).not.toHaveBeenCalled();
+    listener({type: "LINKPEEK_SCAN_PROGRESS", token, url, result: scan(url!, 3, {complete: false})}, {}, vi.fn());
+    expect(viewer.show).toHaveBeenCalledWith(scan(url!, 3, {complete: false}));
+    expect(controller.prefetcher.isPrepared(url!)).toBe(true);
+  });
+
+  it("keep running briefly after closing, cancel when replaced, and follow the configured policy", async () => {
+    await boot();
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(() => undefined) : {ok: true};
+    void controller.activate(link("a"), 0, 0);
+    await flush();
+    viewer.close();
+    expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(messages.filter(msg => msg.type === "LINKPEEK_CANCEL_SCAN")).toHaveLength(1);
+    void controller.activate(link("b"), 0, 0);
+    await flush();
+    void controller.activate(link("c"), 0, 0);
+    await flush();
+    expect(messages.filter(msg => msg.type === "LINKPEEK_CANCEL_SCAN").map(msg => msg.url)).toEqual(["https://dest.test/a", "https://dest.test/b"]);
+    await setSettings({continueAfterClose: "always"});
+    void controller.activate(link("d"), 0, 0);
+    await flush();
+    viewer.close(true);
+    await setSettings({continueAfterClose: "no"});
+    void controller.activate(link("e"), 0, 0);
+    await flush();
+    viewer.close(true);
+    expect(messages.filter(msg => msg.type === "LINKPEEK_CANCEL_SCAN").map(msg => msg.url)).toEqual(["https://dest.test/a", "https://dest.test/b", "https://dest.test/c", "https://dest.test/e"]);
+  });
+
+  it("remember where each gallery was left, when resuming is on", async () => {
+    await boot();
+    const a = link("a");
+    viewer.onPosition(a.href, 4);
+    for (let i = 0; i < 100; i++) viewer.onPosition(`https://dest.test/x${i}`, 1);
+    viewer.onPosition("https://dest.test/x99", 2);
+    await controller.activate(a, 0, 0);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(0, 0, expect.anything(), "a", undefined);
+    viewer.close(true);
+    const b = link("x99", "https://dest.test/x99");
+    await controller.activate(b, 0, 0);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(0, 0, expect.anything(), "x99", 2);
+    viewer.close(true);
+    await setSettings({resumePosition: false});
+    await controller.activate(b, 0, 0);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(0, 0, expect.anything(), "x99", undefined);
+    const blank = link("");
+    blank.textContent = "  ";
+    viewer.close(true);
+    await controller.activate(blank, 0, 0);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(0, 0, expect.anything(), "Scanning link…", undefined);
+  });
+});
+
+describe("closing", () => {
+  it("closes on a click elsewhere, but not inside the preview, while pinned, or when turned off", async () => {
+    await boot();
+    await controller.activate(link("a"), 0, 0);
+    viewer.host.append(document.createElement("span"));
+    document.body.append(viewer.host);
+    pointer("pointerdown", viewer.host.firstElementChild!);
+    viewer.pinned = true;
+    pointer("pointerdown", document.body);
+    expect(viewer.isOpen).toBe(true);
+    viewer.pinned = false;
+    pointer("pointerdown", document.body);
+    expect(viewer.isOpen).toBe(false);
+    pointer("pointerdown", document.body);
+    await setSettings({closeOnOutsideClick: false});
+    await controller.activate(link("b"), 0, 0);
+    pointer("pointerdown", document.body);
+    expect(viewer.isOpen).toBe(true);
+  });
+
+  it("does not reopen a link closed on purpose while the pointer rests on it", async () => {
+    await boot();
+    const a = link("a");
+    document.elementFromPoint = () => a;
+    pointer("pointerover", a);
+    await vi.advanceTimersByTimeAsync(100);
+    viewer.close(true);
+    pointer("pointermove", a, 25, 15);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(viewer.openLoading).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("click mode", () => {
+  it("opens on a plain click, toggles the open link and leaves modified clicks alone", async () => {
+    await boot({activationMode: "click"});
+    const a = link("a"), b = link("b");
+    const plain = new MouseEvent("click", {bubbles: true, cancelable: true, clientX: 5, clientY: 6});
+    a.dispatchEvent(plain);
+    await flush();
+    expect(plain.defaultPrevented).toBe(true);
+    expect(viewer.openLoading).toHaveBeenCalledWith(5, 6, expect.anything(), "a", undefined);
+    pointer("pointerdown", a);
+    expect(viewer.isOpen).toBe(true);
+    pointer("click", a);
+    expect(viewer.isOpen).toBe(false);
+    for (const init of [{ctrlKey: true}, {metaKey: true}, {shiftKey: true}, {altKey: true}, {button: 1}]) pointer("click", b, 0, 0, init);
+    pointer("click", document.body);
+    pointer("click", link("out", "https://dest.test/logout"));
+    pointer("pointerout", a, 0, 0, {relatedTarget: document.body});
+    expect(viewer.openLoading).toHaveBeenCalledTimes(1);
+    expect(viewer.scheduleClose).not.toHaveBeenCalled();
+  });
+
+  it("is ignored in hover mode", async () => {
+    await boot();
+    const event = new MouseEvent("click", {bubbles: true, cancelable: true});
+    link("a").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("keyboard", () => {
+  it("lets the open preview handle its keys first", async () => {
+    await boot();
+    viewer.key.mockReturnValueOnce(true);
+    expect(key("g").defaultPrevented).toBe(true);
+  });
+
+  it("moves between prepared links with N and Shift+N, in page order, wrapping", async () => {
+    await boot();
+    const [a, b, c] = [link("a"), link("b", undefined, 2000), link("c")];
+    b.scrollIntoView = vi.fn();
+    for (const anchor of [a, b, c]) controller.prefetcher.remember(anchor.href, scan(anchor.href));
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().at(-1)!.url).toBe(a.href);
+    key("n");
+    await flush();
+    expect(b.scrollIntoView).toHaveBeenCalledWith({block: "nearest", inline: "nearest"});
+    expect(scans().at(-1)!.url).toBe(b.href);
+    key("N", {shiftKey: true});
+    await flush();
+    expect(scans().at(-1)!.url).toBe(a.href);
+    key("N", {shiftKey: true});
+    await flush();
+    expect(scans().at(-1)!.url).toBe(c.href);
+    viewer.close(true);
+    controller.intent.setCurrent(null);
+    key("N", {shiftKey: true});
+    await flush();
+    expect(scans().at(-1)!.url).toBe(c.href);
+    viewer.close(true);
+    controller.intent.setCurrent(a);
+    expect(controller.openAdjacentPrepared(1)).toBe(true);
+    await flush();
+    expect(key("x").defaultPrevented).toBe(false);
+  });
+
+  it("does nothing without another prepared link", async () => {
+    await boot();
+    expect(key("n").defaultPrevented).toBe(false);
+    const a = link("a");
+    controller.prefetcher.remember(a.href, scan(a.href));
+    await controller.activate(a, 0, 0);
+    expect(key("n").defaultPrevented).toBe(false);
+  });
+
+  it("yields to the page and to typing, and stays quiet while help is open or LinkPeek is off", async () => {
+    await boot();
+    const a = link("a");
+    controller.prefetcher.remember(a.href, scan(a.href));
+    const input = document.createElement("input");
+    document.body.append(input);
+    expect(key("n", {}, input).defaultPrevented).toBe(false);
+    const pageHandler = (event: Event) => event.preventDefault();
+    document.body.addEventListener("keydown", pageHandler, {once: true});
+    key("n");
+    expect(scans()).toEqual([]);
+    viewer.isOpen = true;
+    viewer.help = true;
+    expect(key("n").defaultPrevented).toBe(false);
+    viewer.help = false;
+    viewer.isOpen = false;
+    await setSettings({enabled: false});
+    expect(key("n").defaultPrevented).toBe(false);
+    expect(key("x").defaultPrevented).toBe(false);
+  });
+});
+
+describe("page activity", () => {
+  it("re-checks for links when the page changes, once per frame", async () => {
+    await boot();
+    const a = link("a");
+    mutations([{type: "childList", addedNodes: [a], target: document.body} as unknown as MutationRecord], {} as MutationObserver);
+    mutations([], {} as MutationObserver);
+    expect(frames).toHaveLength(1);
+    document.elementFromPoint = () => a;
+    frames.shift()!();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(viewer.openLoading).toHaveBeenCalled();
+    await setSettings({mutationObserver: false});
+    mutations([], {} as MutationObserver);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("tells the hover logic about scrolling and resumes work when the tab returns", async () => {
+    await boot();
+    const resume = vi.spyOn(controller.warmer, "resume");
+    const onScroll = vi.spyOn(controller.intent, "onScroll");
+    document.dispatchEvent(new Event("scroll"));
+    expect(onScroll).toHaveBeenCalled();
+    Object.defineProperty(document, "hidden", {configurable: true, value: true});
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(resume).not.toHaveBeenCalled();
+    Object.defineProperty(document, "hidden", {configurable: true, value: false});
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(resume).toHaveBeenCalled();
+    pointer("pointermove", document.body);
+  });
+
+  it("shuts down cleanly once the extension has been updated or removed", async () => {
+    await boot();
+    await controller.activate(link("a"), 0, 0);
+    runtime.id = undefined;
+    pointer("pointerover", link("b"));
+    expect(viewer.isOpen).toBe(false);
+    expect(storageListeners).toEqual([]);
+    expect(runtimeListeners).toEqual([]);
+    key("n");
+    window.dispatchEvent(new KeyboardEvent("keydown", {key: "n"}));
+    expect(scans()).toHaveLength(1);
+  });
+});

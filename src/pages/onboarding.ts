@@ -1,17 +1,75 @@
-import {PRESETS,loadSettings,saveSettings,type LinkPeekSettings} from "../shared/settings";
-let step=0;let settings:LinkPeekSettings;
-const screens=[...document.querySelectorAll<HTMLElement>(".screen")];
-const progress=document.getElementById("progress")!;
-progress.innerHTML=screens.map((_,i)=>`<i class="${i===0?"on":""}"></i>`).join("");
-function show(n:number){step=Math.max(0,Math.min(screens.length-1,n));screens.forEach((s,i)=>s.classList.toggle("active",i===step));[...progress.children].forEach((x,i)=>x.classList.toggle("on",i<=step))}
-document.querySelectorAll(".next").forEach(b=>b.addEventListener("click",()=>show(step+1)));
-const link=document.getElementById("demoLink")!,peek=document.getElementById("peek")!;let demoClose:number|undefined;
-const openDemo=()=>{clearTimeout(demoClose);peek.classList.add("on")},closeDemo=()=>{demoClose=window.setTimeout(()=>peek.classList.remove("on"),500)};
-link.addEventListener("mouseenter",openDemo);link.addEventListener("mouseleave",closeDemo);peek.addEventListener("mouseenter",openDemo);peek.addEventListener("mouseleave",closeDemo);
-document.querySelectorAll<HTMLElement>("[data-direction]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-direction]").forEach(x=>x.classList.remove("selected"));b.classList.add("selected");settings.reverseVertical=b.dataset.direction==="reverse"});
-(async()=>{settings=await loadSettings();const choices=document.getElementById("presetChoices")!;const labels:Record<string,string>= {balanced:"Balanced",minimal:"Data saver",fast:"Fast",touchpad:"Touchpad",manual:"Manual"};
-choices.innerHTML=Object.keys(labels).map(p=>`<button class="choice ${settings.preset===p?"selected":""}" data-preset="${p}"><strong>${labels[p]}</strong><span>${p==="touchpad"?"Responsive gestures tuned for one hand.":p==="fast"?"Warms more nearby links within firm limits.":p==="minimal"?"No speculative loading and a 32 MB media budget.":p==="manual"?"Only open when you explicitly ask.":"Warms likely links without loading the whole page."}</span></button>`).join("");
-document.querySelectorAll<HTMLElement>("[data-preset]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-preset]").forEach(x=>x.classList.remove("selected"));b.classList.add("selected");const p=b.dataset.preset!;settings={...settings,...PRESETS[p],preset:p as LinkPeekSettings["preset"]}});
-})();
-document.getElementById("finish")!.onclick=async()=>{settings.onboardingComplete=true;await saveSettings(settings);window.close()};
-document.getElementById("settings")!.onclick=async()=>{settings.onboardingComplete=true;await saveSettings(settings);chrome.runtime.openOptionsPage()};
+/** The first-run guide: try a preview, pick a scroll direction, an opening style and a performance mode. */
+import {escapeHtml} from "../shared/dom";
+import {DEFAULT_SETTINGS, loadSettings, saveSettings, type LinkPeekSettings, type ShortcutAction} from "../shared/settings";
+import {comboLabel} from "../shared/shortcuts";
+
+let settings: LinkPeekSettings = DEFAULT_SETTINGS;
+let step = 0;
+
+const screens = [...document.querySelectorAll<HTMLElement>(".screen")];
+const progress = document.getElementById("progress")!;
+
+const CHEAT_SHEET: Array<[string, string]> = [["Hover", "Preview"], ["Scroll ↕", "Previous / next"], ["Pinch", "Zoom"], ["Double-click", "Zoom here"]];
+const CHEAT_KEYS: Array<[ShortcutAction, string]> = [["grid", "Grid"], ["nextLink", "Next prepared link"], ["slideshow", "Slideshow"], ["help", "All controls"]];
+
+function show(target: number) {
+  step = Math.max(0, Math.min(screens.length - 1, target));
+  screens.forEach((screen, i) => screen.classList.toggle("active", i === step));
+  [...progress.children].forEach((dot, i) => dot.classList.toggle("on", i <= step));
+}
+
+function select(group: string, value: string) {
+  document.querySelectorAll<HTMLElement>(`[data-${group}]`).forEach(choice => choice.classList.toggle("selected", choice.dataset[group] === value));
+}
+
+function renderChoices() {
+  select("direction", settings.reverseVertical ? "reverse" : "normal");
+  select("open", settings.activationMode);
+  select("mode", settings.performanceMode);
+  const keys = CHEAT_KEYS.filter(([action]) => settings.shortcuts[action].length).map(([action, label]): [string, string] => [comboLabel(settings.shortcuts[action][0]), label]);
+  document.getElementById("cheat")!.innerHTML = [...CHEAT_SHEET, ...keys].map(([key, label]) => `<div><kbd>${escapeHtml(key)}</kbd><span class="muted">${escapeHtml(label)}</span></div>`).join("");
+}
+
+async function finish(openSettings: boolean) {
+  settings = {...settings, onboardingComplete: true};
+  await saveSettings(settings);
+  if (openSettings) await chrome.runtime.openOptionsPage();
+  else window.close();
+}
+
+progress.innerHTML = screens.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("");
+document.querySelectorAll(".next").forEach(button => button.addEventListener("click", () => show(step + 1)));
+
+const demoLink = document.getElementById("demoLink")!, peek = document.getElementById("peek")!;
+let demoClose: number | undefined;
+const openDemo = () => {
+  clearTimeout(demoClose);
+  peek.classList.add("on");
+};
+const closeDemo = () => {
+  demoClose = window.setTimeout(() => peek.classList.remove("on"), 500);
+};
+for (const el of [demoLink, peek]) {
+  el.addEventListener("mouseenter", openDemo);
+  el.addEventListener("mouseleave", closeDemo);
+}
+
+document.querySelectorAll<HTMLElement>("[data-direction]").forEach(choice => choice.addEventListener("click", () => {
+  settings = {...settings, reverseVertical: choice.dataset.direction === "reverse"};
+  renderChoices();
+}));
+document.querySelectorAll<HTMLElement>("[data-open]").forEach(choice => choice.addEventListener("click", () => {
+  settings = {...settings, activationMode: choice.dataset.open as LinkPeekSettings["activationMode"]};
+  renderChoices();
+}));
+document.querySelectorAll<HTMLElement>("[data-mode]").forEach(choice => choice.addEventListener("click", () => {
+  settings = {...settings, performanceMode: choice.dataset.mode as LinkPeekSettings["performanceMode"]};
+  renderChoices();
+}));
+document.getElementById("finish")!.addEventListener("click", () => void finish(false));
+document.getElementById("settings")!.addEventListener("click", () => void finish(true));
+
+void loadSettings().then(loaded => {
+  settings = loaded;
+  renderChoices();
+});
