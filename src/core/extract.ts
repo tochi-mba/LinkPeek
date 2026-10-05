@@ -15,7 +15,7 @@ export type ExtractOptions = Pick<LinkPeekSettings,
 
 const DEFAULT_OPTIONS: ExtractOptions = {
   includeImages: true, includeGif: true, includeWebp: true, includeAvif: true, includeSvg: false, includeVideo: true,
-  includeAvatars: false, includeEmoji: false, minWidth: 120, minHeight: 120, quotedDuplicates: "hide"
+  includeAvatars: false, includeEmoji: false, minWidth: 50, minHeight: 120, quotedDuplicates: "hide"
 };
 
 const QUOTE_BLOCK = /<aside\b[^>]*class=["'][^"']*\bquote\b[^"']*["'][^>]*>[\s\S]*?<\/aside>/gi;
@@ -156,25 +156,25 @@ function imageMedia(source: string, base: string, options: ExtractOptions, seen:
   return found;
 }
 
-function videoMedia(source: string, base: string, seen: Set<string>, meta: Partial<MediaItem>): Found[] {
+function videoMedia(source: string, base: string, options: ExtractOptions, seen: Set<string>, meta: Partial<MediaItem>): Found[] {
   const found: Found[] = [];
-  const add = (at: number, raw: string | undefined, poster: string | undefined) => {
+  const add = (at: number, tag: string, raw: string | undefined, poster: string | undefined) => {
     const url = raw && !UNUSABLE_SOURCE.test(raw) ? absolute(raw, base) : undefined;
-    if (!url || seen.has(url)) return;
+    if (!url || seen.has(url) || tooSmall(tag, options)) return;
     seen.add(url);
     found.push({at, item: {
       id: url, type: "video", originalUrl: url, previewUrl: url, posterUrl: poster ? absolute(poster, base) : undefined,
-      sourceUrl: base, filename: fileName(url), score: 0.8, ...meta
+      sourceUrl: base, filename: fileName(url), ...dimensions(tag), score: 0.8, ...meta
     }});
   };
   const videos = /<video\b[^>]*>[\s\S]*?<\/video>/gi;
   let match: RegExpExecArray | null;
   while ((match = videos.exec(source))) {
     const open = /^<video\b[^>]*>/i.exec(match[0])![0], inner = /<source\b[^>]*>/i.exec(match[0])?.[0] ?? "";
-    add(match.index, attribute(open, "src") ?? attribute(inner, "src"), attribute(open, "poster"));
+    add(match.index, open, attribute(open, "src") ?? attribute(inner, "src"), attribute(open, "poster"));
   }
   const placeholders = /<[a-z]+\b[^>]*\sdata-video-src\s*=[^>]*>/gi;
-  while ((match = placeholders.exec(source))) add(match.index, attribute(match[0], "data-video-src"), attribute(match[0], "data-thumbnail-src"));
+  while ((match = placeholders.exec(source))) add(match.index, match[0], attribute(match[0], "data-video-src"), attribute(match[0], "data-thumbnail-src"));
   return found;
 }
 
@@ -186,7 +186,7 @@ export function extractMediaFromHtml(html: string, baseUrl: string, meta: Partia
   const found = [
     ...lightboxMedia(source, baseUrl, options, seen, meta),
     ...imageMedia(source, baseUrl, options, seen, meta),
-    ...(options.includeVideo ? videoMedia(source, baseUrl, seen, meta) : [])
+    ...(options.includeVideo ? videoMedia(source, baseUrl, options, seen, meta) : [])
   ].sort((a, b) => a.at - b.at).map(entry => entry.item);
   if (options.quotedDuplicates === "mark") {
     for (const quote of html.match(QUOTE_BLOCK) ?? []) {

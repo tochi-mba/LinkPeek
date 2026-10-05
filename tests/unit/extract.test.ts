@@ -59,11 +59,12 @@ describe("posted media", () => {
   });
 
   it("filters by type and by declared size", () => {
-    const html = `<img src="/a.gif"><img src="/b.webp"><img src="/c.avif"><img src="/d.svg"><img src="/e.jpg"><img src="/small.jpg" width="40" height="400"><img src="/short.jpg" height="10"><a class="lightbox" href="/tiny.jpg"><img src="/t.jpg" width="20"></a>`;
+    const html = `<img src="/a.gif"><img src="/b.webp"><img src="/c.avif"><img src="/d.svg"><img src="/e.jpg"><img src="/small.jpg" width="49" height="400"><img src="/edge.jpg" width="50" height="400"><img src="/short.jpg" height="10"><a class="lightbox" href="/tiny.jpg"><img src="/t.jpg" width="20"></a>`;
     const paths = (options = {}) => extractMediaFromHtml(html, base, {}, options).map(item => new URL(item.originalUrl).pathname);
-    expect(paths()).toEqual(["/a.gif", "/b.webp", "/c.avif", "/e.jpg"]);
+    expect(paths()).toEqual(["/a.gif", "/b.webp", "/c.avif", "/e.jpg", "/edge.jpg"]);
     expect(paths({includeGif: false, includeWebp: false, includeAvif: false, includeSvg: true, includeImages: false})).toEqual(["/d.svg"]);
     expect(paths({minWidth: 0, minHeight: 0})).toContain("/small.jpg");
+    expect(paths({minWidth: 51, minHeight: 0})).not.toContain("/edge.jpg");
   });
 
   it("can include avatars and emoji when asked", () => {
@@ -109,8 +110,9 @@ describe("posted media", () => {
 describe("posted video", () => {
   it("finds video tags, nested sources and Discourse video placeholders", () => {
     const items = extractMediaFromHtml(`
-      <video src="/a.mp4" poster="/a.jpg"></video>
-      <video><source src="/b.webm"></video>
+      <video src="/a.mp4" poster="/a.jpg" width="640"></video>
+      <video width="49"><source src="/too-small.webm"></video>
+      <video width="50"><source src="/b.webm"></video>
       <div class="video-placeholder-container" data-video-src="/c.mp4" data-thumbnail-src="/c.jpg"></div>
       <video src="/a.mp4"></video>
       <video><source src="data:video/mp4;base64,AA"></video>

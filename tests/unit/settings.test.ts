@@ -14,6 +14,8 @@ describe("default settings", () => {
     expect(DEFAULT_SETTINGS.ignoreScrollHover).toBe(true);
     expect(DEFAULT_SETTINGS.shortcuts.nextLink).toEqual(["n"]);
     expect(DEFAULT_SETTINGS.shortcuts.previousLink).toEqual(["Shift+n"]);
+    expect(DEFAULT_SETTINGS.minWidth).toBe(50);
+    expect(SETTING_RANGES.minWidth?.step).toBe(1);
   });
 
   it("give every enumerated default an allowed value and every numeric default a range", () => {

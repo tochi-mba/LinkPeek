@@ -110,6 +110,19 @@ describe("the virtual grid", () => {
     expect(cancelAnimationFrame).toHaveBeenCalled();
   });
 
+  it("reports decoded image widths, but not video poster widths", () => {
+    const el = container(), onWidth = vi.fn();
+    new VirtualGrid(el, items(10), {cell: 100, current: 0, onPick: vi.fn(), onWidth});
+    const image = tiles(el)[0].querySelector("img")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 45});
+    image.dispatchEvent(new Event("load"));
+    const poster = tiles(el)[2].querySelector("img")!;
+    Object.defineProperty(poster, "naturalWidth", {configurable: true, value: 20});
+    poster.dispatchEvent(new Event("load"));
+    expect(onWidth).toHaveBeenCalledTimes(1);
+    expect(onWidth).toHaveBeenCalledWith(0, 45);
+  });
+
   it("opens the tile that was clicked", () => {
     const el = container(), onPick = vi.fn();
     new VirtualGrid(el, items(10), {cell: 100, current: 0, onPick});

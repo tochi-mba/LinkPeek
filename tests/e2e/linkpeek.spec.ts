@@ -20,6 +20,11 @@ async function launchExtension():Promise<{context:BrowserContext;profile:string}
       context.serviceWorkers().length?Promise.resolve():context.waitForEvent("serviceworker"),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error("LinkPeek service worker did not start")),12_000))
     ]);
+    const sw=context.serviceWorkers()[0];
+    await sw.evaluate(async()=>{
+      const stored=await chrome.storage.local.get("settings");
+      await chrome.storage.local.set({settings:{...(stored.settings??{}),minWidth:0,minHeight:0}});
+    });
     return {context,profile};
   }catch(error){await rm(profile,{recursive:true,force:true});throw error}
 }

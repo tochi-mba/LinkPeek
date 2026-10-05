@@ -78,7 +78,7 @@ try{
   const sw=context.serviceWorkers()[0]??await context.waitForEvent("serviceworker");
   results.browser.launch_to_service_worker_ms=round(performance.now()-launchStart);
   const extensionId=new URL(sw.url()).host;
-  await sw.evaluate(async()=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),prefetch:"off",showLearningTips:false}})});
+  await sw.evaluate(async()=>{const s=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(s.settings??{}),prefetch:"off",showLearningTips:false,minWidth:0,minHeight:0}})});
   for(const p of context.pages())await p.close().catch(()=>{});
   const page=await context.newPage();
   const navStart=performance.now();await page.goto(base,{waitUntil:"domcontentloaded"});
