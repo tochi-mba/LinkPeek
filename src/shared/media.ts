@@ -18,12 +18,21 @@ export interface MediaItem {
   score: number;
 }
 
+export interface LinkContext {
+  /** Page whose document order these links came from. */
+  sourceUrl: string;
+  /** Safe previewable destinations in document order. */
+  links: string[];
+}
+
 export interface ScanResult {
   url: string;
   kind: LinkKind;
   title?: string;
   items: MediaItem[];
   complete: boolean;
+  /** Link order for fetched pages, so navigation can continue inside recursive results. */
+  linkContexts?: LinkContext[];
   postsScanned?: number;
   totalPosts?: number;
   diagnostics?: {ignored: number; duplicates: number; adapter: string; warnings: string[]};
