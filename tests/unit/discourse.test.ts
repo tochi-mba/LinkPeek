@@ -56,6 +56,13 @@ describe("Discourse topic scanning",()=>{
     await expect(promise).rejects.toMatchObject({name:"AbortError"});
     expect(started).toBeGreaterThan(0);expect(started).toBeLessThanOrEqual(3);expect(aborted).toBe(started);
   });
+
+  it("stops scanning once the configured media cap is exceeded",async()=>{
+    const stream=[1,2,3],initial=[makePost(1)];let batches=0;
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{const url=String(input);if(url.endsWith("/t/capped/702.json"))return new Response(JSON.stringify({id:702,title:"Capped",post_stream:{stream,posts:initial}}));batches++;const ids=new URL(url).searchParams.getAll("post_ids[]").map(Number);return new Response(JSON.stringify({post_stream:{posts:ids.map(makePost)}}))}));
+    const result=await scanDiscourse("https://forum.example/t/capped/702",1,3,{...DEFAULT_SETTINGS,maxRequests:1,maxMediaItems:1,minWidth:0,minHeight:0});
+    expect(result.items).toHaveLength(1);expect(result.complete).toBe(true);expect(result.diagnostics?.warnings.join(" ")).toContain("media limit");expect(batches).toBe(1);
+  });
 });
 
 

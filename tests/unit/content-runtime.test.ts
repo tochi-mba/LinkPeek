@@ -18,18 +18,21 @@ vi.mock("../../src/ui/viewer",()=>({
 }));
 
 const scan=(url:string):ScanResult=>({url,kind:"generic",title:"x",items:[],complete:true,diagnostics:{adapter:"x",ignored:0,duplicates:0,warnings:[]}});
-class WarmImage{decoding="";fetchPriority="";private value="";private listeners:Record<string,Array<()=>void>>={};addEventListener(type:string,cb:()=>void){(this.listeners[type]??=[]).push(cb)}set src(v:string){this.value=v;this.listeners.load?.forEach(cb=>cb())}get src(){return this.value}}
+const warmSources:string[]=[];let autoFinishWarm=true;
+class WarmImage{decoding="";fetchPriority="";private value="";private listeners:Record<string,Array<()=>void>>={};addEventListener(type:string,cb:()=>void){(this.listeners[type]??=[]).push(cb)}set src(v:string){this.value=v;warmSources.push(v);if(autoFinishWarm)this.listeners.load?.forEach(cb=>cb())}get src(){return this.value}}
 
 describe("content script runtime",()=>{
-  let store:any,changed:Function[],runtimeListeners:Function[],messages:any[],idleCb:Function|undefined,viewer:any,docListeners:Array<{type:string;listener:EventListenerOrEventListenerObject;options:any}>;
+  let store:any,changed:Function[],runtimeListeners:Function[],mutationCallbacks:MutationCallback[],messages:any[],idleCb:Function|undefined,viewer:any,docListeners:Array<{type:string;listener:EventListenerOrEventListenerObject;options:any}>;
   let sendImpl:(msg:any)=>Promise<any>;
   const tick=async()=>{await Promise.resolve();await Promise.resolve();await Promise.resolve()};
 
   beforeEach(async()=>{
     vi.resetModules();vi.useFakeTimers();vm.instances.length=0;document.body.innerHTML="";
+    Object.defineProperty(document,"hidden",{configurable:true,value:false});delete (navigator as Navigator&{connection?:unknown}).connection;
     store={settings:{...DEFAULT_SETTINGS,hoverDelay:20,closeDelay:10,prefetch:"nearby"},viewerState:{view:"grid",gridThumbSize:90,expanded:false}};
     settingsHarness.current=store.settings;
-    changed=[];runtimeListeners=[];messages=[];idleCb=undefined;docListeners=[];
+    changed=[];runtimeListeners=[];mutationCallbacks=[];messages=[];warmSources.length=0;autoFinishWarm=true;idleCb=undefined;docListeners=[];
+    vi.stubGlobal("MutationObserver",class{constructor(cb:MutationCallback){mutationCallbacks.push(cb)}observe(){}disconnect(){}takeRecords(){return []}});
     const add=document.addEventListener.bind(document);
     vi.spyOn(document,"addEventListener").mockImplementation(((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
       docListeners.push({type,listener,options});add(type,listener,options);
@@ -49,7 +52,7 @@ describe("content script runtime",()=>{
     vi.stubGlobal("Image",WarmImage as any);
     await import("../../src/content");await tick();viewer=vm.instances.at(-1);
   });
-  afterEach(()=>{for(const {type,listener,options} of docListeners)document.removeEventListener(type,listener,options);vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML=""});
+  afterEach(()=>{for(const {type,listener,options} of docListeners)document.removeEventListener(type,listener,options);delete (document as any).elementFromPoint;delete (navigator as Navigator&{connection?:unknown}).connection;vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.innerHTML=""});
 
   const update=async(patch:any)=>{store.settings={...store.settings,...patch};settingsHarness.current=store.settings;for(const cb of changed)await cb({settings:{newValue:store.settings}});await tick()};
   const link=(id:string,href:string,rect:any={left:10,top:10,right:110,bottom:30})=>{
@@ -74,6 +77,12 @@ describe("content script runtime",()=>{
     pointer("pointermove",a,205,205);vi.advanceTimersByTime(260);await tick();
     expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url.includes("moving"))).toBe(true);
     pointer("pointerover",a,205,205);vi.advanceTimersByTime(30);await tick();
+  });
+
+  it("activates dynamically inserted and href-recycled links without requiring pointer re-entry",async()=>{
+    const dynamic=link("dynamic","https://x.test/dynamic");pointer("pointermove",dynamic,40,40);vi.advanceTimersByTime(21);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===dynamic.href)).toBe(true);
+    dynamic.href="https://x.test/recycled";pointer("pointermove",dynamic,41,41);vi.advanceTimersByTime(21);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===dynamic.href)).toBe(true);
+    (document as any).elementFromPoint=()=>dynamic;mutationCallbacks[0]([],{} as MutationObserver);await update({activationMode:"click"});mutationCallbacks[0]([],{} as MutationObserver);await update({mutationObserver:false});mutationCallbacks[0]([],{} as MutationObserver);
   });
 
   it("can immediately re-arm the same link after movement cancels intent",async()=>{
@@ -118,6 +127,20 @@ describe("content script runtime",()=>{
       const a=link(name,url);pointer("pointerover",a);vi.advanceTimersByTime(30);await tick();
     }
     const before=messages.filter(x=>x.type==="LINKPEEK_SCAN").length;await update({enabled:false});const x=link("disabled","https://x.test/disabled");pointer("pointerover",x);vi.advanceTimersByTime(30);await tick();expect(messages.filter(x=>x.type==="LINKPEEK_SCAN").length).toBe(before);
+  });
+
+  it("limits hover, click and visible prefetch to matching destination keywords",async()=>{
+    await update({enabled:true,activationKeywords:["gallery","photo album"],activationMode:"hover"});
+    const blocked=link("blocked-keyword","https://x.test/topic/1");pointer("pointerover",blocked);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.url===blocked.href)).toBe(false);
+    const allowed=link("allowed-keyword","https://x.test/GALLERY/1");pointer("pointerover",allowed);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===allowed.href)).toBe(true);
+    await update({activationKeywords:["different"]});pointer("pointermove",allowed);vi.advanceTimersByTime(30);await tick();
+
+    await update({activationKeywords:["gallery"]});const recycled=link("keyword-recycled","https://x.test/gallery/old");pointer("pointerover",recycled);recycled.href="https://x.test/topic/new";pointer("pointermove",recycled);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.url===recycled.href)).toBe(false);
+
+    await update({activationMode:"click",activationKeywords:["gallery"]});const clickBlocked=link("click-blocked","https://x.test/topic/2");let preventedByExtension=true;clickBlocked.addEventListener("click",e=>{preventedByExtension=e.defaultPrevented;e.preventDefault()});const event=new MouseEvent("click",{bubbles:true,cancelable:true});clickBlocked.dispatchEvent(event);expect(preventedByExtension).toBe(false);
+    const before=messages.length;idleCb!({didTimeout:true,timeRemaining:()=>20});await tick();expect(messages.slice(before).some(x=>x.url===blocked.href)).toBe(false);
+
+    await update({activationMode:"hover",activationKeywords:["late-match"]});const late=link("late-match","https://x.test/late-match");pointer("pointerover",late);await update({activationKeywords:["now-excluded"]});vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===late.href)).toBe(false);
   });
 
   it("handles progressive messages, cancelled/error/throwing scans and stale responses",async()=>{
@@ -248,6 +271,59 @@ describe("content script runtime",()=>{
     const retry=link("retry","https://retry.test/page");pointer("pointerover",retry);await tick();pointer("pointerover",retry);await tick();expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===retry.href).length).toBe(2);
     vi.advanceTimersByTime(25);await tick();viewer.onDismiss?.();vi.advanceTimersByTime(1001);expect(messages.some(x=>x.type==="LINKPEEK_CANCEL_SCAN")).toBe(true);
     Object.defineProperty(document,"hidden",{configurable:true,value:true});const hidden=link("hidden","https://hidden.test/page");pointer("pointerover",hidden);pointer("pointermove",hidden);document.dispatchEvent(new Event("scroll"));await tick();
+  });
+
+  it("stages deep gallery warming, pauses when hidden and honors network limits",async()=>{
+    const media=(url:string,n:number):ScanResult=>({...scan(url),items:Array.from({length:n},(_,i)=>({id:`${url}-${i}`,type:"image",originalUrl:`${url}/o${i}.jpg`,previewUrl:`${url}/p${i}.jpg`,sourceUrl:url,score:1}))});
+    sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?media(msg.url,140):msg.type==="LINKPEEK_SCAN"?scan(msg.url):{ok:true};
+    const first=link("deep-first","https://deep.test/first");pointer("pointerover",first);vi.advanceTimersByTime(8);await tick();
+    expect(messages.find(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===first.href&&x.deep)).toMatchObject({deep:true});
+    expect(warmSources).toHaveLength(12);
+
+    const second=link("deep-second","https://deep.test/second");pointer("pointerover",second);vi.advanceTimersByTime(8);await tick();
+    const stalledIdle=idleCb!;stalledIdle({didTimeout:false,timeRemaining:()=>0});expect(warmSources).toHaveLength(24);
+    idleCb!({didTimeout:false,timeRemaining:()=>20});expect(warmSources.length).toBeGreaterThan(24);
+    idleCb!({didTimeout:true,timeRemaining:()=>0});
+
+    await update({networkMode:"aggressive",preloadRest:"all",preloadRestLimit:0});
+    const aggressive=link("aggressive","https://deep.test/aggressive");pointer("pointerover",aggressive);vi.advanceTimersByTime(8);await tick();
+    expect(warmSources.filter(x=>x.includes("aggressive"))).toHaveLength(120);
+
+    await update({networkMode:"data",preloadRest:"idle"});
+    const saver=link("saver","https://deep.test/saver");pointer("pointerover",saver);vi.advanceTimersByTime(8);await tick();
+    expect(warmSources.filter(x=>x.includes("saver"))).toHaveLength(1);
+
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{saveData:true}});
+    const saveData=link("save-data","https://deep.test/save-data");pointer("pointerover",saveData);await tick();
+    expect(messages.some(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===saveData.href)).toBe(false);
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{effectiveType:"slow-2g"}});
+    pointer("pointerover",link("slow-2g","https://deep.test/slow-2g"));await tick();
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{effectiveType:"2g"}});
+    pointer("pointerover",link("two-g","https://deep.test/two-g"));await tick();
+    Object.defineProperty(navigator,"connection",{configurable:true,value:{effectiveType:"4g"}});
+    await update({networkMode:"adaptive",preloadRest:"idle"});
+
+    let release!:(value:ScanResult)=>void;sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?(msg.deep?await new Promise(resolve=>{release=resolve}):scan(msg.url)):msg.type==="LINKPEEK_SCAN"?scan(msg.url):{ok:true};
+    const hideDuring=link("hide-during","https://deep.test/hide-during");pointer("pointerover",hideDuring);vi.advanceTimersByTime(8);await tick();
+    Object.defineProperty(document,"hidden",{configurable:true,value:true});release(media(hideDuring.href,30));await tick();
+    const hiddenIdle=idleCb!;hiddenIdle({didTimeout:true,timeRemaining:()=>20});
+    Object.defineProperty(document,"hidden",{configurable:true,value:false});document.dispatchEvent(new Event("visibilitychange"));
+    idleCb!({didTimeout:true,timeRemaining:()=>20});
+  });
+
+  it("restores a successful shallow prefetch when its deep upgrade fails",async()=>{
+    const a=link("upgrade-retry","https://retry.test/upgrade");
+    const shallow=(url:string):ScanResult=>({...scan(url),items:[0,1,2].map(i=>({id:`shallow-${i}`,type:"image",originalUrl:`${url}/${i}.jpg`,previewUrl:`${url}/${i}.jpg`,sourceUrl:url,score:1}))});
+    await update({recursiveSearch:"off"});sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?shallow(msg.url):{ok:true};pointer("pointerover",a);await tick();
+    await update({recursiveSearch:"same-origin"});sendImpl=async msg=>{if(msg.type==="LINKPEEK_PREFETCH")throw new Error("deep failed");return {ok:true}};pointer("pointerover",a);vi.advanceTimersByTime(8);await tick();pointer("pointerover",a);vi.advanceTimersByTime(8);await tick();
+    expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===a.href&&x.deep)).toHaveLength(2);
+  });
+
+  it("caps queued speculative images while slow image requests are active",async()=>{
+    const media=(url:string):ScanResult=>({...scan(url),items:Array.from({length:140},(_,i)=>({id:`${url}-${i}`,type:"image",originalUrl:`${url}/${i}.jpg`,previewUrl:`${url}/${i}.jpg`,sourceUrl:url,score:1}))});
+    autoFinishWarm=false;sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?media(msg.url):{ok:true};
+    for(let i=0;i<3;i++){const a=link(`slow-warm-${i}`,`https://slow-warm-${i}.test/page`);pointer("pointerover",a);vi.advanceTimersByTime(8);await tick()}
+    expect(warmSources).toHaveLength(3);
   });
 });
 

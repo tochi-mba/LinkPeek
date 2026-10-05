@@ -1,5 +1,5 @@
 import {describe,expect,it} from "vitest";
-import {DEFAULT_SETTINGS,PRESETS,effectiveSettings,migrateSettings} from "../../src/shared/settings";
+import {DEFAULT_SETTINGS,PRESETS,effectiveSettings,linkMatchesKeywords,migrateSettings} from "../../src/shared/settings";
 
 describe("settings",()=>{
   it("ships touchpad-first defaults",()=>{
@@ -7,6 +7,8 @@ describe("settings",()=>{
     expect(DEFAULT_SETTINGS.horizontalGesture).toBe("scrub");
     expect(DEFAULT_SETTINGS.pinchZoom).toBe(true);
     expect(DEFAULT_SETTINGS.scanScope).toBe("whole");
+    expect(DEFAULT_SETTINGS.recursiveTrigger).toBe("empty");
+    expect(DEFAULT_SETTINGS.activationKeywords).toEqual([]);
   });
   it("has the expected power-user presets",()=>expect(Object.keys(PRESETS)).toEqual(expect.arrayContaining(["balanced","minimal","fast","touchpad","manual"])));
   it("migrates legacy resource defaults without changing customized values",()=>{
@@ -18,5 +20,14 @@ describe("settings",()=>{
     const settings={...DEFAULT_SETTINGS,siteProfiles:{"forum.example":{hoverDelay:50},"*.other.example":{enabled:false}}};
     expect(effectiveSettings(settings,"https://forum.example/t/x/1").hoverDelay).toBe(50);
     expect(effectiveSettings(settings,"https://sub.other.example/x").enabled).toBe(false);
+  });
+  it("matches optional destination keywords case-insensitively and safely",()=>{
+    expect(linkMatchesKeywords(DEFAULT_SETTINGS,"https://example.test/anything")).toBe(true);
+    const filtered={activationKeywords:[" Gallery ","photo album",""]};
+    expect(linkMatchesKeywords(filtered,"https://example.test/GALLERY/12")).toBe(true);
+    expect(linkMatchesKeywords(filtered,"https://example.test/photo%20album/12")).toBe(true);
+    expect(linkMatchesKeywords(filtered,"https://example.test/topic/12")).toBe(false);
+    expect(linkMatchesKeywords(filtered,"https://example.test/%E0%A4%A")).toBe(false);
+    expect(linkMatchesKeywords({activationKeywords:null as unknown as string[]},"https://example.test/x")).toBe(true);
   });
 });

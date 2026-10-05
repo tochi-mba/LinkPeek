@@ -52,8 +52,10 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
     }
+    if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
+    if(path==="/album/a"||path==="/album/b"){res.setHeader("content-type","text/html");res.end(`<img src="${base}/media/${path.endsWith("a")?"album-a":"album-b"}.jpg" width="800" height="600">`);return}
     if(path==="/prefetch"){res.setHeader("content-type","text/html");res.end(`<!doctype html><body>${Array.from({length:6},(_,i)=>`<a href="/t/prefetch-${i}/${800+i}">P${i}</a>`).join("<br>")}</body>`);return}
     if(path==="/t/demo/123.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(demoTopic()));return}
     if(path==="/t/large/789.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(789)));return}
@@ -102,6 +104,21 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
   }finally{await closeExtension(context,profile)}
 });
 
+test("panel drag/resize persists and empty pages search linked galleries",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+    const title=page.locator(".lp-title"),titleBox=await title.boundingBox();expect(titleBox).toBeTruthy();
+    if(titleBox){await page.mouse.move(titleBox.x+30,titleBox.y+15);await page.mouse.down();await page.mouse.move(titleBox.x+110,titleBox.y+70,{steps:4});await page.mouse.up()}
+    const handle=page.locator('[data-resize="se"]'),handleBox=await handle.boundingBox();expect(handleBox).toBeTruthy();
+    if(handleBox){await page.mouse.move(handleBox.x+5,handleBox.y+5);await page.mouse.down();await page.mouse.move(handleBox.x+75,handleBox.y+55,{steps:4});await page.mouse.up()}
+    const saved=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(saved.width).not.toBe("");expect(saved.height).not.toBe("");
+    await page.waitForTimeout(100);await page.keyboard.press("Escape");await page.locator("#recursive").hover();await expect(page.locator(".lp-panel")).toContainText("Empty index",{timeout:12_000});await expect(page.locator(".lp-panel")).toContainText("2 media");
+    const restored=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(restored).toEqual(saved);
+    await page.keyboard.press("Escape");const dynamic=page.locator("#recursive");await dynamic.hover();await expect(page.locator(".lp-panel")).toContainText("Empty index");await page.keyboard.press("Escape");await dynamic.evaluate((el:HTMLAnchorElement)=>el.href="/t/demo/123");await dynamic.dispatchEvent("pointermove",{clientX:30,clientY:20,bubbles:true});await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+  }finally{await closeExtension(context,profile)}
+});
+
 test("GIF player supports playback, frame stepping, scrubbing, speed, looping and zoom",async()=>{
   const {context,profile}=await launchExtension();
   try{
@@ -123,6 +140,7 @@ test("GIF player supports playback, frame stepping, scrubbing, speed, looping an
     await page.locator(".lp-gif-speed").selectOption("2");await expect(page.locator(".lp-gif-speed")).toHaveValue("2");
     await page.locator(".lp-gif-loop").click();await expect(page.locator(".lp-gif-loop")).toHaveAttribute("aria-pressed","false");
     await page.keyboard.press("Space");await expect(page.locator(".lp-gif-toggle")).toHaveAttribute("aria-label","Pause GIF");await page.keyboard.press("Space");
+    await timeline.evaluate((el:HTMLInputElement)=>{el.value="0";el.dispatchEvent(new Event("input",{bubbles:true}))});await expect(timeline).toHaveValue("0");
     await page.keyboard.press(".");await expect(timeline).toHaveValue("1");
     await timeline.dispatchEvent("wheel",{deltaX:120,bubbles:true,cancelable:true});await expect(timeline).toHaveValue("2");
     await page.locator(".lp-gif-canvas").dblclick({position:{x:2,y:2}});
@@ -201,9 +219,10 @@ test("onboarding and settings render and persist GIF customization",async()=>{
     const batch=page.locator('[data-key="batchSize"]');await expect(batch).toHaveValue("50");await page.locator('[data-step-key="batchSize"][data-step-dir="1"]').click();await expect(batch).toHaveValue("60");
     await page.getByRole("button",{name:"Hover & Activation",exact:true}).click();
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
+    const keywords=page.locator('textarea[data-key="activationKeywords"]');await keywords.fill("gallery, /album/");await keywords.press("Tab");
     await page.getByRole("button",{name:"Media Types",exact:true}).click();
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
-    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
+    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('textarea[data-key="activationKeywords"]')).toHaveValue("gallery\n/album/");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
   }finally{await closeExtension(context,profile)}
 });

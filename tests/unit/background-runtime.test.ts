@@ -65,13 +65,37 @@ describe("background service worker",()=>{
   it("handles shallow prefetch variants, cached reuse and prefetch errors",async()=>{
     let r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/a.jpg",kind:"direct-image"});expect(r.value.kind).toBe("direct-image");
     await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/a.jpg",kind:"direct-image"});
-    r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/page",kind:"generic"});expect(r.value.kind).toBe("generic");
+    mocks.scanGeneric.mockResolvedValueOnce({...direct("https://x.test/page"),items:[{id:"warm",type:"image",originalUrl:"https://x.test/warm.jpg",previewUrl:"https://x.test/warm.jpg",sourceUrl:"https://x.test/page",score:1}]});r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/page",kind:"generic"});expect(r.value.kind).toBe("generic");
+    mocks.scanGeneric.mockResolvedValueOnce({...direct("https://x.test/empty"),kind:"generic",items:[]}).mockResolvedValueOnce({...direct("https://x.test/empty"),items:[{id:"found",type:"image",originalUrl:"https://x.test/found.jpg",previewUrl:"https://x.test/found.jpg",sourceUrl:"https://x.test/empty",score:1}]});await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/empty",kind:"generic"});r=await send({type:"LINKPEEK_SCAN",url:"https://x.test/empty",kind:"generic",token:"empty"});expect(r.value.items).toHaveLength(1);
     r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/video.mp4",kind:"direct-video"});expect(r.value).toBeNull();
     mocks.scanGeneric.mockRejectedValueOnce(new Error("generic prefetch failed"));r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/broken",kind:"generic"});expect(r.value.error).toBe("generic prefetch failed");
     r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/t/a/1",kind:"discourse"});expect(r.value.kind).toBe("discourse");
     await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/t/a/1",kind:"discourse"});expect(mocks.prefetchDiscourse).toHaveBeenCalledTimes(1);
     mocks.prefetchDiscourse.mockRejectedValueOnce(new Error("prefetch failed"));
     r=await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/t/b/2",kind:"discourse"});expect(r.value.error).toBe("prefetch failed");
+  });
+
+  it("upgrades an in-flight empty generic prefetch to a deep fallback scan",async()=>{
+    let release!:(value:ScanResult)=>void;
+    mocks.scanGeneric.mockImplementationOnce((url:string)=>new Promise<ScanResult>(resolve=>{release=resolve})).mockImplementationOnce(async url=>({...direct(url),items:[{id:"recursive",type:"image",originalUrl:`${url}/recursive.jpg`,previewUrl:`${url}/recursive.jpg`,sourceUrl:url,score:1}]}));
+    const shallow=send({type:"LINKPEEK_PREFETCH",url:"https://x.test/upgrade",kind:"generic"});await tick();
+    const deep=send({type:"LINKPEEK_PREFETCH",url:"https://x.test/upgrade",kind:"generic",deep:true});
+    release(direct("https://x.test/upgrade"));expect((await shallow).value.items).toHaveLength(0);expect((await deep).value.items).toHaveLength(1);
+    expect(mocks.scanGeneric.mock.calls.map(call=>call[3])).toEqual([false,true]);
+
+    let releaseShared!:(value:ScanResult)=>void;mocks.scanGeneric.mockImplementationOnce((url:string)=>new Promise<ScanResult>(resolve=>{releaseShared=resolve}));
+    const sharedA=send({type:"LINKPEEK_PREFETCH",url:"https://x.test/shared",kind:"generic"}),sharedB=send({type:"LINKPEEK_PREFETCH",url:"https://x.test/shared",kind:"generic"});await tick();
+    releaseShared(direct("https://x.test/shared"));expect((await sharedA).value.kind).toBe("generic");expect((await sharedB).value.kind).toBe("generic");
+  });
+
+  it("does not let a shallow cache suppress explicit always-recursive fallback",async()=>{
+    const withMedia=(url:string)=>({...direct(url),items:[{id:"root",type:"image" as const,originalUrl:`${url}/root.jpg`,previewUrl:`${url}/root.jpg`,sourceUrl:url,score:1}]});
+    store.settings={...store.settings,recursiveSearch:"same-origin",recursiveTrigger:"always"};mocks.scanGeneric.mockImplementation(async url=>withMedia(url));
+    await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/always",kind:"generic"});await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/always",kind:"generic",deep:true});
+    expect(mocks.scanGeneric.mock.calls.map(call=>call[3])).toEqual([false,true]);
+
+    store.settings={...store.settings,recursiveSearch:"off"};mocks.scanGeneric.mockClear();mocks.scanGeneric.mockImplementation(async url=>direct(url));
+    await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/off",kind:"generic"});await send({type:"LINKPEEK_PREFETCH",url:"https://x.test/off",kind:"generic"});expect(mocks.scanGeneric).toHaveBeenCalledTimes(1);
   });
 
   it("scans direct/generic/discourse, broadcasts progress and reuses completed cache",async()=>{

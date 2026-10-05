@@ -111,7 +111,7 @@ describe("Viewer runtime",()=>{
     v.show(result([item(0),item(1)]));
     expect(v.key(new KeyboardEvent("keydown",{key:"x"}))).toBe(false);
     expect(v.key(new KeyboardEvent("keydown",{key:"p"}))).toBe(true);expect(v.pinned).toBe(true);
-    v.key(new KeyboardEvent("keydown",{key:"?"}));expect(v.help).toBe(true);
+    v.key(new KeyboardEvent("keydown",{key:"?"}));expect(v.help).toBe(true);expect(v.key(new KeyboardEvent("keydown",{key:"o"}))).toBe(false);v.key(new KeyboardEvent("keydown",{key:"?"}));
     v.key(new KeyboardEvent("keydown",{key:"o"}));expect(window.open).toHaveBeenCalled();
     v.key(new KeyboardEvent("keydown",{key:"d"}));expect(messages.some(x=>x.type==="LINKPEEK_DOWNLOAD")).toBe(true);
     v.key(new KeyboardEvent("keydown",{key:"="}));expect(v.zoom).toBeGreaterThan(1);
@@ -150,6 +150,8 @@ describe("Viewer runtime",()=>{
     Object.defineProperty(grid,"clientWidth",{configurable:true,value:500});Object.defineProperty(grid,"clientHeight",{configurable:true,value:300});
     (v as any).setupVirtualGrid();
     expect(v.panel.querySelectorAll(".lp-thumb").length).toBeGreaterThan(0);
+    expect(v.panel.querySelectorAll(".lp-thumb").length).toBeLessThan(40);
+    expect(v.panel.querySelector('.lp-thumb img[loading="eager"]')).toBeTruthy();expect(v.panel.querySelector('.lp-thumb img[loading="lazy"]')).toBeTruthy();expect(v.panel.querySelector(".lp-thumb")?.getAttribute("aria-label")).toContain("of 40");
     grid.dispatchEvent(new Event("scroll"));grid.dispatchEvent(new Event("scroll"));grid.dispatchEvent(new MouseEvent("click",{bubbles:true}));
     const thumb=v.panel.querySelector(".lp-thumb") as HTMLButtonElement;thumb.click();expect(v.view).toBe("focus");
     v.view="grid";(v as any).render();
@@ -302,6 +304,22 @@ describe("Viewer runtime",()=>{
     v.panel.dispatchEvent(new MouseEvent("mouseenter"));expect(clear).toHaveBeenCalledWith(123);
     (v as any).position(10,10);expect(v.panel.style.left).toBe("10px");
     v.close(true);
+  });
+
+  it("drags, resizes, clamps and remembers panel geometry",()=>{
+    const {v}=make({draggablePanel:true,resizablePanel:true,rememberPanelGeometry:true});v.show(result([item(0)]));
+    vi.spyOn(v.panel,"getBoundingClientRect").mockReturnValue({left:100,top:100,width:480,height:400,right:580,bottom:500,x:100,y:100,toJSON:()=>({})});
+    const head=v.panel.querySelector(".lp-head")!;head.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,clientX:100,clientY:100}));window.dispatchEvent(new PointerEvent("pointermove",{clientX:150,clientY:130}));window.dispatchEvent(new PointerEvent("pointerup"));
+    expect(store.viewerState.geometry).toMatchObject({left:150,top:130,width:480,height:400});
+    const handle=v.panel.querySelector('[data-resize="se"]')!;handle.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,clientX:580,clientY:500}));window.dispatchEvent(new PointerEvent("pointermove",{clientX:680,clientY:580}));window.dispatchEvent(new PointerEvent("pointerup"));
+    expect(store.viewerState.geometry.width).toBe(580);expect(store.viewerState.geometry.height).toBe(480);
+    v.restoreViewerState({geometry:{left:-50,top:-50,width:5000,height:5000}});v.openLoading(10,10,v.settings,"Again");expect(parseFloat(v.panel.style.left)).toBeGreaterThanOrEqual(8);expect(parseFloat(v.panel.style.width)).toBeLessThanOrEqual(innerWidth-16);
+    window.dispatchEvent(new Event("resize"));
+    (v.panel.querySelector(".lp-title") as HTMLElement).dispatchEvent(new MouseEvent("dblclick",{bubbles:true}));expect(store.viewerState.geometry).toBeUndefined();
+    v.settings.rememberPanelGeometry=false;for(const placement of ["left","above","below","right"] as const){v.settings.placement=placement;(v as any).position(600,450)}
+    (v.panel.querySelector(".lp-title") as HTMLElement).dispatchEvent(new MouseEvent("dblclick",{bubbles:true}));
+    v.settings.draggablePanel=false;head.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,clientX:100,clientY:100}));v.settings.draggablePanel=true;(v.panel.querySelector(".lp-close") as HTMLButtonElement).dispatchEvent(new PointerEvent("pointerdown",{bubbles:true}));
+    v.closeTimer=99;const northWest=v.panel.querySelector('[data-resize="nw"]')!;northWest.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,clientX:100,clientY:100}));window.dispatchEvent(new PointerEvent("pointermove",{clientX:80,clientY:70}));v.error("reset bindings");v.panel.querySelector('[data-resize="s"]')!.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,clientX:100,clientY:100}));v.close(true);
   });
 
 });
