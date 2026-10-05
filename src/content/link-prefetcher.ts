@@ -1,19 +1,27 @@
 /**
- * Keeps the links nearest the pointer prepared, so a preview opens instantly.
+ * Keeps links prepared before they are hovered, so a preview opens instantly,
+ * without ever competing with what the person is doing.
  *
- * Links near the viewport are tracked with an IntersectionObserver (no layout
- * reads per scroll). They are ranked by distance from where the pointer is
- * heading, and the closest few are scanned cheaply in the service worker.
- * Results with media are kept here too, so opening a prepared link shows its
- * gallery in the first frame without a round trip.
+ * Work runs in three tiers, each only in idle time and within the resource
+ * governor's budget:
+ *
+ * 1. Links the inspector raised, and the links nearest where the pointer is
+ *    heading (tracked with an IntersectionObserver, so scrolling costs nothing).
+ * 2. Every other link on the page, in document order, those near the viewport
+ *    first: one cheap, never-retried check each. Off-screen links get no layout
+ *    reads and no image downloads, and only a small summary is kept for them.
+ * 3. Near the viewport, the deeper linked-page search for pages that had no
+ *    media of their own.
+ *
+ * The whole-page tiers pause while a preview is loading, while the tab is
+ * hidden and whenever the governor reports pressure, and back off from a site
+ * that starts failing requests. Pointer intent (hover, linger, "maximum"
+ * priority) always goes first and may use one extra request slot.
  *
  * While a gallery built from linked pages is open, the links next to the one
  * being viewed are prepared too, so stepping through them with N is instant.
- *
- * The preload inspector reads live state from here and can raise a link's
- * priority: "high" prepares it in the next idle moment, "maximum" right away.
  */
-import {classifyLink, linkLabel, type ScanResult} from "../shared/media";
+import {classifyLink, hasGifMedia, isGifLink, linkLabel, type ScanResult} from "../shared/media";
 import type {PrefetchRequest} from "../shared/messages";
 import type {LinkPeekSettings} from "../shared/settings";
 import type {ImageWarmer} from "./image-warmer";
@@ -24,11 +32,14 @@ export interface PrefetchHost {
   settingsFor(url: string): LinkPeekSettings | undefined;
   pointer(): {x: number; y: number; vx: number; vy: number};
   budget(): Budget;
+  /** True while the person is waiting on something (a preview loading); whole-page work yields. */
+  busy(): boolean;
 }
 
 type Level = "shallow" | "deep";
+type Tier = "intent" | "nearby" | "page";
 export type PreloadPriority = "normal" | "high" | "maximum";
-export type PreloadState = "not-started" | "queued" | "loading" | "prepared" | "backoff" | "blocked";
+export type PreloadState = "not-started" | "queued" | "loading" | "prepared" | "empty" | "backoff" | "blocked";
 
 export interface PreloadEntry {
   url: string;
@@ -43,16 +54,47 @@ export interface PreloadEntry {
   title?: string;
 }
 
+/** What a check found. Small enough to keep for every link on a long page. */
+interface Summary {
+  media: number;
+  gif: boolean;
+  title?: string;
+  /** No deeper search could change the answer (so an empty result really means no media). */
+  final: boolean;
+}
+
+/** Full galleries kept for instant display. Whole-page work never evicts one to make room. */
 const RESULT_CACHE_SIZE = 80;
-/** Links remembered as already requested; older ones may be requested again. */
-const REQUEST_MEMORY = 1000;
+/** Summaries and request records kept; older ones may be checked again. */
+const LINK_MEMORY = 5000;
 /** Requests allowed to wait for a slot; beyond this, speculative work is simply skipped. */
 const MAX_WAITING = 80;
 const RETRY_AFTER_MS = 30_000;
 const LOOKAHEAD_MS = 150;
+/** Idle time an idle callback must have left before it starts another whole-page request. */
+const IDLE_SLICE_MS = 4;
+/** After consecutive failures, whole-page work pauses this long, doubling up to the cap. */
+const SITE_PAUSE_MS = 10_000;
+const SITE_PAUSE_MAX_MS = 5 * 60_000;
 
 function thumbnailUrls(result: ScanResult) {
   return result.items.map(item => item.type === "video" ? item.posterUrl ?? "" : item.previewUrl).filter(Boolean);
+}
+
+function remove<K, V>(map: Map<K, V>, limit: number) {
+  while (map.size > limit) map.delete(map.keys().next().value!);
+}
+
+/**
+ * Keeps the newest three quarters once a large memory is full. Dropping one
+ * oldest entry at a time would make every later eviction step over the
+ * deleted slots at the front of the Map.
+ */
+function trim<T>(collection: Map<T, unknown> | Set<T>, limit: number) {
+  if (collection.size <= limit) return;
+  const keep = [...collection.entries()].slice(-Math.floor(limit * 0.75));
+  collection.clear();
+  for (const [key, value] of keep) collection instanceof Map ? collection.set(key, value) : collection.add(key);
 }
 
 export class LinkPrefetcher {
@@ -60,6 +102,7 @@ export class LinkPrefetcher {
   private observer?: IntersectionObserver;
   private requested = new Map<string, Level>();
   private results = new Map<string, ScanResult>();
+  private known = new Map<string, Summary>();
   private failedUntil = new Map<string, number>();
   /** Only work in progress; prepared and backoff are derived from results and failures. */
   private active = new Map<string, "queued" | "loading">();
@@ -68,12 +111,24 @@ export class LinkPrefetcher {
   private boosted = new Set<string>();
   /** Links from a linked page's list that were prepared ahead of N; shown in the inspector. */
   private linked = new Set<string>();
+  /** Links whose thumbnails were warmed, so coming back near them does not queue them again. */
+  private warmed = new Set<string>();
   private listeners = new Set<() => void>();
   private inFlight = 0;
   private waiters: Array<() => void> = [];
   private idleHandle: number | undefined;
   /** Bumped by reset(), so answers to earlier requests are ignored. */
   private generation = 0;
+  /** The page's links in document order, rebuilt lazily when links are added. */
+  private pageUrls: string[] = [];
+  private pageDirty = true;
+  private cursor = 0;
+  private pageInFlight = 0;
+  private failureStreak = 0;
+  private pausedUntil = 0;
+  private resumeTimer: number | undefined;
+  /** Preparation in progress per link, so a caller that needs the result can wait for it. */
+  private inflight = new Map<string, Promise<ScanResult | undefined>>();
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
 
@@ -100,6 +155,7 @@ export class LinkPrefetcher {
       }
       if (record.type === "attributes" && record.target instanceof HTMLAnchorElement) this.observer?.observe(record.target);
     }
+    this.pageDirty = true;
     this.schedule();
   }
 
@@ -128,29 +184,34 @@ export class LinkPrefetcher {
   /** Forgets everything prepared, for example after settings change what a scan returns. */
   reset() {
     this.generation++;
-    this.requested.clear();
-    this.results.clear();
-    this.failedUntil.clear();
-    this.active.clear();
-    this.boosted.clear();
-    this.linked.clear();
-    this.priorities.clear();
+    for (const collection of [this.requested, this.results, this.known, this.failedUntil, this.active, this.priorities]) collection.clear();
+    for (const collection of [this.boosted, this.linked, this.warmed]) collection.clear();
+    this.pageDirty = true;
+    this.pageInFlight = this.failureStreak = this.pausedUntil = 0;
     this.changed();
     this.schedule();
   }
 
-  /** Re-ranks nearby links once the browser is idle. Cheap to call often. */
+  /** Runs the next round of preparation once the browser is idle. Cheap to call often. */
   schedule() {
     if (this.idleHandle !== undefined || document.hidden) return;
-    this.idleHandle = requestIdleCallback(() => {
+    this.idleHandle = requestIdleCallback(deadline => {
       this.idleHandle = undefined;
       this.prepareBoosted();
       this.prepareNearest();
+      this.preparePage(deadline);
     }, {timeout: 600});
   }
 
+  /** Whether opening this link can skip the network: its gallery is here or in the service worker's cache. */
   isPrepared(url: string) {
-    return this.results.has(url);
+    return this.results.has(url) || Boolean(this.known.get(url)?.media);
+  }
+
+  /** True when a check found no media and no deeper search could find any. */
+  knownEmpty(url: string) {
+    const summary = this.known.get(url);
+    return Boolean(summary && !summary.media && summary.final);
   }
 
   /** A prepared gallery for instant display, or undefined. */
@@ -162,46 +223,63 @@ export class LinkPrefetcher {
     return result;
   }
 
+  /** Galleries with media kept in memory, most recently used last. */
+  galleries() {
+    return [...this.results];
+  }
+
+  /** Milliseconds until a site that kept failing may be asked again; 0 when it may be asked now. */
+  pausedFor() {
+    return Math.max(0, this.pausedUntil - Date.now());
+  }
+
+  /**
+   * A link's full scan result, empty or not (the shuffle needs its links too):
+   * from memory, from a preparation already running, or asked of the service
+   * worker, which answers links checked before from its cache.
+   */
+  async gallery(url: string): Promise<ScanResult | undefined> {
+    const running = this.inflight.get(url);
+    if (running) await running;
+    const kept = this.results.get(url);
+    if (kept) return kept;
+    const settings = this.host.settingsFor(url);
+    return settings ? this.prepareUrl(url, settings, "shallow", "nearby", true, true) : undefined;
+  }
+
+  /** Links known to have media. */
   get preparedCount() {
-    return this.results.size;
+    let count = 0;
+    for (const summary of this.known.values()) if (summary.media) count++;
+    return count;
   }
 
-  /** Prepared links on the page, in document order, one per URL. */
-  preparedAnchors(): HTMLAnchorElement[] {
-    const seen = new Set<string>();
-    return [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].filter(anchor => {
-      if (seen.has(anchor.href) || !this.results.has(anchor.href) || !this.host.settingsFor(anchor.href)) return false;
-      seen.add(anchor.href);
-      return true;
-    });
-  }
-
-  /** Records a gallery that a full scan produced, so it reopens instantly and counts as prepared. */
-  remember(url: string, result: ScanResult) {
-    if (!result.items.length) return;
-    this.results.delete(url);
-    this.results.set(url, result);
-    while (this.results.size > RESULT_CACHE_SIZE) {
-      const oldest = this.results.keys().next().value!;
-      this.results.delete(oldest);
-      this.requested.delete(oldest);
+  /**
+   * Records what a scan found. Galleries with media are kept for instant
+   * display unless `keep` is false (whole-page work, which never evicts one).
+   */
+  remember(url: string, result: ScanResult, final = result.complete, keep = true) {
+    this.known.delete(url);
+    this.known.set(url, {media: result.items.length, gif: hasGifMedia(result.items), title: result.title, final});
+    trim(this.known, LINK_MEMORY);
+    if (result.items.length && (keep || this.results.size < RESULT_CACHE_SIZE)) {
+      this.results.delete(url);
+      this.results.set(url, result);
+      remove(this.results, RESULT_CACHE_SIZE);
     }
     this.changed();
   }
 
   /** Every link on the page, then linked-page links prepared ahead, with their state. One entry per URL. */
   snapshot(): PreloadEntry[] {
-    const entries = new Map<string, PreloadEntry>();
+    const entries = new Map<string, PreloadEntry>(), now = Date.now();
     const add = (url: string, label: string, source: PreloadEntry["source"]) => {
-      const result = this.results.get(url);
+      const summary = this.known.get(url);
       entries.set(url, {
-        url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url))),
+        url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url)), now),
         priority: this.priorities.get(url) ?? "normal",
-        hasGif: result?.items.some(item => item.type === "gif"
-          || /\.gif(?:$|[?#])/i.test(item.originalUrl)
-          || /\.gif(?:$|[?#])/i.test(item.previewUrl)
-          || /\.gif$/i.test(item.filename ?? "")) ?? (classifyLink(url) === "direct-image" && /\.gif(?:$|[?#])/i.test(url)),
-        retryAt: this.failedUntil.get(url), title: result?.title
+        hasGif: summary ? summary.gif : classifyLink(url) === "direct-image" && isGifLink(url),
+        retryAt: this.failedUntil.get(url), title: summary?.title
       });
     };
     for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
@@ -211,12 +289,13 @@ export class LinkPrefetcher {
     return [...entries.values()];
   }
 
-  private stateFor(url: string, allowed: boolean): PreloadState {
+  private stateFor(url: string, allowed: boolean, now: number): PreloadState {
     if (!allowed) return "blocked";
-    if (this.results.has(url)) return "prepared";
     const active = this.active.get(url);
     if (active) return active;
-    if ((this.failedUntil.get(url) ?? 0) > Date.now()) return "backoff";
+    if (this.isPrepared(url)) return "prepared";
+    if ((this.failedUntil.get(url) ?? 0) > now) return "backoff";
+    if (this.known.has(url)) return "empty";
     return this.boosted.has(url) ? "queued" : "not-started";
   }
 
@@ -230,23 +309,23 @@ export class LinkPrefetcher {
         continue;
       }
       this.priorities.set(url, priority);
-      if (priority === "maximum") void this.prepareUrl(url, settings, "deep", true, true);
+      if (priority === "maximum") void this.prepareUrl(url, settings, "deep", "intent", true);
       else this.boosted.add(url);
     }
     this.changed();
     this.schedule();
   }
 
-  /** The pointer reached a link: prepare it now, ahead of any queued nearby work. */
+  /** The pointer reached a link: prepare it now, ahead of any queued work. */
   hover(anchor: HTMLAnchorElement) {
     const settings = this.host.settingsFor(anchor.href);
-    if (settings && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "shallow", true, false);
+    if (settings && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "shallow", "intent", false);
   }
 
   /** The pointer is staying on a link: also run the deeper linked-page search if it is enabled. */
   deepen(anchor: HTMLAnchorElement) {
     const settings = this.host.settingsFor(anchor.href);
-    if (settings && settings.recursiveSearch !== "off" && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "deep", true, false);
+    if (settings && settings.recursiveSearch !== "off" && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "deep", "intent", false);
   }
 
   /**
@@ -264,7 +343,7 @@ export class LinkPrefetcher {
       this.linked.delete(url);
       this.linked.add(url);
       while (this.linked.size > RESULT_CACHE_SIZE) this.linked.delete(this.linked.values().next().value!);
-      void this.prepareUrl(url, settings, "shallow", false, false);
+      void this.prepareUrl(url, settings, "shallow", "nearby", false);
     }
     this.changed();
   }
@@ -275,11 +354,12 @@ export class LinkPrefetcher {
     for (const url of [...this.boosted].slice(0, count)) {
       this.boosted.delete(url);
       const settings = this.host.settingsFor(url);
-      if (settings) void this.prepareUrl(url, settings, "deep", false, true);
+      if (settings) void this.prepareUrl(url, settings, "deep", "nearby", true);
     }
     if (this.boosted.size) this.schedule();
   }
 
+  /** The links closest to where the pointer is heading: prepared, with their first thumbnails warm. */
   private prepareNearest() {
     const budget = this.host.budget();
     if (!budget.speculative || budget.nearbyLinks <= 0) return;
@@ -303,8 +383,69 @@ export class LinkPrefetcher {
       if (chosen.size >= budget.nearbyLinks) break;
       if (chosen.has(anchor.href)) continue;
       chosen.add(anchor.href);
-      void this.prepareUrl(anchor.href, settings, "shallow", false, false);
+      const result = this.results.get(anchor.href);
+      if (result) this.warmThumbnails(anchor.href, result, false);
+      // Checked earlier from afar, so only its summary was kept: fetch it again from the service worker's cache.
+      else if (this.known.get(anchor.href)?.media) void this.prepareUrl(anchor.href, settings, "shallow", "nearby", false, true);
+      else void this.prepareUrl(anchor.href, settings, "shallow", "nearby", false);
     }
+  }
+
+  /**
+   * Whole-page work: every link not checked yet, those near the viewport first,
+   * then near-viewport pages that need the deeper search. Starts only what the
+   * budget allows and only while this idle period has time left; each finished
+   * request schedules the next round, so the pass continues until the page is done.
+   */
+  private preparePage(deadline: IdleDeadline) {
+    const budget = this.host.budget(), now = Date.now();
+    if (!budget.speculative || budget.backgroundLinks <= 0 || this.host.busy()) return;
+    if (now < this.pausedUntil) {
+      this.resumeTimer ??= window.setTimeout(() => {
+        this.resumeTimer = undefined;
+        this.schedule();
+      }, this.pausedUntil - now);
+      return;
+    }
+    const hasTime = () => this.pageInFlight < budget.backgroundLinks && (deadline.didTimeout || deadline.timeRemaining() > IDLE_SLICE_MS);
+    for (const url of this.pageCandidates()) {
+      if (!hasTime()) return;
+      const summary = this.known.get(url), level: Level = summary ? "deep" : "shallow";
+      // Only an empty quick check that a linked-page search could still change is worth a second, deeper look.
+      if (summary && (summary.media || summary.final)) continue;
+      const settings = this.host.settingsFor(url);
+      if (!settings || (summary && settings.recursiveSearch === "off") || !this.canStart(url, level, false, now)) continue;
+      this.pageInFlight++;
+      void this.prepareUrl(url, settings, level, "page", false).finally(() => {
+        this.pageInFlight--;
+        this.schedule();
+      });
+    }
+  }
+
+  /** Near-viewport links (checked, then searched deeper), then the rest of the page from where the pass got to. */
+  private *pageCandidates() {
+    const near = [...this.near].filter(anchor => anchor.isConnected).map(anchor => anchor.href);
+    for (const url of near) if (!this.requested.has(url)) yield url;
+    if (this.pageDirty) {
+      this.pageUrls = [...new Set([...document.querySelectorAll<HTMLAnchorElement>("a[href]")].map(anchor => anchor.href))];
+      this.pageDirty = false;
+      this.cursor = 0;
+    }
+    while (this.cursor < this.pageUrls.length) {
+      const url = this.pageUrls[this.cursor];
+      if (!this.requested.has(url) && !this.known.has(url)) yield url;
+      this.cursor++;
+    }
+    yield* near;
+  }
+
+  /** Whether preparing this link would do anything: not already running, done at this depth or resting after a failure. */
+  private canStart(url: string, level: Level, refresh: boolean, now: number) {
+    const previous = this.requested.get(url), upgrade = level === "deep" && previous === "shallow";
+    // A link already being prepared is not started twice, but lingering may still upgrade a quick check to the deeper search.
+    if (document.hidden || (this.active.has(url) && !upgrade) || this.waiters.length >= MAX_WAITING || (this.failedUntil.get(url) ?? 0) > now) return false;
+    return refresh || !(previous === "deep" || (level === "shallow" && previous));
   }
 
   /** Waits for a request slot. Pointer intent may use one extra slot and jumps the queue. */
@@ -322,14 +463,22 @@ export class LinkPrefetcher {
 
   /**
    * Prepares one link. `explicit` work was asked for in the inspector and is
-   * allowed even when speculative preparation is off.
+   * allowed even when speculative preparation is off. `refresh` fetches a link
+   * already checked again, which the service worker answers from its cache.
    */
-  private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, urgent: boolean, explicit: boolean) {
-    const generation = this.generation, previous = this.requested.get(url);
-    if (document.hidden || this.waiters.length >= MAX_WAITING || previous === "deep" || (level === "shallow" && previous)) return;
-    if ((this.failedUntil.get(url) ?? 0) > Date.now()) return;
-    this.requested.set(url, level);
-    while (this.requested.size > REQUEST_MEMORY) this.requested.delete(this.requested.keys().next().value!);
+  private prepareUrl(url: string, settings: LinkPeekSettings, level: Level, tier: Tier, explicit: boolean, refresh = false) {
+    if (!this.canStart(url, level, refresh, Date.now())) return Promise.resolve(undefined);
+    const work = this.runPrepare(url, settings, level, tier, explicit, refresh).finally(() => {
+      if (this.inflight.get(url) === work) this.inflight.delete(url);
+    });
+    this.inflight.set(url, work);
+    return work;
+  }
+
+  private async runPrepare(url: string, settings: LinkPeekSettings, level: Level, tier: Tier, explicit: boolean, refresh: boolean): Promise<ScanResult | undefined> {
+    const generation = this.generation, previous = this.requested.get(url), urgent = tier === "intent";
+    this.requested.set(url, refresh && previous ? previous : level);
+    trim(this.requested, LINK_MEMORY);
     this.setActive(url, "queued");
     await this.slot(urgent);
     try {
@@ -345,27 +494,43 @@ export class LinkPrefetcher {
       if (generation !== this.generation) return;
       this.active.delete(url);
       if (!result || "error" in result) throw new Error(result?.error ?? "No result");
-      this.remember(url, result);
-      this.changed();
-      this.warmThumbnails(result, urgent);
+      this.failureStreak = 0;
+      // An empty quick check of a page is not the last word while a linked-page search could still find media.
+      const final = result.complete && (level === "deep" || classifyLink(url) !== "generic" || settings.recursiveSearch === "off");
+      this.remember(url, result, final, tier !== "page");
+      if (tier !== "page") this.warmThumbnails(url, result, urgent);
+      return result;
     } catch {
       if (generation !== this.generation) return;
       if (previous) this.requested.set(url, previous);
       else this.requested.delete(url);
       this.failedUntil.set(url, Date.now() + RETRY_AFTER_MS);
+      trim(this.failedUntil, LINK_MEMORY);
+      // A link someone pointed at failing says little about the site; a run of background failures does.
+      if (tier !== "intent") this.backOff();
       this.setActive(url, undefined);
     } finally {
       this.release();
     }
   }
 
-  private warmThumbnails(result: ScanResult, hovered: boolean) {
+  /** Consecutive failures usually mean the site is refusing or struggling: give it room. */
+  private backOff() {
+    this.failureStreak++;
+    if (this.failureStreak < 2) return;
+    this.pausedUntil = Date.now() + Math.min(SITE_PAUSE_MAX_MS, SITE_PAUSE_MS * 2 ** (this.failureStreak - 2));
+  }
+
+  private warmThumbnails(url: string, result: ScanResult, hovered: boolean) {
     const budget = this.host.budget(), urls = thumbnailUrls(result);
     if (hovered) {
       this.warmer.warm(urls.slice(0, budget.hoverThumbs), "now", true);
       this.warmer.warm(urls.slice(budget.hoverThumbs, budget.hoverThumbs + budget.hoverIdleThumbs), "idle");
       return;
     }
+    if (this.warmed.has(url)) return;
+    this.warmed.add(url);
+    trim(this.warmed, LINK_MEMORY);
     // Nearby links warm only still images: a GIF can be megabytes for one thumbnail.
     const stills = result.items.filter(item => item.type === "image").map(item => item.previewUrl);
     this.warmer.warm(stills.slice(0, budget.thumbsPerLink), "soon");

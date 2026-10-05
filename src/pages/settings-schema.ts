@@ -6,7 +6,7 @@
 import type {LinkPeekSettings} from "../shared/settings";
 
 export type SettingKey = keyof LinkPeekSettings;
-export type Control = "toggle" | "choice" | "segmented" | "number" | "range" | "keywords" | "shortcuts" | "sites";
+export type Control = "toggle" | "choice" | "segmented" | "number" | "range" | "keywords" | "shortcuts" | "sites" | "seen";
 
 export interface FieldSpec {
   key: SettingKey;
@@ -66,7 +66,11 @@ export const SECTIONS: SectionSpec[] = [
       {key: "navSensitivity", label: "Swipe sensitivity", help: "Higher moves to the next item with a shorter swipe.", control: "range", percent: true},
       {key: "wrapAround", label: "Wrap around at the ends", help: "After the last item comes the first."},
       {key: "resumePosition", label: "Reopen where I left off", help: "A gallery you reopen in the same tab starts at the item you last viewed."},
-      {key: "slideshowSeconds", label: "Slideshow speed", help: "Seconds per item when the slideshow (S) is running.", unit: "s"},
+      {key: "slideshowSeconds", label: "Slideshow speed", help: "Seconds per item when the slideshow (S) is running. Space pauses it; the arrows, scroll and mouse buttons skip ahead without stopping it.", unit: "s"},
+      {key: "slideshowPlayThrough", label: "Let videos and GIFs finish", help: "In a slideshow, a video or GIF stays up until it has played through (up to a minute), even if that is longer than the slideshow speed."},
+      {key: "shuffleSlideshow", label: "Shuffle everything", help: "S starts an endless slideshow of media from every link on the page, mixed so two slides in a row never come from the same link. Press S anywhere on a page, even without a preview open."},
+      {key: "skipSeenMedia", label: "Skip media you have seen", help: "The shuffle never shows something LinkPeek has already shown you. What you have seen is remembered on this device only, and only while this is on.", control: "seen"},
+      {key: "shuffleFollowLinks", label: "Keep finding more", help: "When the page runs out, the shuffle reads the pages its links lead to, then the links on those, for more. It stays on the same site unless Search linked pages is set to Any site, and never follows sign-out or similar links."},
       {key: "thumbnailSize", label: "Grid tile size", help: "Starting size of grid tiles. The − and + buttons (or − and + keys) change it while browsing.", unit: "px"},
       {key: "showLearningTips", label: "Show tips", help: "A short hint over the first media of each preview."},
       {key: "mouseWheel", label: "Mouse wheel over media", help: "What a regular mouse wheel does over the media.", control: "choice", options: {navigate: "Browse", scroll: "Scroll the page", zoom: "Zoom"}, advanced: true},
@@ -155,7 +159,7 @@ export const SECTIONS: SectionSpec[] = [
   {
     id: "performance", title: "Performance", summary: "How much LinkPeek prepares before you ask. Auto mode adapts these to your device on its own.",
     fields: [
-      {key: "prefetch", label: "Prepare links before hover", help: "Near the pointer prepares the few closest links; Whole screen prepares more of what you can see.", control: "segmented", options: {off: "Off", nearby: "Near the pointer", visible: "Whole screen"}},
+      {key: "prefetch", label: "Prepare links before hover", help: "Whole page prepares the links nearest the pointer first, then quietly checks the rest of the page whenever the browser is idle, pausing when it is busy. Near the pointer and Whole screen stop at what is close by.", control: "segmented", options: {off: "Off", nearby: "Near the pointer", visible: "Whole screen", page: "Whole page"}},
       {key: "meteredOff", label: "Pause on slow or Data Saver connections", help: "When the browser reports Data Saver or a 2G connection, nothing is prepared ahead."},
       {key: "preloadOriginals", label: "Load full-size originals ahead", help: "Previews use lighter images. Next also downloads the next item's original file.", control: "segmented", options: {never: "Never", next: "Next item"}},
       {key: "maxRequests", label: "Most requests at once", help: "A hard ceiling on simultaneous scans, whatever the mode.", advanced: true},
@@ -194,7 +198,7 @@ export const SHORTCUT_LABELS: Record<keyof LinkPeekSettings["shortcuts"], string
   next: "Next media", previous: "Previous media", nextLink: "Next link with media", previousLink: "Previous link with media",
   grid: "Grid / single media", expand: "Expand / restore", pin: "Pin open", favorite: "Save link", open: "Open original",
   openPage: "Open the linked page", download: "Download original", downloadAll: "Download the whole gallery (press twice)",
-  copy: "Copy media link", slideshow: "Slideshow", fill: "Fill the panel / fit", rotate: "Rotate a quarter turn", zoomIn: "Zoom in (bigger tiles in grid)",
+  copy: "Copy media link", slideshow: "Slideshow (shuffle when on)", pause: "Pause / resume the slideshow", fill: "Fill the panel / fit", rotate: "Rotate a quarter turn", zoomIn: "Zoom in (bigger tiles in grid)",
   zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close", preloadInspector: "Preload inspector (then the same key alone)"
 };
 

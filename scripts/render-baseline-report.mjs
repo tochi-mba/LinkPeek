@@ -39,6 +39,7 @@ const lines=[
 `- Gesture → next media after 1000-grid: **${browser.ui.gesture_after_grid_ms??"n/a"} ms**`,
 `- 1000-grid thumbnail requests: **${browser.network.grid_1000?.requests??"n/a"} requests / ${browser.network.grid_1000?.response_bytes??"n/a"} B**`,
 `- Default nearby prefetch (12 × 100-post threads): **${browser.network.default_nearby_prefetch_12_threads?.requests??"n/a"} requests / ${browser.network.default_nearby_prefetch_12_threads?.response_bytes??"n/a"} B in ${browser.network.default_nearby_prefetch_12_threads?.window_ms??"n/a"} ms**`,
+`- Whole-page preparation (12 × 100-post threads, idle time): **${browser.network.whole_page_prefetch_12_threads?.requests??"n/a"} requests / ${browser.network.whole_page_prefetch_12_threads?.response_bytes??"n/a"} B in ${browser.network.whole_page_prefetch_12_threads?.window_ms??"n/a"} ms**`,
 `- 20 GIF frame steps: **${browser.ui.gif_20_frame_steps_ms} ms**`,
 `- Options startup: **${browser.ui.options_startup_ms} ms**`,
 `- Options search 'gif': **${browser.ui.options_search_gif_ms} ms**`,

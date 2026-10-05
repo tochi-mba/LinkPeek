@@ -60,6 +60,9 @@ test.beforeAll(async()=>{
     if(path==="/nav-links"){
       res.setHeader("content-type","text/html");res.end('<a href="/nav-empty">Empty one</a><br><a href="/nav-gallery-one">Gallery one</a><br><a href="/nav-empty-two">Empty two</a><br><a href="/nav-gallery-two">Gallery two</a>');return;
     }
+    if(path==="/long-page"){
+      res.setHeader("content-type","text/html");res.end('<a href="/nav-gallery-one">Gallery one</a><div style="height:6000px"></div><a id="far-gallery" href="/nav-gallery-two">Gallery two</a><br><a id="far-empty" href="/nav-empty">Empty one</a>');return;
+    }
     if(path==="/nav-empty"||path==="/nav-empty-two"){
       res.setHeader("content-type","text/html");res.end('<title>Empty destination</title><p>No media</p>');return;
     }
@@ -151,6 +154,47 @@ test("N and Shift+N skip empty unprepared links in both directions",async()=>{
     await page.keyboard.press("Shift+n");
     await expect(page.locator(".lp-title")).toHaveText("Gallery two");
     await expect(page.locator(".lp-count")).toHaveText("1 / 1");
+  }finally{await closeExtension(context,profile)}
+});
+
+test("whole-page preparation checks links far below the fold in idle time and marks the empty ones",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];
+    const page=await context.newPage();await page.goto(base+"/long-page");await page.mouse.move(600,300);
+    await page.keyboard.press("Control+x");await page.keyboard.press("x");
+    const inspector=page.getByRole("dialog",{name:"LinkPeek preload inspector"});
+    await expect(inspector.locator('[data-group="prepared"] .pi-count')).toHaveText("2",{timeout:15_000});
+    await expect(inspector.locator('[data-group="empty"] .pi-count')).toHaveText("1",{timeout:15_000});
+    await expect(page.locator("#far-gallery")).toHaveAttribute("data-linkpeek-preload-state","prepared");
+    await expect(page.locator("#far-empty")).toHaveAttribute("data-linkpeek-preload-state","empty");
+    // Near the pointer leaves links that far away alone.
+    await sw.evaluate(async()=>{await chrome.storage.local.set({settings:{prefetch:"nearby"}})});
+    await page.reload();await page.mouse.move(600,300);await page.waitForTimeout(2500);
+    await page.keyboard.press("Control+x");await page.keyboard.press("x");
+    await expect(page.locator("#far-gallery")).toHaveAttribute("data-linkpeek-preload-state","not-started");
+  }finally{await closeExtension(context,profile)}
+});
+
+test("S starts a shuffle across links that pauses, skips ahead and never shows what was already seen",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];
+    await sw.evaluate(async()=>{await chrome.storage.local.set({settings:{slideshowSeconds:30}})});
+    const page=await context.newPage();await page.goto(base+"/nav-links");await page.mouse.move(1000,500);
+    await page.keyboard.press("s");
+    await expect(page.locator(".lp-title")).toHaveText("Shuffle",{timeout:10_000});
+    await expect(page.locator(".lp-count")).toHaveText("1 / 2",{timeout:10_000});
+    await expect(page.locator(".lp-signal")).toHaveText("Slideshow · 30s");
+    const first=await page.locator(".lp-image").getAttribute("src");
+    await page.keyboard.press("Space");await expect(page.locator(".lp-signal")).toHaveText("Paused · Space to resume");
+    await page.keyboard.press("ArrowRight");await expect(page.locator(".lp-count")).toHaveText("2 / 2");
+    const second=await page.locator(".lp-image").getAttribute("src");
+    expect([first,second].map(src=>/nav-gallery-(one|two)/.exec(src??"")?.[1]).sort()).toEqual(["one","two"]);
+    await expect(page.locator(".lp-signal")).toHaveText("Paused · Space to resume");
+    await page.keyboard.press("Escape");await expect(page.locator(".lp-panel")).toHaveCount(0);
+    await page.keyboard.press("s");
+    await expect(page.locator(".lp-toast")).toHaveText("Nothing new to show from here",{timeout:10_000});
   }finally{await closeExtension(context,profile)}
 });
 
@@ -298,7 +342,7 @@ test("onboarding and settings render, save and persist",async()=>{
     await page.goto(`chrome-extension://${id}/onboarding.html`);await expect(page.getByText("See what’s behind a link")).toBeVisible();
     await page.goto(`chrome-extension://${id}/options.html`);await expect(page.getByPlaceholder(/Search settings/)).toBeVisible();
     await expect(page.getByRole("heading",{name:"Essentials"})).toBeVisible();
-    const prefetch=page.locator('[data-choice-key="prefetch"]');await expect(prefetch).toHaveCount(3);await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Near the pointer");
+    const prefetch=page.locator('[data-choice-key="prefetch"]');await expect(prefetch).toHaveCount(4);await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Whole page");
     await page.locator('[data-choice-key="prefetch"][data-choice-value="off"]').click();await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await expect(page.locator('[data-key="batchSize"]')).toHaveCount(0);
     await page.getByText("Show advanced settings").click();

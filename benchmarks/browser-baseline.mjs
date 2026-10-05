@@ -129,7 +129,9 @@ try{
     const measured={panel_ms:round(panel),progress_ms,result_ms:round(performance.now()-t),requests:requestCount,response_bytes:responseBytes,ok,timed_out:timedOut,panel_text:ok?undefined:panelText.slice(0,600)};
     console.log("BASELINE_CASE_DONE",label,JSON.stringify(measured));return measured;
   }
-  await patchSettings({hoverDelay:300});
+  // Latency cases keep preparation to the pointer's neighbourhood so request counts stay comparable;
+  // the cost of whole-page preparation is measured on its own below.
+  await patchSettings({hoverDelay:300,prefetch:"nearby"});
   const defaultHover=await hoverMeasure("#direct","1 media",{label:"default_hover_direct"});results.latency.default_hover_direct=defaultHover;
   await patchSettings({hoverDelay:0});
   for(const [name,selector,expected,progressExpected] of [
@@ -195,6 +197,13 @@ try{
   requestCount=0;responseBytes=0;const prefetchPage=await context.newPage();t=performance.now();await prefetchPage.goto(`${base}/prefetch`);await prefetchPage.waitForTimeout(3500);
   results.network.default_nearby_prefetch_12_threads={requests:requestCount,response_bytes:responseBytes,window_ms:round(performance.now()-t)};
   await prefetchPage.close();
+
+  const popup=await context.newPage();await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.evaluate(()=>chrome.runtime.sendMessage({type:"LINKPEEK_CLEAR_CACHE"}));await popup.close();
+  await patchSettings({prefetch:"page"});
+  requestCount=0;responseBytes=0;const wholePage=await context.newPage();t=performance.now();await wholePage.goto(`${base}/prefetch`);await wholePage.waitForTimeout(3500);
+  results.network.whole_page_prefetch_12_threads={requests:requestCount,response_bytes:responseBytes,window_ms:round(performance.now()-t)};
+  await wholePage.close();
 
   for(const [name,path,ready] of [["options","options.html",'#search'],["popup","popup.html",'#enabled'],["onboarding","onboarding.html",'.screen.active']]){
     const p=await context.newPage(),start=performance.now();await p.goto(`chrome-extension://${extensionId}/${path}`);await p.locator(ready).waitFor();results.ui[`${name}_startup_ms`]=round(performance.now()-start);

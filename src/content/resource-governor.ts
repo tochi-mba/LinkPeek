@@ -15,6 +15,11 @@ export interface Budget {
   speculative: boolean;
   /** Links near the pointer kept prepared before hover. */
   nearbyLinks: number;
+  /**
+   * Checks of the rest of the page's links that may run at once, in idle time.
+   * Scaled by headroom like everything else, so it reaches 0 (paused) under pressure.
+   */
+  backgroundLinks: number;
   /** Link scans that may run at once. */
   linkConcurrency: number;
   /** Preview thumbnails warmed for each nearby link. */
@@ -41,17 +46,20 @@ type Plan = Omit<Budget, "memoryBytes" | "speculative"> & {memoryMb: number};
 
 /** Data saver: nothing speculative, only what is on screen. Also the floor every budget keeps. */
 export const SAVER_PLAN: Plan = {
-  nearbyLinks: 0, linkConcurrency: 1, thumbsPerLink: 0, hoverThumbs: 1, hoverIdleThumbs: 0,
+  nearbyLinks: 0, backgroundLinks: 0, linkConcurrency: 1, thumbsPerLink: 0, hoverThumbs: 1, hoverIdleThumbs: 0,
   imageConcurrency: 1, ahead: 1, behind: 0, galleryIdle: 0, memoryMb: 32
 };
 
 /** Auto plans by device tier; fast mode uses the next row up. */
 export const PLANS: readonly Plan[] = [
-  {nearbyLinks: 2, linkConcurrency: 1, thumbsPerLink: 1, hoverThumbs: 6, hoverIdleThumbs: 24, imageConcurrency: 2, ahead: 2, behind: 1, galleryIdle: 40, memoryMb: 48},
-  {nearbyLinks: 4, linkConcurrency: 2, thumbsPerLink: 2, hoverThumbs: 12, hoverIdleThumbs: 60, imageConcurrency: 3, ahead: 3, behind: 1, galleryIdle: 120, memoryMb: 96},
-  {nearbyLinks: 6, linkConcurrency: 3, thumbsPerLink: 3, hoverThumbs: 16, hoverIdleThumbs: 120, imageConcurrency: 4, ahead: 4, behind: 2, galleryIdle: 240, memoryMb: 192},
-  {nearbyLinks: 10, linkConcurrency: 4, thumbsPerLink: 4, hoverThumbs: 24, hoverIdleThumbs: 200, imageConcurrency: 6, ahead: 6, behind: 3, galleryIdle: 400, memoryMb: 320}
+  {nearbyLinks: 2, backgroundLinks: 1, linkConcurrency: 1, thumbsPerLink: 1, hoverThumbs: 6, hoverIdleThumbs: 24, imageConcurrency: 2, ahead: 2, behind: 1, galleryIdle: 40, memoryMb: 48},
+  {nearbyLinks: 4, backgroundLinks: 1, linkConcurrency: 2, thumbsPerLink: 2, hoverThumbs: 12, hoverIdleThumbs: 60, imageConcurrency: 3, ahead: 3, behind: 1, galleryIdle: 120, memoryMb: 96},
+  {nearbyLinks: 6, backgroundLinks: 2, linkConcurrency: 3, thumbsPerLink: 3, hoverThumbs: 16, hoverIdleThumbs: 120, imageConcurrency: 4, ahead: 4, behind: 2, galleryIdle: 240, memoryMb: 192},
+  {nearbyLinks: 10, backgroundLinks: 2, linkConcurrency: 4, thumbsPerLink: 4, hoverThumbs: 24, hoverIdleThumbs: 200, imageConcurrency: 6, ahead: 6, behind: 3, galleryIdle: 400, memoryMb: 320}
 ];
+
+/** Below this headroom, checking the rest of the page pauses. */
+export const BACKGROUND_MIN_HEADROOM = 0.75;
 
 export interface BudgetInput {
   mode: PerformanceMode;
@@ -76,6 +84,8 @@ export function computeBudget(input: BudgetInput): Budget {
   return {
     speculative: !saver && input.prefetch !== "off",
     nearbyLinks,
+    // The first work to stop: any sign of pressure (one long task is enough) pauses it until the page is calm again.
+    backgroundLinks: input.prefetch === "page" && input.headroom >= BACKGROUND_MIN_HEADROOM ? scale("backgroundLinks") : 0,
     linkConcurrency: Math.min(Math.max(1, input.maxRequests), scale("linkConcurrency")),
     thumbsPerLink,
     hoverThumbs: scale("hoverThumbs"),

@@ -11,7 +11,7 @@ const html = (markupString: string) => {
   el.innerHTML = markupString;
   return el;
 };
-const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, help: false, settings, ...patch}));
+const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, slideshowPaused: false, help: false, settings, ...patch}));
 
 describe("key hints", () => {
   it("show up to two bindings", () => {
@@ -40,7 +40,11 @@ describe("the header", () => {
     expect(el.querySelector("[data-action=expand]")!.textContent).toBe("↙");
     expect(el.querySelector("[data-action=pin]")!.getAttribute("aria-label")).toBe("Unpin preview");
     expect(el.querySelector("[data-action=favorite]")!.textContent).toBe("★");
-    expect(el.querySelector("[data-action=slideshow]")!.getAttribute("aria-pressed")).toBe("true");
+    expect(el.querySelector("[data-action=pause]")!.getAttribute("aria-label")).toBe("Pause slideshow");
+    expect(el.querySelector("[data-action=pause]")!.getAttribute("aria-pressed")).toBe("true");
+    const paused = header({slideshow: true, slideshowPaused: true}).querySelector("[data-action=pause]")!;
+    expect([paused.textContent, paused.getAttribute("aria-label")]).toEqual(["▶", "Resume slideshow"]);
+    expect(header().querySelector("[data-action=slideshow]")!.getAttribute("aria-label")).toBe("Start slideshow");
     expect(el.querySelector("[data-action=help]")!.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -53,7 +57,7 @@ describe("the header", () => {
 });
 
 describe("the footer", () => {
-  const footer = (patch: Partial<markup.FooterState> = {}) => html(markup.footerMarkup({result: result(), index: 0, view: "focus", gridThumbSize: 120, slideshow: false, settings, ...patch}));
+  const footer = (patch: Partial<markup.FooterState> = {}) => html(markup.footerMarkup({result: result(), index: 0, view: "focus", gridThumbSize: 120, slideshow: false, slideshowPaused: false, settings, ...patch}));
 
   it("shows navigation, actions and status for the current item", () => {
     const el = footer();
@@ -69,6 +73,7 @@ describe("the footer", () => {
     expect(footer({result: result({items: [item({postNumber: 3})]})}).querySelector(".lp-post")!.textContent).toBe("Post #3 ↗");
     expect(footer({view: "grid", gridThumbSize: 96.4}).querySelector(".lp-tiles")!.textContent).toBe("96px tiles");
     expect(footer({slideshow: true}).querySelector(".lp-signal")!.textContent).toBe("Slideshow · 3s");
+    expect(footer({slideshow: true, slideshowPaused: true}).querySelector(".lp-signal")!.textContent).toBe("Paused · Space to resume");
   });
 
   it("shows an empty count while loading", () => {

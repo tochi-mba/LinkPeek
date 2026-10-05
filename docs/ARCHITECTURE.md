@@ -33,9 +33,13 @@ Zoom is centered around the pointer and the transform stays local to the current
 
 `ResourceGovernor` turns the device tier (memory, cores) and live headroom (long tasks, compute pressure, battery, heap, slow connections) into a `Budget`: how many nearby links to prepare, how many requests at once, how many thumbnails, how much decoded memory. Auto mode recomputes it as conditions change, so preparation backs off on its own when the page is busy.
 
-`LinkPrefetcher` ranks visible links by distance from the pointer and the direction it is heading, and prepares the best few when the browser is idle. Hovered links get an urgent slot. A generation counter drops work from before a page change, waiting work is capped, and failures back off before being retried. When a gallery was built from linked pages, it also prepares the neighbours of the linked page being viewed so N is instant.
+`LinkPrefetcher` ranks visible links by distance from the pointer and the direction it is heading, and prepares the best few when the browser is idle. Then, in Whole page mode, it checks every other link on the page, those near the viewport first, one or two at a time and only while an idle period has time left. That pass pauses while a preview loads, when headroom drops below 0.75, and after consecutive failures (growing pauses). Off-screen links keep only a small summary, never evicting a gallery near the pointer. Hovered links get an urgent slot. A generation counter drops work from before a page change, waiting work is capped, and failures back off before being retried. When a gallery was built from linked pages, it also prepares the neighbours of the linked page being viewed so N is instant.
 
 `PreloadInspector` is a read-only view of that state: it redraws at most every 200 ms, only when something changed, and rewrites outline attributes only on links whose state changed. Raising a link's priority goes back through the prefetcher.
+
+## The shuffle
+
+`ShuffleMix` keeps each link's unseen media in its own randomly ordered queue and picks every next item from a random link other than the last one. It also holds the frontier of links to explore: the page's links, then links found on pages read so far, each at most once. The controller tops the viewer up a few items ahead of the screen and reads more of the frontier, a few at a time, when the mix runs low. `SeenMedia` remembers what was shown as 64-bit hashes in 36 storage buckets, so recording an item rewrites a few kilobytes.
 
 ## Requests
 

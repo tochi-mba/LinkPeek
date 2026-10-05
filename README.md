@@ -19,9 +19,11 @@ It is designed around one-handed touchpad use: two-finger browse, horizontal scr
 - keeps every action under one hand: mouse back/forward buttons step through media, middle-click opens the original in a background tab, W fills the panel, R rotates, Shift+D downloads the whole gallery into one folder
 - shows a small countdown ring beside the pointer while a link arms, lit when its gallery is already prepared
 - won't switch previews when the pointer crosses another link on the way into the panel
-- prepares the links you are likely to hover next, scaled to the device and eased off when the page is busy
+- prepares the links nearest the pointer first, then every other link on the page in idle time, pausing when the page is busy
+- has an endless shuffle slideshow (S): media from every link mixed, never two in a row from one link, never anything already seen, following links to more pages when the page runs out
+- lets a slideshow pause (Space), skip ahead with any next/previous control, and let videos and GIFs play through
 - has a preload inspector (Ctrl+X, then X) that outlines every link by state and lets you raise a link's priority
-- steps through a linked page's own list with N when a gallery came from linked pages
+- skips links with no media when stepping with N, and steps through a linked page's own list when a gallery came from linked pages
 - ships interactive onboarding, persistent controls help and searchable settings
 - supports presets and per-site profiles
 - stores preferences locally and has no LinkPeek account, analytics backend or ad service

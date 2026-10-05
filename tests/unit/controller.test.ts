@@ -18,20 +18,28 @@ vi.mock("../../src/ui/viewer", () => ({
       this.isOpen = true;
     });
     show = vi.fn((result: ScanResult) => {
-      this.result = result;
-      this.index = Math.min(this.index, Math.max(0, result.items.length - 1));
+      // Like the real viewer, more of the same shuffle is appended.
+      const previous = result.mixed && this.result?.url === result.url ? this.result.items : [];
+      this.result = {...result, items: [...previous, ...result.items]};
+      this.index = Math.min(this.index, Math.max(0, this.result.items.length - 1));
     });
+    startSlideshow = vi.fn();
+    onSlideshowStart?: () => boolean;
+    onNeedMore?: () => void;
+    onSeen?: (item: unknown) => void;
     error = vi.fn();
     scheduleClose = vi.fn();
     cancelClose = vi.fn();
     containsPoint = vi.fn(() => false);
     showHoverRing = vi.fn();
+    toast = vi.fn();
     hideHoverRing = vi.fn();
     key = vi.fn(() => false);
     budget: () => unknown;
     close = vi.fn((force = false) => {
       if (!this.isOpen || (this.pinned && !force)) return;
       this.isOpen = false;
+      this.result = undefined;
       this.onDismiss?.(force);
     });
     constructor(options: {budget: () => unknown}) {
@@ -531,7 +539,7 @@ describe("keyboard", () => {
 
     viewer.close(true);
     controller.intent.setCurrent(a);
-    expect(controller.openAdjacentPrepared(1)).toBe(true);
+    expect(controller.openAdjacentPageLink(1)).toBe(true);
     await flush();
     expect(viewer.result!.url).toBe(b.href);
     expect(key("x").defaultPrevented).toBe(false);
@@ -590,8 +598,7 @@ describe("keyboard", () => {
     expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN" && msg.url === next.href)).toBe(true);
     finish(scan(next.href));
     await flush();
-    expect(viewer.isOpen).toBe(false);
-    expect(viewer.result!.url).toBe(current.href);
+    expect([viewer.isOpen, viewer.result]).toEqual([false, undefined]);
   });
 
   it("cancels an active preview scan before probing N and completes an incomplete linked candidate", async () => {
@@ -964,5 +971,109 @@ describe("the hover countdown", () => {
     pointer("pointerout", a, 21, 16, {relatedTarget: document.body});
     pointer("pointerover", link("b"), 40, 16);
     expect(viewer.showHoverRing).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the shuffle", () => {
+  const sources = () => (viewer.result as ScanResult).items.map(item => item.sourceUrl);
+  const prefetches = () => messages.filter(msg => msg.type === "LINKPEEK_PREFETCH").map(msg => msg.url);
+
+  it("starts from S anywhere on the page, mixing every link's media with no link twice in a row", async () => {
+    await boot();
+    const [a, b, c] = ["a", "b", "c"].map(id => link(id));
+    const event = key("s");
+    expect(event.defaultPrevented).toBe(true);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(innerWidth / 2, innerHeight / 3, expect.anything(), "Shuffle");
+    await flush();
+    await flush();
+    expect(prefetches().sort()).toEqual([a.href, b.href, c.href]);
+    expect(viewer.result).toMatchObject({url: "linkpeek:shuffle", title: "Shuffle", mixed: true, complete: false});
+    // A link follows itself only at the very end, once it is the only one with media left.
+    const order = sources();
+    expect(order.every((source, i) => i === 0 || source !== order[i - 1] || order.slice(i - 1).every(rest => rest === source))).toBe(true);
+    expect(new Set(sources())).toEqual(new Set([a.href, b.href, c.href]));
+    expect(viewer.startSlideshow).toHaveBeenCalledTimes(1);
+    expect(viewer.onSlideshowStart()).toBe(false);
+  });
+
+  it("from an open preview, takes in that gallery and everything prepared, and holds off hover switches until closed", async () => {
+    await boot();
+    const a = link("a"), b = link("b"), other = link("other");
+    await controller.activate(a, 30, 40);
+    controller.prefetcher.remember(b.href, scan(b.href, 2));
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 0) : scan(msg.url!);
+    expect(viewer.onSlideshowStart()).toBe(true);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(30, 40, expect.anything(), "Shuffle");
+    expect(new Set(sources())).toEqual(new Set([a.href, b.href]));
+    const opened = scans().length;
+    pointer("pointerover", other, 300, 300);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(scans()).toHaveLength(opened);
+    expect(viewer.showHoverRing).not.toHaveBeenCalled();
+    const shows = viewer.show.mock.calls.length;
+    viewer.close(true);
+    viewer.onNeedMore();
+    expect(viewer.show).toHaveBeenCalledTimes(shows);
+  });
+
+  it("keeps finding more by following links, waits while the site needs room, and ends once everything reachable is shown", async () => {
+    await boot();
+    const a = link("a"), child = "https://dest.test/child";
+    respond = msg => msg.type !== "LINKPEEK_PREFETCH" ? {ok: true}
+      : msg.url === a.href ? scan(a.href, 1, {linkContexts: [{sourceUrl: a.href, links: [child, "https://dest.test/logout"]}]}) : scan(msg.url!, 1);
+    const pause = vi.spyOn(controller.prefetcher, "pausedFor").mockReturnValueOnce(0).mockReturnValueOnce(4000);
+    key("s");
+    await flush();
+    expect(sources()).toEqual([a.href]);
+    expect(prefetches()).toEqual([a.href]);
+    // The site asked for room: nothing is read until the pause is over.
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(prefetches()).toEqual([a.href]);
+    pause.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(prefetches()).toEqual([a.href, child]);
+    expect(sources()).toEqual([a.href, child]);
+    viewer.index = 1;
+    viewer.onPosition("linkpeek:shuffle", 1);
+    expect(viewer.result).toMatchObject({complete: true});
+    expect(viewer.toast).toHaveBeenLastCalledWith("That is everything new from here");
+    viewer.onNeedMore();
+  });
+
+  it("says so when there is nothing new at all, and skips what has been seen", async () => {
+    await boot();
+    key("s");
+    await flush();
+    expect(viewer.toast).toHaveBeenLastCalledWith("Nothing new to show from here");
+    viewer.close(true);
+    const a = link("a");
+    viewer.onSeen(scan(a.href, 2).items[0]);
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2) : {ok: true};
+    key("s");
+    await flush();
+    await flush();
+    expect(sources()).toEqual([a.href]);
+    expect((viewer.result as ScanResult).items[0].originalUrl).toBe(`${a.href}/1.jpg`);
+  });
+
+  it("follows only the page's own links when following links is off, and remembers nothing when skipping is off", async () => {
+    await boot({shuffleFollowLinks: false, skipSeenMedia: false});
+    const a = link("a");
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 1, {linkContexts: [{sourceUrl: msg.url!, links: ["https://dest.test/deeper"]}]}) : {ok: true};
+    key("s");
+    await flush();
+    await flush();
+    expect(prefetches()).toEqual([a.href]);
+    viewer.onSeen(scan(a.href).items[0]);
+    expect(controller.seen.size).toBe(0);
+  });
+
+  it("is left to the viewer's own slideshow when turned off", async () => {
+    await boot({shuffleSlideshow: false});
+    link("a");
+    expect(key("s").defaultPrevented).toBe(false);
+    await controller.activate(link("b"), 0, 0);
+    expect(viewer.onSlideshowStart()).toBe(false);
   });
 });

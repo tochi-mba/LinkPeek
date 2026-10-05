@@ -171,14 +171,14 @@ describe("the shortcut editor", () => {
 
   it("records a pressed key, moving it from the action that had it", async () => {
     await open();
-    await click(row("Slideshow").querySelector("[data-record]")!);
-    expect(row("Slideshow").textContent).toContain("Press keys");
+    await click(row("Slideshow (shuffle when on)").querySelector("[data-record]")!);
+    expect(row("Slideshow (shuffle when on)").textContent).toContain("Press keys");
     await key("Shift");
     await key("g");
     expect(saved()).toEqual({shortcuts: {grid: [], slideshow: ["s", "g"]}});
     expect(notices).toContainEqual(expect.stringContaining("Moved G"));
     expect(row("Grid / single media").textContent).toContain("No key");
-    await click(row("Slideshow").querySelector("[data-record]")!);
+    await click(row("Slideshow (shuffle when on)").querySelector("[data-record]")!);
     await key("k", {ctrlKey: true});
     expect((saved().shortcuts as Record<string, string[]>).slideshow).toEqual(["s", "g", "Ctrl+k"]);
   });

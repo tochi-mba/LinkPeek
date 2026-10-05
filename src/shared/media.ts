@@ -36,6 +36,8 @@ export interface ScanResult {
   postsScanned?: number;
   totalPosts?: number;
   diagnostics?: {ignored: number; duplicates: number; adapter: string; warnings: string[]};
+  /** A shuffle of media from many links: page actions apply to the link each item came from. */
+  mixed?: boolean;
 }
 
 /** Link kinds LinkPeek can open a preview for. */
@@ -63,6 +65,18 @@ export function contentLinks(context: LinkContext): string[] {
     return url.origin === base.origin && url.pathname.startsWith(prefix) && url.pathname.length > prefix.length;
   });
   return children.length >= 2 ? children : context.links;
+}
+
+const GIF_FILE = /\.gif(?:$|[?#])/i;
+
+/** Whether a gallery has a GIF, judged by type or by any of its file names (some sites label GIFs as images). */
+export function hasGifMedia(items: readonly MediaItem[]) {
+  return items.some(item => item.type === "gif" || GIF_FILE.test(item.originalUrl) || GIF_FILE.test(item.previewUrl) || GIF_FILE.test(item.filename ?? ""));
+}
+
+/** Whether a link points straight at a GIF file. */
+export function isGifLink(url: string) {
+  return GIF_FILE.test(url);
 }
 
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])/i;

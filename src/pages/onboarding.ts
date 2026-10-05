@@ -10,7 +10,7 @@ const screens = [...document.querySelectorAll<HTMLElement>(".screen")];
 const progress = document.getElementById("progress")!;
 
 const CHEAT_SHEET: Array<[string, string]> = [["Hover", "Preview"], ["Scroll ↕", "Previous / next"], ["Pinch", "Zoom"], ["Double-click", "Zoom here"]];
-const CHEAT_KEYS: Array<[ShortcutAction, string]> = [["grid", "Grid"], ["nextLink", "Next link with media"], ["slideshow", "Slideshow"], ["help", "All controls"]];
+const CHEAT_KEYS: Array<[ShortcutAction, string]> = [["grid", "Grid"], ["nextLink", "Next link with media"], ["slideshow", "Shuffle slideshow"], ["help", "All controls"]];
 
 function show(target: number) {
   step = Math.max(0, Math.min(screens.length - 1, target));
