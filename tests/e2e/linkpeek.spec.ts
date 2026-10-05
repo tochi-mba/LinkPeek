@@ -24,7 +24,7 @@ async function launchExtension():Promise<{context:BrowserContext;profile:string}
   }catch(error){await rm(profile,{recursive:true,force:true});throw error}
 }
 async function closeExtension(context:BrowserContext,profile:string){
-  await context.close();
+  await Promise.race([context.close(),new Promise<void>(resolve=>setTimeout(resolve,5_000))]);
   await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:250});
 }
 async function wheelStage(page:Page,deltaY:number){
@@ -217,7 +217,8 @@ test("N cycles through prepared page links without capturing text input",async()
     await expect.poll(()=>shortcutMediaRequests.size,{timeout:12_000}).toBe(2);
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
-    await page.locator("#shortcut-input").focus();await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
+    await page.keyboard.press("p");
+    const input=page.locator("#shortcut-input");await input.focus();await page.keyboard.press("n");await expect(input).toHaveValue("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
   }finally{await closeExtension(context,profile)}
 });
 
