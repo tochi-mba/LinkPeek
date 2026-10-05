@@ -36,6 +36,12 @@ export class PreviewController {
   private lastPoint = {x: innerWidth / 2, y: innerHeight / 2};
   /** The linked page's list that N is stepping through, fixed until the preview closes. */
   private linkedList?: string[];
+  /** Page that owns linkedList; recursive fallbacks must move to links outside this context. */
+  private linkedSource?: string;
+  /** Invalidates an asynchronous N / Shift+N search when the user changes direction or opens something else. */
+  private linkNavigationId = 0;
+  private linkNavigationCursor?: string;
+  private navigationProbe?: {url: string; token: string};
   private positions = new Map<string, number>();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
@@ -227,9 +233,13 @@ export class PreviewController {
     if (explicit) this.intent.dismiss();
     else this.intent.setCurrent(null);
     this.intent.clearTimers();
+    this.cancelNavigationProbe();
+    this.linkNavigationId++;
+    this.linkNavigationCursor = undefined;
     this.openAnchor = null;
     this.openUrl = null;
     this.linkedList = undefined;
+    this.linkedSource = undefined;
   }
 
   private onPointerDown(event: PointerEvent) {
@@ -289,7 +299,7 @@ export class PreviewController {
     if (this.viewer.isOpen) this.linkKey(event);
   }
 
-  /** Next / previous link: within a linked page's list when the gallery came from one, else prepared page links. */
+  /** Next / previous link: probe candidates until one really resolves to media. */
   private linkKey(event: KeyboardEvent) {
     const settings = this.pageSettings();
     if (!settings.enabled || this.viewer.help || isTypingEvent(event)) return;
@@ -306,7 +316,7 @@ export class PreviewController {
   }
 
   /** Opens a link that is on the page, scrolling it into view first when needed. */
-  private openPageLink(anchor: HTMLAnchorElement) {
+  private openPageLink(anchor: HTMLAnchorElement, resolved?: ScanResult) {
     let rect = anchor.getBoundingClientRect();
     if (rect.bottom < 0 || rect.top > innerHeight) {
       anchor.scrollIntoView?.({block: "nearest", inline: "nearest"});
@@ -314,54 +324,205 @@ export class PreviewController {
     }
     this.intent.setCurrent(anchor);
     this.viewer.cancelClose();
-    void this.activate(anchor, clamp(rect.left + rect.width / 2, 8, innerWidth - 8), clamp(rect.top + rect.height / 2, 8, innerHeight - 8));
+    void this.activate(anchor, clamp(rect.left + rect.width / 2, 8, innerWidth - 8), clamp(rect.top + rect.height / 2, 8, innerHeight - 8), false, resolved);
   }
 
   /** Opens a link that is not on this page where the last preview opened, so the panel stays put. */
-  private openOffPage(url: string, keepList: boolean) {
+  private openOffPage(url: string, keepList: boolean, resolved?: ScanResult) {
     if (!this.settingsForUrl(url)) return;
     const anchor = Object.assign(document.createElement("a"), {href: url, textContent: linkLabel(url)});
     this.intent.setCurrent(anchor);
     this.viewer.cancelClose();
-    void this.activate(anchor, this.lastPoint.x, this.lastPoint.y, keepList);
+    void this.activate(anchor, this.lastPoint.x, this.lastPoint.y, keepList, resolved);
+  }
+
+  private normalizeUrl(raw: string) {
+    try {
+      const url = new URL(raw, location.href);
+      url.hash = "";
+      return url.href;
+    } catch {
+      return raw;
+    }
+  }
+
+  /** All links physically present on the browser page, regardless of whether LinkPeek may open them. */
+  private currentPageUrls() {
+    return new Set([...document.querySelectorAll<HTMLAnchorElement>("a[href]")].map(anchor => this.normalizeUrl(anchor.href)));
   }
 
   /** The linked page's list for the item on screen, when the gallery was built from linked pages. */
-  private linkedListForCurrent() {
+  private linkedContextForCurrent(): {source: string; links: string[]} | undefined {
     const result = this.viewer.result, source = result?.items[this.viewer.index]?.sourceUrl;
-    const context = source !== result?.url ? result?.linkContexts?.find(entry => entry.sourceUrl === source) : undefined;
+    const context = source !== result?.url ? result?.linkContexts?.find(entry => this.normalizeUrl(entry.sourceUrl) === this.normalizeUrl(source ?? "")) : undefined;
     const links = context && contentLinks(context).filter(url => this.settingsForUrl(url));
-    return links?.length ? links : undefined;
+    return links?.length && source ? {source, links} : undefined;
   }
 
-  /** Steps through a linked page's list, keeping that list until the preview closes. */
+  /** Candidate order after the current URL, wrapping once and never returning the current item itself. */
+  private orderedCandidates(urls: readonly string[], direction: 1 | -1, current: string | null) {
+    if (!urls.length) return [];
+    const normalized = urls.map(url => this.normalizeUrl(url)), here = current ? this.normalizeUrl(current) : null;
+    const index = here ? normalized.indexOf(here) : -1;
+    const count = index < 0 ? urls.length : Math.max(0, urls.length - 1), out: string[] = [];
+    for (let step = 0; step < count; step++) {
+      const at = index < 0
+        ? (direction > 0 ? step : urls.length - 1 - step)
+        : (index + direction * (step + 1) + urls.length * 2) % urls.length;
+      out.push(urls[at]);
+    }
+    return out;
+  }
+
+  private cancelNavigationProbe() {
+    const probe = this.navigationProbe;
+    if (!probe) return;
+    this.navigationProbe = undefined;
+    chrome.runtime.sendMessage({type: "LINKPEEK_CANCEL_SCAN", url: probe.url, token: probe.token}).catch(() => undefined);
+  }
+
+  /** Full interactive scan used only to decide whether N should land on a candidate. */
+  private async scanForNavigation(url: string, navigationId: number) {
+    const prepared = this.prefetcher.cached(url);
+    if (prepared?.items.length) return prepared;
+    const token = `nav-${Date.now()}-${navigationId}-${Math.random().toString(36).slice(2)}`;
+    this.navigationProbe = {url, token};
+    try {
+      const response = await chrome.runtime.sendMessage({type: "LINKPEEK_SCAN", url, kind: classifyLink(url), token} satisfies ScanRequest) as ScanResponse | undefined;
+      if (navigationId !== this.linkNavigationId) return undefined;
+      if (!response || "cancelled" in response || "error" in response) return undefined;
+      if (response.items.length) this.prefetcher.remember(url, response);
+      return response;
+    } catch {
+      return undefined;
+    } finally {
+      if (this.navigationProbe?.token === token) this.navigationProbe = undefined;
+    }
+  }
+
+  /**
+   * A recursive scan may find media on pages linked from the candidate. When
+   * that happens, choose a media-bearing child that is genuinely new to the
+   * current navigation context instead of bouncing back to one of its links.
+   */
+  private resolveNavigationTarget(candidate: string, result: ScanResult, excluded: Set<string>, direction: 1 | -1) {
+    if (!result.items.length) return undefined;
+    const rootSources = new Set([candidate, result.url, result.linkContexts?.[0]?.sourceUrl].filter(Boolean).map(url => this.normalizeUrl(url!)));
+    const rootItems = result.items.filter(item => rootSources.has(this.normalizeUrl(item.sourceUrl)));
+    if (result.kind !== "generic" || rootItems.length) return {url: candidate, result, linkedSource: undefined as string | undefined, linkedList: undefined as string[] | undefined};
+
+    const mediaSources = new Set(result.items.map(item => this.normalizeUrl(item.sourceUrl)));
+    const contextOrder = (result.linkContexts ?? []).map(context => context.sourceUrl);
+    const itemOrder = result.items.map(item => item.sourceUrl);
+    const ordered = [...new Set([...contextOrder, ...itemOrder])]
+      .filter(source => mediaSources.has(this.normalizeUrl(source)))
+      .filter(source => !rootSources.has(this.normalizeUrl(source)))
+      .filter(source => !excluded.has(this.normalizeUrl(source)))
+      .filter(source => Boolean(this.settingsForUrl(source)));
+    if (direction < 0) ordered.reverse();
+    const child = ordered[0];
+    if (!child) return undefined;
+    const childItems = result.items.filter(item => this.normalizeUrl(item.sourceUrl) === this.normalizeUrl(child));
+    if (!childItems.length) return undefined;
+    const context = result.linkContexts?.find(entry => this.normalizeUrl(entry.sourceUrl) === this.normalizeUrl(child));
+    const linkedList = context ? contentLinks(context).filter(url => this.settingsForUrl(url)) : undefined;
+    return {
+      url: child,
+      result: {...result, url: child, title: undefined, items: childItems},
+      linkedSource: child,
+      linkedList: linkedList?.length ? linkedList : undefined
+    };
+  }
+
+  private async navigateCandidates(
+    candidates: readonly string[],
+    direction: 1 | -1,
+    excluded: Set<string>,
+    pageAnchors?: Map<string, HTMLAnchorElement>,
+    keepExistingList = false
+  ) {
+    const navigationId = ++this.linkNavigationId;
+    this.cancelNavigationProbe();
+    this.requestId++;
+    if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
+    this.activeScan = undefined;
+    for (const candidate of candidates) {
+      if (navigationId !== this.linkNavigationId) return;
+      this.linkNavigationCursor = candidate;
+      const result = await this.scanForNavigation(candidate, navigationId);
+      if (navigationId !== this.linkNavigationId) return;
+      if (!result?.items.length) continue;
+      const target = this.resolveNavigationTarget(candidate, result, excluded, direction);
+      if (!target) continue;
+      this.linkNavigationCursor = undefined;
+      if (target.url !== candidate) {
+        this.linkedSource = target.linkedSource;
+        this.linkedList = target.linkedList;
+        this.prefetcher.remember(target.url, target.result);
+        this.openOffPage(target.url, true, target.result);
+        if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
+        return;
+      }
+      if (keepExistingList) {
+        this.prefetcher.remember(candidate, target.result);
+        this.openOffPage(candidate, true, target.result);
+        const at = this.linkedList?.indexOf(candidate) ?? -1;
+        if (this.linkedList?.length) this.prefetcher.warmAround(this.linkedList, at);
+        return;
+      }
+      const anchor = pageAnchors?.get(this.normalizeUrl(candidate));
+      if (anchor) {
+        this.prefetcher.remember(candidate, target.result);
+        this.openPageLink(anchor, target.result);
+        return;
+      }
+    }
+    if (navigationId === this.linkNavigationId) this.linkNavigationCursor = undefined;
+  }
+
+  /** Steps through a linked page's list, skipping empty/failing links. */
   private openAdjacentLinked(direction: 1 | -1) {
-    const links = this.linkedList ?? this.linkedListForCurrent();
-    if (!links) return false;
-    // Off the list (on the page that linked to it), N starts at its first link and Shift+N at its last.
-    const index = links.indexOf(this.openUrl!);
-    if (links.length === 1 && index === 0) return false;
-    const next = index < 0 ? (direction > 0 ? 0 : links.length - 1) : (index + direction + links.length) % links.length;
-    this.linkedList = links;
-    this.openOffPage(links[next], true);
-    this.prefetcher.warmAround(links, next);
+    const context = this.linkedList?.length && this.linkedSource
+      ? {source: this.linkedSource, links: this.linkedList}
+      : this.linkedContextForCurrent();
+    if (!context) return false;
+    this.linkedList = context.links;
+    this.linkedSource = context.source;
+    const current = this.linkNavigationCursor ?? this.openUrl;
+    const candidates = this.orderedCandidates(context.links, direction, current);
+    if (!candidates.length) return false;
+    const excluded = new Set(context.links.map(url => this.normalizeUrl(url)));
+    excluded.add(this.normalizeUrl(context.source));
+    void this.navigateCandidates(candidates, direction, excluded, undefined, true);
     return true;
   }
 
-  /** Opens the next (or previous) page link whose gallery is already prepared, in document order. */
+  /** Walks page links in document order and only lands on ones that resolve to media. */
   openAdjacentPrepared(direction: 1 | -1) {
-    const anchors = this.prefetcher.preparedAnchors();
-    const current = this.openUrl ?? this.intent.currentAnchor?.href ?? null;
-    const index = anchors.findIndex(anchor => anchor.href === current);
-    if (!anchors.length || (anchors.length === 1 && index === 0)) return false;
-    this.openPageLink(anchors[index < 0 ? (direction > 0 ? 0 : anchors.length - 1) : (index + direction + anchors.length) % anchors.length]);
+    const anchors = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].filter(anchor => this.settingsFor(anchor));
+    const byUrl = new Map<string, HTMLAnchorElement>(), urls: string[] = [];
+    for (const anchor of anchors) {
+      const key = this.normalizeUrl(anchor.href);
+      if (byUrl.has(key)) continue;
+      byUrl.set(key, anchor);
+      urls.push(anchor.href);
+    }
+    const current = this.linkNavigationCursor ?? this.openUrl ?? this.intent.currentAnchor?.href ?? null;
+    const candidates = this.orderedCandidates(urls, direction, current);
+    if (!candidates.length) return false;
+    void this.navigateCandidates(candidates, direction, this.currentPageUrls(), byUrl);
     return true;
   }
 
   /** When a gallery built from linked pages appears, prepare the first links of its list so N is instant. */
   private warmLinkedList() {
-    const links = this.linkedList ?? this.linkedListForCurrent();
-    if (links) this.prefetcher.warmAround(links, links.indexOf(this.openUrl!));
+    const context = this.linkedList?.length && this.linkedSource
+      ? {source: this.linkedSource, links: this.linkedList}
+      : this.linkedContextForCurrent();
+    if (!context) return;
+    this.linkedList = context.links;
+    this.linkedSource = context.source;
+    this.prefetcher.warmAround(context.links, context.links.indexOf(this.openUrl!));
   }
 
   private rememberPosition(url: string, index: number) {
@@ -387,19 +548,33 @@ export class PreviewController {
   }
 
   /** Opens a preview. `keepList` keeps the linked page's list N is stepping through. */
-  async activate(anchor: HTMLAnchorElement, x: number, y: number, keepList = false) {
+  async activate(anchor: HTMLAnchorElement, x: number, y: number, keepList = false, resolved?: ScanResult) {
     this.intent.clearTimers();
-    if (this.isOpenAnchor(anchor)) return;
-    if (!keepList) this.linkedList = undefined;
+    if (this.isOpenAnchor(anchor) && !resolved) return;
+    this.cancelNavigationProbe();
+    this.linkNavigationId++;
+    this.linkNavigationCursor = undefined;
+    if (!keepList) {
+      this.linkedList = undefined;
+      this.linkedSource = undefined;
+    }
     if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
     const settings = this.settingsFor(anchor);
     if (!settings) return;
-    const url = anchor.href, id = ++this.requestId, token = `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
-    this.activeScan = {url, token, settings};
+    const url = anchor.href, id = ++this.requestId;
     this.openAnchor = anchor;
     this.openUrl = url;
     this.lastPoint = {x, y};
     this.viewer.openLoading(x, y, settings, anchor.textContent?.trim().slice(0, 80) || "Scanning link…", settings.resumePosition ? this.positions.get(url) : undefined);
+    if (resolved) {
+      this.activeScan = undefined;
+      this.prefetcher.remember(url, resolved);
+      this.viewer.show(resolved);
+      this.warmLinkedList();
+      return;
+    }
+    const token = `${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
+    this.activeScan = {url, token, settings};
     // A prepared gallery shows in the first frame; the full scan then fills in the rest.
     const prepared = this.prefetcher.cached(url);
     if (prepared) this.viewer.show(prepared);
