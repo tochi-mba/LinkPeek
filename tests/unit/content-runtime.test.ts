@@ -161,7 +161,8 @@ describe("content script runtime",()=>{
     const slow=link("slow","https://x.test/slow");pointer("pointerover",slow);vi.advanceTimersByTime(21);await tick();
     const active=[...messages].reverse().find((x:any)=>x.type==="LINKPEEK_SCAN"&&x.url.includes("slow"));
     runtimeListeners[0]({type:"NO"});runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:"bad",url:active.url,result:scan(active.url)});
-    runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:active.token,url:active.url,result:scan(active.url)});expect(viewer.show).toHaveBeenCalled();
+    runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:active.token,url:active.url,result:undefined});
+    runtimeListeners[0]({type:"LINKPEEK_SCAN_PROGRESS",token:active.token,url:active.url,result:{...scan(active.url),items:[{id:"progress",type:"image",originalUrl:`${active.url}/o.jpg`,previewUrl:`${active.url}/p.jpg`,sourceUrl:active.url,score:1}]}});expect(viewer.show).toHaveBeenCalled();
     const newer=link("newer","https://x.test/newer");pointer("pointerover",newer);vi.advanceTimersByTime(21);await tick();
     resolve?.(scan(active.url));await tick();
   });
@@ -249,6 +250,23 @@ describe("content script runtime",()=>{
     link("generic","https://x.test/page",visible);
     expect(idleCb).toBeTruthy();idleCb!({didTimeout:false,timeRemaining:()=>20});await tick();
     const pref=messages.filter(x=>x.type==="LINKPEEK_PREFETCH");expect(pref.length).toBeGreaterThan(0);expect(pref.length).toBeLessThanOrEqual(3);
+  });
+
+  it("cycles through prepared links with a remappable shortcut and ignores editors",async()=>{
+    const media=(url:string):ScanResult=>({...scan(url),items:[{id:url,type:"image",originalUrl:`${url}/original.jpg`,previewUrl:`${url}/preview.jpg`,sourceUrl:url,score:1}]});
+    await update({prefetch:"all",activationMode:"hover"});sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?(msg.url.includes("empty")?scan(msg.url):media(msg.url)):msg.type==="LINKPEEK_SCAN"?media(msg.url):{ok:true};
+    const a=link("prepared-a","https://prepared.test/a"),duplicate=link("prepared-a-copy",a.href),b=link("prepared-b","https://prepared.test/b"),empty=link("prepared-empty","https://prepared.test/empty");
+    idleCb!({didTimeout:true,timeRemaining:()=>20});await tick();await tick();expect(messages.some(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===a.href)).toBe(true);expect(messages.some(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===b.href)).toBe(true);
+    const press=(key:string,target:Document|HTMLElement=document)=>{const event=new KeyboardEvent("keydown",{key,bubbles:true,cancelable:true});target.dispatchEvent(event);return event};
+    viewer.closeTimer=123;expect(press("n").defaultPrevented).toBe(true);await tick();expect([...messages].reverse().find(x=>x.type==="LINKPEEK_SCAN")?.url).toBe(a.href);
+    expect(press("N").defaultPrevented).toBe(true);await tick();expect([...messages].reverse().find(x=>x.type==="LINKPEEK_SCAN")?.url).toBe(b.href);
+    expect(press("n").defaultPrevented).toBe(true);await tick();expect([...messages].reverse().find(x=>x.type==="LINKPEEK_SCAN")?.url).toBe(a.href);
+    const input=document.createElement("input");document.body.appendChild(input);const scans=messages.filter(x=>x.type==="LINKPEEK_SCAN").length;expect(press("n",input).defaultPrevented).toBe(false);expect(messages.filter(x=>x.type==="LINKPEEK_SCAN")).toHaveLength(scans);
+    viewer.help=true;expect(press("n").defaultPrevented).toBe(false);viewer.help=false;
+    await update({shortcuts:{...store.settings.shortcuts,nextLink:["j"]}});expect(press("n").defaultPrevented).toBe(false);expect(press("j").defaultPrevented).toBe(true);await tick();
+    duplicate.remove();b.remove();empty.remove();expect(press("j").defaultPrevented).toBe(true);await tick();expect([...messages].reverse().find(x=>x.type==="LINKPEEK_SCAN")?.url).toBe(a.href);expect(press("j").defaultPrevented).toBe(false);
+    a.remove();expect(press("j").defaultPrevented).toBe(false);
+    await update({shortcuts:{}});expect(press("n").defaultPrevented).toBe(false);
   });
 
   it("bounds speculative work, warms preview images and handles viewer ownership",async()=>{

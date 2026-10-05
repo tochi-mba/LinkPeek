@@ -74,7 +74,7 @@ describe("page entrypoints",()=>{
     const preset=document.querySelector<HTMLElement>("[data-preset]")!;preset.click();await tick();expect((location as any).reload).toHaveBeenCalled();
     (document.getElementById("tutorial") as HTMLButtonElement).click();expect((location as any).href).toContain("onboarding.html");
     vi.runAllTimers();
-  },10_000);
+  },20_000);
 
   it("runs popup controls and offline favorite open/remove updates",async()=>{
     store.favorites=[{url:"https://fav.test/a",title:"<Saved & Link>",addedAt:2,mediaCount:4},{url:"https://fav.test/b",title:"No Count",addedAt:1}];

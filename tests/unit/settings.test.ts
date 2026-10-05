@@ -9,6 +9,7 @@ describe("settings",()=>{
     expect(DEFAULT_SETTINGS.scanScope).toBe("whole");
     expect(DEFAULT_SETTINGS.recursiveTrigger).toBe("empty");
     expect(DEFAULT_SETTINGS.activationKeywords).toEqual([]);
+    expect(DEFAULT_SETTINGS.shortcuts.nextLink).toEqual(["n"]);
   });
   it("has the expected power-user presets",()=>expect(Object.keys(PRESETS)).toEqual(expect.arrayContaining(["balanced","minimal","fast","touchpad","manual"])));
   it("migrates legacy resource defaults without changing customized values",()=>{

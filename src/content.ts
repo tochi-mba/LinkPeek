@@ -7,7 +7,7 @@ type ActiveScan={url:string;token:string;settings:LinkPeekSettings};
 let settings:LinkPeekSettings;const viewer=new Viewer();
 let hoverTimer:number|undefined,hoverRearmTimer:number|undefined,deepPrefetchTimer:number|undefined,prefetchTimer:number|undefined,currentAnchor:HTMLAnchorElement|null=null,currentAnchorUrl:string|null=null,openAnchor:HTMLAnchorElement|null=null,openAnchorUrl:string|null=null,requestId=0,startX=0,startY=0,lastPointerX=innerWidth/2,lastPointerY=innerHeight/2,lastAltKey=false;
 type WarmTask={url:string;img:HTMLImageElement;priority:number};
-let activeScan:ActiveScan|undefined,prefetchActive=0,warmActive=0,warmIdleHandle:number|undefined;const prefetched=new Map<string,"shallow"|"deep">(),warmedPreviews=new Map<string,HTMLImageElement>(),prefetchWaiters:Array<()=>void>=[],warmQueue:WarmTask[]=[],warmIdleQueue:WarmTask[]=[];
+let activeScan:ActiveScan|undefined,prefetchActive=0,warmActive=0,warmIdleHandle:number|undefined;const prefetched=new Map<string,"shallow"|"deep">(),preparedLinks=new Set<string>(),warmedPreviews=new Map<string,HTMLImageElement>(),prefetchWaiters:Array<()=>void>=[],warmQueue:WarmTask[]=[],warmIdleQueue:WarmTask[]=[];
 
 async function boot(){
   settings=await loadSettings();
@@ -16,16 +16,29 @@ async function boot(){
   chrome.storage.onChanged.addListener(async()=>{settings=await loadSettings()});
   chrome.runtime.onMessage.addListener(msg=>{
     if(msg?.type!=="LINKPEEK_SCAN_PROGRESS"||!activeScan||msg.token!==activeScan.token||msg.url!==activeScan.url)return;
-    const result=msg.result as ScanResult;if(result?.items)viewer.show(result);
+    const result=msg.result as ScanResult;if(result?.items?.length)markPrepared(msg.url);if(result?.items)viewer.show(result);
   });
   document.addEventListener("pointerover",onOver,true);document.addEventListener("pointerout",onOut,true);document.addEventListener("pointermove",onMove,true);
   document.addEventListener("scroll",schedulePrefetch,true);
   document.addEventListener("visibilitychange",()=>{if(!document.hidden){schedulePrefetch();scheduleIdleWarm()}},true);
   new MutationObserver(()=>{if(!settings.mutationObserver)return;schedulePrefetch();if(settings.activationMode==="click")return;const target=document.elementFromPoint?.(lastPointerX,lastPointerY),a=target?.closest?.("a[href]") as HTMLAnchorElement|null;if(a)considerAnchor(a,lastPointerX,lastPointerY,lastAltKey)}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["href"]});
-  document.addEventListener("keydown",e=>{if(viewer.key(e)){e.preventDefault();e.stopPropagation()}},true);
+  document.addEventListener("keydown",onKeyDown,true);
   document.addEventListener("click",e=>{if(settings.activationMode!=="click")return;const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a)return;const eff=effectiveSettings(settings,a.href);if(!eff.enabled||!linkMatchesKeywords(eff,a.href))return;e.preventDefault();activate(a,e.clientX,e.clientY)},true);
   viewer.onDismiss=()=>{requestId++;if(activeScan)detachOrCancel(activeScan,"out");openAnchor=null;openAnchorUrl=null;currentAnchor=null;currentAnchorUrl=null;clear()};
   if(settings.prefetch!=="off")runPrefetch(1200);
+}
+function markPrepared(url:string){preparedLinks.delete(url);preparedLinks.add(url)}
+function editableEvent(e:KeyboardEvent){return e.composedPath().some(node=>node instanceof HTMLElement&&node.matches("input,textarea,select,[contenteditable]:not([contenteditable='false'])"))}
+function shortcutHit(action:string,e:KeyboardEvent){return (settings.shortcuts[action]??[]).some(key=>key.toLowerCase()===e.key.toLowerCase())}
+function activateNextPreparedLink(){
+  const seen=new Set<string>(),anchors=[...document.querySelectorAll<HTMLAnchorElement>("a[href]")].filter(a=>{const eff=effectiveSettings(settings,a.href);if(seen.has(a.href)||!preparedLinks.has(a.href)||!eff.enabled||!linkMatchesKeywords(eff,a.href))return false;seen.add(a.href);return true});
+  if(!anchors.length)return false;const current=openAnchorUrl??currentAnchorUrl,index=anchors.findIndex(a=>a.href===current);if(anchors.length===1&&index===0)return false;
+  const next=anchors[(index+1)%anchors.length],rect=next.getBoundingClientRect(),x=Math.max(8,Math.min(innerWidth-8,rect.left+rect.width/2)),y=Math.max(8,Math.min(innerHeight-8,rect.top+rect.height/2));
+  currentAnchor=next;currentAnchorUrl=next.href;if(viewer.closeTimer)clearTimeout(viewer.closeTimer);void activate(next,x,y);return true;
+}
+function onKeyDown(e:KeyboardEvent){
+  if(viewer.key(e)){e.preventDefault();e.stopPropagation();return}
+  if(viewer.help||editableEvent(e)||!shortcutHit("nextLink",e)||!activateNextPreparedLink())return;e.preventDefault();e.stopPropagation();
 }
 function cancelScan(scan:ActiveScan){
   chrome.runtime.sendMessage({type:"LINKPEEK_CANCEL_SCAN",url:scan.url,token:scan.token}).catch(()=>{});
@@ -97,7 +110,7 @@ async function activate(a:HTMLAnchorElement,x:number,y:number){
   viewer.openLoading(x,y,eff,a.textContent?.trim().slice(0,80)||"Scanning link…");
   try{
     const result=await chrome.runtime.sendMessage({type:"LINKPEEK_SCAN",url:a.href,kind,token}) as ScanResult&{error?:string;cancelled?:boolean};
-    if(id!==requestId||activeScan?.token!==token)return;if(result.cancelled)return;if(result.error)throw new Error(result.error);viewer.show(result);
+    if(id!==requestId||activeScan?.token!==token)return;if(result.cancelled)return;if(result.error)throw new Error(result.error);if(result.items.length)markPrepared(a.href);viewer.show(result);
   }catch(err){if(id===requestId&&activeScan?.token===token)viewer.error(err instanceof Error?err.message:String(err))}
   finally{if(activeScan?.token===token)activeScan=undefined}
 }
@@ -163,6 +176,7 @@ async function prefetchAnchor(a:HTMLAnchorElement,deep=false){
   prefetched.set(a.href,level);
   try{
     const result=await withPrefetchSlot(()=>chrome.runtime.sendMessage({type:"LINKPEEK_PREFETCH",url:a.href,kind,deep:level==="deep"}) as Promise<ScanResult>);
+    if(result?.items?.length)markPrepared(a.href);
     warmPreviewUrls(result,eff,level==="deep");
   }catch{if(previous)prefetched.set(a.href,previous);else prefetched.delete(a.href)}
 }
