@@ -197,7 +197,10 @@ export class LinkPrefetcher {
       entries.set(url, {
         url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url))),
         priority: this.priorities.get(url) ?? "normal",
-        hasGif: result?.items.some(item => item.type === "gif") ?? (classifyLink(url) === "direct-image" && /\.gif(?:$|[?#])/i.test(url)),
+        hasGif: result?.items.some(item => item.type === "gif"
+          || /\.gif(?:$|[?#])/i.test(item.originalUrl)
+          || /\.gif(?:$|[?#])/i.test(item.previewUrl)
+          || /\.gif$/i.test(item.filename ?? "")) ?? (classifyLink(url) === "direct-image" && /\.gif(?:$|[?#])/i.test(url)),
         retryAt: this.failedUntil.get(url), title: result?.title
       });
     };
