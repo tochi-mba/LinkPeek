@@ -5,7 +5,7 @@ import {loadPage, settle, stubExtension, type PageHarness} from "./page-harness"
 let harness: PageHarness;
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 const saved = () => harness.store.settings as Record<string, unknown>;
-const status = (patch: Partial<TabStatus> = {}): TabStatus => ({enabled: true, mode: "auto", headroom: 1, tier: "high", prepared: 3, ...patch});
+const status = (patch: Partial<TabStatus> = {}): TabStatus => ({enabled: true, mode: "auto", headroom: 1, tier: "high", prepared: 3, inspectorOpen: false, ...patch});
 
 async function open(options: {settings?: Record<string, unknown>; url?: string | null; status?: TabStatus | "unreachable"; favorites?: unknown[]} = {}) {
   vi.resetModules();
@@ -50,6 +50,27 @@ describe("the popup", () => {
     await open({settings: {enabled: false}});
     expect($("#status").textContent).toBe("LinkPeek is off.");
     expect(($("#enabled") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("opens the preload inspector on the page and gets out of the way", async () => {
+    await open();
+    const button = $<HTMLButtonElement>("#inspector"), close = vi.spyOn(window, "close").mockImplementation(() => undefined);
+    expect([button.hidden, button.textContent, button.getAttribute("aria-pressed")]).toEqual([false, "Inspector", "false"]);
+    harness.chrome.tabs.sendMessage.mockResolvedValueOnce({open: true});
+    button.click();
+    await settle();
+    expect(harness.chrome.tabs.sendMessage).toHaveBeenLastCalledWith(7, {type: "LINKPEEK_TOGGLE_INSPECTOR"});
+    expect([button.textContent, button.getAttribute("aria-pressed"), close.mock.calls.length]).toEqual(["Hide inspector", "true", 1]);
+    harness.chrome.tabs.sendMessage.mockResolvedValueOnce({open: false});
+    button.click();
+    await settle();
+    expect([button.textContent, close.mock.calls.length]).toEqual(["Inspector", 1]);
+    harness.chrome.tabs.sendMessage.mockRejectedValueOnce(new Error("gone"));
+    button.click();
+    await settle();
+    expect(button.textContent).toBe("Inspector");
+    await open({status: "unreachable"});
+    expect($("#inspector").hidden).toBe(true);
   });
 
   it("turns LinkPeek on and off", async () => {

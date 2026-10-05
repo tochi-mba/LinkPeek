@@ -10,12 +10,10 @@ import type {LinkContext, MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
-import {fetchWithRetry, type RetryMode} from "./http";
+import {fetchWithRetry, readTextCapped, type RetryMode} from "./http";
 
 type PageScan = {finalUrl: string; title?: string; items: MediaItem[]; html?: string; direct?: "direct-image" | "direct-video"};
 
-/** Enough for any real article or gallery page; bigger documents are cut off, not read whole. */
-export const MAX_HTML_BYTES = 3 * 1024 * 1024;
 const NON_PAGE = /\.(?:7z|avi|css|csv|docx?|exe|gz|ico|js|json|m4[av]|mov|mp[34]|pdf|pptx?|rar|tar|txt|wav|webm|xlsx?|xml|zip)(?:$|[?#])/i;
 const PAGE_TYPE = /html|xml|text\/plain/i;
 
@@ -29,55 +27,31 @@ function referrerPolicy(settings?: LinkPeekSettings): ReferrerPolicy | undefined
   return undefined;
 }
 
-/** Reads a response body as text, stopping after `maxBytes`. */
-export async function readTextCapped(response: Response, maxBytes = MAX_HTML_BYTES) {
-  const charset = /charset=([^;]+)/i.exec(response.headers.get("content-type") ?? "")?.[1]?.trim();
-  let decoder: TextDecoder;
-  try {
-    decoder = new TextDecoder(charset || "utf-8");
-  } catch {
-    decoder = new TextDecoder("utf-8");
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return response.text();
-  let text = "", bytes = 0;
-  while (bytes < maxBytes) {
-    const {done, value} = await reader.read();
-    if (done) return text + decoder.decode();
-    bytes += value.byteLength;
-    text += decoder.decode(value, {stream: true});
-  }
-  await reader.cancel().catch(() => undefined);
-  return text + decoder.decode();
-}
-
 function directItem(response: Response, requested: string, type: MediaItem["type"]): MediaItem {
   return {id: response.url, type, originalUrl: response.url, previewUrl: response.url, sourceUrl: requested, filename: new URL(response.url).pathname.split("/").pop(), score: 1};
 }
 
-async function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive"): Promise<PageScan> {
-    const credentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
-    const timeout = clamp(settings?.fetchTimeout, 8000, 500, 30000);
-    return fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal}, retryMode, timeout, async (response): Promise<PageScan> => {
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const type = (response.headers.get("content-type") ?? "").toLowerCase();
-    if (type.startsWith("image/")) {
-      void response.body?.cancel().catch(() => undefined);
-      return {finalUrl: response.url, items: [directItem(response, url, type.includes("gif") ? "gif" : "image")], direct: "direct-image"};
-    }
-    if (type.startsWith("video/")) {
-      void response.body?.cancel().catch(() => undefined);
-      return {finalUrl: response.url, items: settings?.includeVideo === false ? [] : [directItem(response, url, "video")], direct: "direct-video"};
-    }
-    if (type && !PAGE_TYPE.test(type)) {
-      // A download, a PDF, an audio stream...: nothing to preview, and never worth reading.
-      void response.body?.cancel().catch(() => undefined);
-      return {finalUrl: response.url, items: []};
-    }
-    const html = await readTextCapped(response);
-    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
-    return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, {}, settings), html};
-    });
+/** Turns one response into a page scan: a direct image or video, nothing for downloads, or extracted HTML. */
+async function readPage(response: Response, requested: string, settings: LinkPeekSettings | undefined): Promise<PageScan> {
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const type = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (type.startsWith("image/") || type.startsWith("video/") || (type && !PAGE_TYPE.test(type))) {
+    // Media is recognized from its type alone, and a download or PDF is never worth reading.
+    void response.body?.cancel().catch(() => undefined);
+    if (type.startsWith("image/")) return {finalUrl: response.url, items: [directItem(response, requested, type.includes("gif") ? "gif" : "image")], direct: "direct-image"};
+    if (type.startsWith("video/")) return {finalUrl: response.url, items: settings?.includeVideo === false ? [] : [directItem(response, requested, "video")], direct: "direct-video"};
+    return {finalUrl: response.url, items: []};
+  }
+  const html = await readTextCapped(response);
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
+  return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, {}, settings), html};
+}
+
+function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive") {
+  // Cookies go only to the site being previewed, never to other sites a linked-page search visits.
+  const credentials: RequestCredentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
+  const init: RequestInit = {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal};
+  return fetchWithRetry(url, init, {mode: retryMode, timeoutMs: clamp(settings?.fetchTimeout, 8000, 500, 30000), read: response => readPage(response, url, settings)});
 }
 
 /** Safe links in one fetched page, kept in document order for recursion and keyboard navigation. */

@@ -7,15 +7,21 @@ export type PrefetchRequest = {type: "LINKPEEK_PREFETCH"; url: string; kind: Lin
 export type CancelScanRequest = {type: "LINKPEEK_CANCEL_SCAN"; url: string; token: string};
 export type FetchBinaryRequest = {type: "LINKPEEK_FETCH_BINARY"; url: string; maxMb: number};
 export type DownloadRequest = {type: "LINKPEEK_DOWNLOAD"; url: string; filename?: string};
+/** Every original of a gallery, into one folder in the downloads directory. */
+export type DownloadAllRequest = {type: "LINKPEEK_DOWNLOAD_ALL"; folder: string; items: Array<{url: string; filename: string}>};
+/** Opens a URL in a new tab next to the current one, in the background unless `active`. */
+export type OpenTabRequest = {type: "LINKPEEK_OPEN_TAB"; url: string; active?: boolean};
 export type ClearCacheRequest = {type: "LINKPEEK_CLEAR_CACHE"};
 
-export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | ClearCacheRequest;
+export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};
 
 /** Asked by the popup; answered by the content script of the active tab. */
 export type StatusRequest = {type: "LINKPEEK_STATUS"};
+/** Sent by the popup to show or hide the preload inspector on the active tab. */
+export type ToggleInspectorRequest = {type: "LINKPEEK_TOGGLE_INSPECTOR"};
 
 export type ScanResponse = ScanResult | {error: string} | {cancelled: true};
 export type BinaryResponse = {base64: string; mime: string; bytes: number} | {error: string};
@@ -29,4 +35,5 @@ export interface TabStatus {
   reason?: string;
   tier: "light" | "standard" | "high";
   prepared: number;
+  inspectorOpen: boolean;
 }

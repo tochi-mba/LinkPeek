@@ -167,6 +167,22 @@ export const overlayCss = `${rexCss}
 .lp-resize-sw { left: 0; bottom: 0; cursor: sw-resize; }
 .lp-resize-nw { left: 0; top: 0; cursor: nw-resize; }
 
+/* Hover countdown ring: fills over the hover delay; signal-coloured when the link is already prepared */
+.lp-ring { position: fixed; width: 18px; height: 18px; pointer-events: none; opacity: 0; transition: opacity .1s ease; }
+.lp-ring.lp-on { opacity: 1; }
+.lp-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.lp-ring circle { fill: none; stroke-width: 3; }
+.lp-ring-track { stroke: rgba(8, 10, 9, .55); }
+.lp-ring-arc { stroke: ${REX.text}; stroke-dasharray: 100; stroke-dashoffset: 100; stroke-linecap: round; }
+.lp-ring.lp-ready .lp-ring-arc { stroke: ${REX.signal}; }
+.lp-ring.lp-on[data-cycle="0"] .lp-ring-arc { animation: lp-ring-a var(--lp-ring-ms, 300ms) linear forwards; }
+.lp-ring.lp-on[data-cycle="1"] .lp-ring-arc { animation: lp-ring-b var(--lp-ring-ms, 300ms) linear forwards; }
+@keyframes lp-ring-a { to { stroke-dashoffset: 0; } }
+@keyframes lp-ring-b { to { stroke-dashoffset: 0; } }
+
+/* A quarter-turned media box is resized and centred by the viewer */
+.lp-media.lp-turned { inset: auto; left: 50%; top: 50%; translate: -50% -50%; }
+
 /* Toast and screen-reader announcements */
 .lp-toast {
   position: absolute; top: 56px; right: 12px; z-index: 6; padding: 6px 9px; border: 1px solid ${REX.line}; border-radius: 8px;

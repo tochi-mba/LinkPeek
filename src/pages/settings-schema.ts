@@ -45,14 +45,15 @@ export const SECTIONS: SectionSpec[] = [
   {
     id: "opening", title: "Opening and closing", summary: "When a preview appears, and when it gets out of the way.",
     fields: [
+      {key: "switchDelay", label: "Delay before switching links", help: "While a preview is open, another link takes over only after you rest on it this long. Links on the way from the open link to its preview never take over.", unit: "ms"},
+      {key: "showHoverRing", label: "Show the hover countdown", help: "A small ring beside the pointer fills until the link opens. It turns green when the link's media is already prepared."},
       {key: "quickOpenWhenStill", label: "Open sooner when the pointer stops", help: "If a link's media is already prepared, its preview opens as soon as the pointer comes to rest on it, at half the hover delay."},
       {key: "ignoreScrollHover", label: "Ignore links that scroll under the pointer", help: "Scrolling the page never opens a preview by itself. Move the pointer to open the link under it."},
       {key: "closeDelay", label: "Close delay", help: "How long the preview waits after the pointer leaves it before closing.", unit: "ms"},
       {key: "closeOnOutsideClick", label: "Close when clicking elsewhere", help: "Clicking anywhere outside the preview closes it, unless it is pinned."},
       {key: "magneticBridge", label: "Forgiving path to the panel", help: "Keep the preview open while the pointer travels from the link into the panel, even across other content."},
       {key: "magneticBridgeStrength", label: "Path width", help: "How far off the direct path the pointer can wander on its way to the panel.", control: "range", percent: true, advanced: true},
-      {key: "cancelMovePx", label: "Movement that restarts the timer", help: "Moving this far across a link while waiting restarts the hover delay, so sweeping over large links does not open them.", unit: "px", advanced: true},
-      {key: "inspectorChordMs", label: "Inspector shortcut interval", help: "Time to press the inspector key again without modifiers after its shortcut. Default: Ctrl+X, then X.", unit: "ms", advanced: true}
+      {key: "cancelMovePx", label: "Movement that restarts the timer", help: "Moving this far across a link while waiting restarts the hover delay, so sweeping over large links does not open them.", unit: "px", advanced: true}
     ]
   },
   {
@@ -166,7 +167,8 @@ export const SECTIONS: SectionSpec[] = [
   {
     id: "keyboard", title: "Keyboard", summary: "Every shortcut, rebindable. Click + then press the keys you want.",
     fields: [
-      {key: "shortcuts", label: "Shortcuts", help: "Letters ignore Caps Lock. Shortcuts never fire while you are typing in a field.", control: "shortcuts"}
+      {key: "shortcuts", label: "Shortcuts", help: "Letters ignore Caps Lock. Shortcuts never fire while you are typing in a field.", control: "shortcuts"},
+      {key: "inspectorChordMs", label: "Inspector second-press window", help: "The preload inspector opens with its shortcut (Ctrl+X by default) followed by the same key alone within this time, so Cut keeps working. The toolbar button opens it too.", unit: "ms", advanced: true}
     ]
   },
   {
@@ -191,8 +193,9 @@ export const SECTIONS: SectionSpec[] = [
 export const SHORTCUT_LABELS: Record<keyof LinkPeekSettings["shortcuts"], string> = {
   next: "Next media", previous: "Previous media", nextLink: "Next prepared link on the page", previousLink: "Previous prepared link on the page",
   grid: "Grid / single media", expand: "Expand / restore", pin: "Pin open", favorite: "Save link", open: "Open original",
-  download: "Download original", copy: "Copy media link", slideshow: "Slideshow", zoomIn: "Zoom in (bigger tiles in grid)",
-  zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close", preloadInspector: "Preload inspector (then press the same key without modifiers)"
+  openPage: "Open the linked page", download: "Download original", downloadAll: "Download the whole gallery (press twice)",
+  copy: "Copy media link", slideshow: "Slideshow", fill: "Fill the panel / fit", rotate: "Rotate a quarter turn", zoomIn: "Zoom in (bigger tiles in grid)",
+  zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close", preloadInspector: "Preload inspector (then the same key alone)"
 };
 
 export function fieldFor(key: SettingKey): FieldSpec | undefined {

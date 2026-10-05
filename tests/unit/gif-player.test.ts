@@ -250,6 +250,29 @@ describe("the GIF player", () => {
     player.destroy();
   });
 
+  it("reports the GIF's real width as soon as either the native image or the frames know it", async () => {
+    const widths: number[] = [], el = stage();
+    const player = new GifPlayer(el, "https://x.test/a.gif", settings(), undefined, width => widths.push(width));
+    const init = player.init();
+    const native = el.querySelector<HTMLImageElement>(".lp-gif-native")!;
+    Object.defineProperty(native, "naturalWidth", {configurable: true, value: 12});
+    native.dispatchEvent(new Event("load"));
+    await init;
+    expect(widths).toEqual([12, 10]);
+    const late = stage(), narrow = new GifPlayer(late, "https://x.test/b.gif", settings(), undefined, () => narrow.destroy());
+    const pending = narrow.init();
+    narrow.destroy();
+    late.querySelector(".lp-gif-native")!.dispatchEvent(new Event("load"));
+    await pending;
+    expect(late.querySelector("canvas")).toBeNull();
+  });
+
+  it("stops building controls when the width check removes the player", async () => {
+    const el = stage(), player = new GifPlayer(el, "https://x.test/a.gif", settings(), undefined, () => player.destroy());
+    await player.init();
+    expect(el.querySelector("canvas")).toBeNull();
+  });
+
   it("does nothing once destroyed while preparing", async () => {
     let finish!: (value: unknown) => void, fail!: (error: Error) => void;
     send.mockImplementationOnce(() => new Promise(resolve => finish = resolve));

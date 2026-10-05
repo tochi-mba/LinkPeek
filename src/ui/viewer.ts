@@ -9,7 +9,7 @@
 import type {Budget} from "../content/resource-governor";
 import {escapeHtml} from "../shared/dom";
 import {isFavorite, toggleFavorite} from "../shared/favorites";
-import {safeDownloadName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
+import {safeDownloadName, safeFolderName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
 import {DEFAULT_SETTINGS, type LinkPeekSettings, type ShortcutAction} from "../shared/settings";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {GestureController} from "./gesture";
@@ -28,7 +28,12 @@ export type View = markup.View;
 export type ViewerState = {view?: View; gridThumbSize?: number; expanded?: boolean; geometry?: Partial<Geometry>};
 
 /** Shortcut actions the viewer handles itself, in matching order. Link actions belong to the page. */
-const KEY_ACTIONS: readonly ShortcutAction[] = ["next", "previous", "grid", "expand", "pin", "favorite", "open", "download", "copy", "slideshow", "zoomIn", "zoomOut", "resetZoom", "help"];
+const KEY_ACTIONS: readonly ShortcutAction[] = [
+  "next", "previous", "grid", "expand", "pin", "favorite", "open", "openPage", "download", "downloadAll", "copy", "slideshow",
+  "fill", "rotate", "zoomIn", "zoomOut", "resetZoom", "help"
+];
+/** How long the first Shift+D waits for the second before forgetting it. */
+const CONFIRM_MS = 3000;
 const TOAST_MS = 900;
 const BUSY_AFTER_MS = 120;
 const ZOOM_STEP = 1.2;
@@ -78,18 +83,32 @@ export class Viewer {
   private favorite = false;
   private favoriteVersion = 0;
   private rejectedMedia = new Set<string>();
+  /** Degrees the current media is turned (R). */
+  private rotation = 0;
+  /** Filling the panel instead of fitting it (W). */
+  private filled = false;
+  private downloadAllUntil = 0;
+  private ringCycle = 0;
+  /** The hover countdown, beside the pointer; outside the panel so it shows before a preview opens. */
+  private ring = Object.assign(document.createElement("div"), {
+    className: "lp-ring",
+    innerHTML: `<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="lp-ring-track" cx="10" cy="10" r="8"/><circle class="lp-ring-arc" cx="10" cy="10" r="8" pathLength="100"/></svg>`
+  });
 
   /** `loadGifPlayer` defaults to the separately built gif-player.js, loaded only when a GIF is shown. */
   constructor(options: {budget: () => Budget; loadGifPlayer?: () => Promise<GifModule>}) {
     this.loadGifPlayer = options.loadGifPlayer ?? (() => import(chrome.runtime.getURL("gif-player.js")) as Promise<GifModule>);
     this.root.className = "lp-root";
-    this.shadow.append(Object.assign(document.createElement("style"), {textContent: overlayCss}), this.root);
+    this.shadow.append(Object.assign(document.createElement("style"), {textContent: overlayCss}), this.root, this.ring);
     document.documentElement.appendChild(this.host);
     this.preloader = new MediaPreloader(options.budget);
     this.geometry = new PanelGeometry(this.panel, () => this.persistState());
     this.panel.addEventListener("click", this.onPanelClick);
     this.panel.addEventListener("dblclick", this.onPanelDoubleClick);
     this.panel.addEventListener("pointerdown", this.onPanelPointerDown);
+    this.panel.addEventListener("mousedown", this.onPanelMouseDown);
+    this.panel.addEventListener("mouseup", this.onPanelMouseUp);
+    this.panel.addEventListener("auxclick", this.onPanelAuxClick);
     this.panel.addEventListener("mouseenter", () => this.cancelClose());
     this.panel.addEventListener("mouseleave", () => {
       if (!this.pinned && !this.geometry.manipulating && this.settings.activationMode !== "click") this.scheduleClose(this.settings.closeDelay);
@@ -132,6 +151,24 @@ export class Viewer {
     }
   }
 
+  /**
+   * Shows the hover countdown beside the pointer. It fills over `durationMs`;
+   * a ready (prepared) link shows in the signal colour. Alternating animation
+   * names restart the fill without forcing a layout.
+   */
+  showHoverRing(x: number, y: number, durationMs: number, ready: boolean) {
+    const ring = this.ring;
+    ring.style.left = `${x + 14}px`;
+    ring.style.top = `${y + 14}px`;
+    ring.style.setProperty("--lp-ring-ms", `${Math.max(1, durationMs)}ms`);
+    ring.dataset.cycle = String(this.ringCycle ^= 1);
+    ring.className = `lp-ring lp-on${ready ? " lp-ready" : ""}`;
+  }
+
+  hideHoverRing() {
+    this.ring.classList.remove("lp-on");
+  }
+
   scheduleClose(delayMs: number) {
     if (this.pinned) return;
     this.cancelClose();
@@ -161,7 +198,8 @@ export class Viewer {
     this.title = title;
     this.openX = x;
     this.openY = y;
-    this.resetZoom();
+    this.hideHoverRing();
+    this.resetView();
     this.expanded = this.remembered.expanded ?? settings.startExpanded;
     this.gridThumbSize = this.remembered.gridThumbSize ?? settings.thumbnailSize;
     this.view = this.remembered.view ?? settings.defaultView;
@@ -324,6 +362,18 @@ export class Viewer {
       case "post":
         if (item) window.open(action === "post" ? item.sourceUrl : item.originalUrl, "_blank", "noopener");
         return true;
+      case "openPage":
+        if (this.result) window.open(this.result.url, "_blank", "noopener");
+        return true;
+      case "downloadAll":
+        this.downloadAll();
+        return true;
+      case "fill":
+        this.toggleFill();
+        return true;
+      case "rotate":
+        this.rotate();
+        return true;
       case "download":
         if (item) this.download(item);
         return true;
@@ -340,7 +390,7 @@ export class Viewer {
         else this.applyZoom(action === "zoomIn" ? ZOOM_STEP : 1 / ZOOM_STEP, (this.stage?.clientWidth ?? 0) / 2, (this.stage?.clientHeight ?? 0) / 2);
         return true;
       case "resetZoom":
-        this.resetZoom();
+        this.resetView();
         this.paintTransform();
         return true;
       case "grid-smaller":
@@ -369,6 +419,31 @@ export class Viewer {
     this.geometry.place(this.openX, this.openY, this.settings);
     this.persistState();
     this.toast("Panel layout reset");
+  };
+
+  /** Stops middle-button autoscroll over the media, where middle-click opens the original instead. */
+  private onPanelMouseDown = (event: MouseEvent) => {
+    if (event.button === 1 && (event.target as Element).closest?.(".lp-stage, .lp-title")) event.preventDefault();
+  };
+
+  /** Mouse back/forward buttons step through the media instead of navigating the page. */
+  private onPanelMouseUp = (event: MouseEvent) => {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.perform(event.button === 3 ? "previous" : "next");
+  };
+
+  /** Middle-click: the media's original, or the linked page from the title, in a background tab. */
+  private onPanelAuxClick = (event: MouseEvent) => {
+    if (event.button !== 1) return;
+    const target = event.target as Element, item = this.result?.items[this.index];
+    const url = target.closest?.(".lp-title") ? this.result?.url : target.closest?.(".lp-stage") ? item?.originalUrl : undefined;
+    if (!url) return;
+    event.preventDefault();
+    chrome.runtime.sendMessage({type: "LINKPEEK_OPEN_TAB", url, active: false})
+      .then(() => this.toast("Opened in a background tab"))
+      .catch(() => window.open(url, "_blank", "noopener"));
   };
 
   private onPanelPointerDown = (event: PointerEvent) => {
@@ -530,13 +605,23 @@ export class Viewer {
     const at = this.result.items.findIndex(entry => entry.id === item.id);
     if (at < 0) return;
     this.rejectedMedia.add(item.id);
-    const items = this.result.items.filter(entry => entry.id !== item.id);
+    const items = this.result.items.filter(entry => entry.id !== item.id), wasCurrent = at === this.index;
     this.result = {...this.result, items};
-    this.navigationVersion++;
-    this.pendingIndex = null;
     if (at < this.index) this.index--;
-    else if (at === this.index) this.index = Math.min(this.index, Math.max(0, items.length - 1));
-    this.render();
+    this.index = Math.min(this.index, Math.max(0, items.length - 1));
+    if (!items.length) return this.render();
+    // Drop it in place: the grid keeps its scroll position and the stage keeps its listeners.
+    this.preloader.reset(items, this.index, this.settings);
+    if (this.view === "grid") {
+      this.grid?.setItems(items);
+      this.updateChrome();
+    } else if (wasCurrent) {
+      this.navigationVersion++;
+      this.pendingIndex = null;
+      this.showFocusMedia();
+    } else {
+      this.updateChrome();
+    }
   }
 
   /** Browser-decoded dimensions catch media whose HTML omitted or misstated width. */
@@ -626,7 +711,7 @@ export class Viewer {
     this.stage?.classList.remove("lp-busy");
     this.index = target;
     this.pendingIndex = null;
-    if (this.settings.resetZoomPerImage) this.resetZoom();
+    if (this.settings.resetZoomPerImage) this.resetView();
     this.showFocusMedia(!loaded);
     this.reportPosition();
   }
@@ -710,6 +795,60 @@ export class Viewer {
       .catch(() => this.toast("Download failed"));
   }
 
+  /** Downloads every original into one folder; the first press asks for a second within a few seconds. */
+  private downloadAll() {
+    const result = this.result;
+    if (!result?.items.length) return;
+    if (result.items.length === 1) return this.download(result.items[0]);
+    if (Date.now() > this.downloadAllUntil) {
+      this.downloadAllUntil = Date.now() + CONFIRM_MS;
+      this.toast(`Press again to download all ${result.items.length}`);
+      return;
+    }
+    this.downloadAllUntil = 0;
+    const items = result.items.map(item => ({url: item.originalUrl, filename: safeDownloadName(item)}));
+    chrome.runtime.sendMessage({type: "LINKPEEK_DOWNLOAD_ALL", folder: safeFolderName(this.headerTitle()), items})
+      .then((response: {error?: string; started?: number} | undefined) => {
+        const started = response?.error ? 0 : response?.started ?? items.length;
+        this.toast(!started ? "Downloads failed" : started < items.length ? `Downloading ${started} of ${items.length} files…` : `Downloading ${items.length} files…`);
+      })
+      .catch(() => this.toast("Downloads failed"));
+  }
+
+  /** The element the zoom and pan transform applies to. */
+  private mediaElement() {
+    return this.stage?.querySelector<HTMLElement>(".lp-image");
+  }
+
+  /** W: fill the panel (scroll to pan along the long side), or back to fitting it. */
+  private toggleFill() {
+    const media = this.mediaElement(), stage = this.stage;
+    if (this.view !== "focus" || !media || !stage?.clientWidth || !media.offsetWidth) return;
+    if (this.filled) {
+      this.resetZoom();
+      this.paintTransform();
+      this.toast("Fit");
+      return;
+    }
+    const turned = this.rotation % 180 !== 0, width = turned ? media.offsetHeight : media.offsetWidth, height = turned ? media.offsetWidth : media.offsetHeight;
+    this.zoom = Math.min(this.settings.maxZoom, Math.max(stage.clientWidth / width, stage.clientHeight / height));
+    // Start at the top-left corner; clamping then centres the axis that fits.
+    this.tx = -media.offsetLeft;
+    this.ty = -media.offsetTop;
+    this.filled = true;
+    this.paintTransform();
+    this.toast("Fill · scroll to pan");
+  }
+
+  /** R: a quarter turn clockwise. */
+  private rotate() {
+    if (this.view !== "focus" || !this.mediaElement()) return;
+    this.rotation = (this.rotation + 90) % 360;
+    this.resetZoom();
+    this.paintTransform();
+    this.toast(this.rotation ? `Rotated ${this.rotation}°` : "Upright");
+  }
+
   private async copyLink(item: MediaItem) {
     try {
       await navigator.clipboard.writeText(item.originalUrl);
@@ -722,6 +861,13 @@ export class Viewer {
   private resetZoom() {
     this.zoom = 1;
     this.tx = this.ty = 0;
+    this.filled = false;
+  }
+
+  /** Zoom, fill and rotation back to the media's natural fit. */
+  private resetView() {
+    this.resetZoom();
+    this.rotation = 0;
   }
 
   applyZoom(factor: number, x: number, y: number) {
@@ -747,6 +893,19 @@ export class Viewer {
     this.paintTransform();
   }
 
+  /**
+   * Keeps zoomed media covering the stage: it cannot be dragged past its own
+   * edges, and an axis that fits is centred. Skipped without layout or while turned.
+   */
+  private clampPan() {
+    const media = this.mediaElement(), stage = this.stage;
+    if (!media || !stage?.clientWidth || !media.offsetWidth || this.rotation || this.zoom <= 1) return;
+    const clampAxis = (offset: number, view: number, size: number, start: number) =>
+      size <= view ? (view - size) / 2 - start : Math.min(-start, Math.max(view - size - start, offset));
+    this.tx = clampAxis(this.tx, stage.clientWidth, media.offsetWidth * this.zoom, media.offsetLeft);
+    this.ty = clampAxis(this.ty, stage.clientHeight, media.offsetHeight * this.zoom, media.offsetTop);
+  }
+
   onDoubleClick(x: number, y: number) {
     const mode = this.settings.doubleClick;
     if (mode === "next") {
@@ -764,8 +923,16 @@ export class Viewer {
   }
 
   paintTransform() {
-    const media = this.stage?.querySelector<HTMLElement>(".lp-image");
+    this.clampPan();
+    const media = this.mediaElement(), holder = this.stage?.querySelector<HTMLElement>(".lp-media");
     if (media) media.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.zoom})`;
+    if (!holder || !this.stage) return;
+    // A quarter turn swaps the box the media fits into, so it still fits the stage once turned.
+    const turned = this.rotation % 180 !== 0;
+    holder.classList.toggle("lp-turned", turned);
+    holder.style.width = turned ? `${this.stage.clientHeight}px` : "";
+    holder.style.height = turned ? `${this.stage.clientWidth}px` : "";
+    holder.style.rotate = this.rotation ? `${this.rotation}deg` : "";
   }
 
   private async refreshFavorite() {

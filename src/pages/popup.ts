@@ -7,6 +7,7 @@ import {loadSettings, saveSettings, siteProfileFor, type LinkPeekSettings} from 
 let settings: LinkPeekSettings;
 let host = "";
 let status: TabStatus | undefined;
+let tabId: number | undefined;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -37,9 +38,13 @@ function render() {
   ($("enabled") as HTMLInputElement).checked = settings.enabled;
   $("site").textContent = host || "Not a web page";
   $("status").textContent = statusLine();
-  const pause = $("pauseSite") as HTMLButtonElement;
+  const pause = $("pauseSite") as HTMLButtonElement, inspector = $("inspector") as HTMLButtonElement;
   pause.hidden = !host;
   pause.textContent = pausedHere() ? "Resume here" : "Pause here";
+  // The inspector lives in the page, so it needs a page whose script answered.
+  inspector.hidden = !status;
+  inspector.textContent = status?.inspectorOpen ? "Hide inspector" : "Inspector";
+  inspector.setAttribute("aria-pressed", String(Boolean(status?.inspectorOpen)));
   renderSegments("mode", settings.performanceMode);
   renderSegments("open", settings.activationMode);
 }
@@ -79,11 +84,20 @@ async function togglePause() {
   await save();
 }
 
+async function toggleInspector() {
+  const answer = await chrome.tabs.sendMessage(tabId!, {type: "LINKPEEK_TOGGLE_INSPECTOR"}).catch(() => undefined) as {open: boolean} | undefined;
+  if (!answer || !status) return;
+  status = {...status, inspectorOpen: answer.open};
+  render();
+  if (answer.open) window.close();
+}
+
 async function start() {
   settings = await loadSettings();
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   if (tab?.url?.startsWith("http")) {
     host = new URL(tab.url).hostname;
+    tabId = tab.id;
     status = await chrome.tabs.sendMessage(tab.id!, {type: "LINKPEEK_STATUS"}).catch(() => undefined) as TabStatus | undefined;
   }
   render();
@@ -95,6 +109,7 @@ $("enabled").addEventListener("change", event => {
   void save();
 });
 $("pauseSite").addEventListener("click", () => void togglePause());
+$("inspector").addEventListener("click", () => void toggleInspector());
 document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
   settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};
   void save();

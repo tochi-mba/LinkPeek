@@ -346,6 +346,29 @@ describe("GIF bytes, downloads and housekeeping", () => {
     expect((await send({type: "LINKPEEK_DOWNLOAD", url: "https://x.test/c.jpg"})).value).toEqual({error: "Download blocked"});
   });
 
+  it("uses the default GIF size limit when none is given", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => bytes(1)));
+    expect((await send({type: "LINKPEEK_FETCH_BINARY", url: "https://x.test/limit.gif", maxMb: Number.NaN})).value.bytes).toBe(1);
+  });
+
+  it("downloads a whole gallery into one folder, numbered in order, two at a time", async () => {
+    const download = chrome.downloads.download as ReturnType<typeof vi.fn>;
+    const items = Array.from({length: 10}, (_, i) => ({url: `https://x.test/${i}.jpg`, filename: `${i}.jpg`}));
+    download.mockRejectedValueOnce(new Error("Invalid filename")).mockRejectedValueOnce(new Error("blocked")).mockRejectedValueOnce(new Error("blocked"));
+    expect((await send({type: "LINKPEEK_DOWNLOAD_ALL", folder: "Trip", items})).value).toEqual({started: 9, failed: 1});
+    const names = download.mock.calls.map(([options]) => options.filename);
+    expect(names).toContain("Trip/01 0.jpg");
+    expect(names).toContain("Trip/10 9.jpg");
+    expect(download).toHaveBeenCalledTimes(12);
+  });
+
+  it("opens a background tab right after the page's own tab", async () => {
+    expect((await send({type: "LINKPEEK_OPEN_TAB", url: "https://x.test/a.jpg"}, {tab: {id: 3, index: 4}})).value).toEqual({ok: true});
+    expect(created.at(-1)).toEqual({url: "https://x.test/a.jpg", active: false, index: 5, openerTabId: 3});
+    await send({type: "LINKPEEK_OPEN_TAB", url: "https://x.test/b.jpg", active: true}, {});
+    expect(created.at(-1)).toEqual({url: "https://x.test/b.jpg", active: true, index: undefined, openerTabId: undefined});
+  });
+
   it("clears every cache on request and ignores unknown messages", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => bytes(1)));
     await send({type: "LINKPEEK_SCAN", url: "https://x.test/p", kind: "generic", token: "a"});

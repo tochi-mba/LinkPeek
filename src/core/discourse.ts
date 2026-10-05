@@ -35,10 +35,10 @@ function topicJsonUrl(raw: string) {
 
 async function fetchText(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {
   ensureNotAborted(signal);
-  return fetchWithRetry(url, {credentials: "include", redirect: "follow", signal}, retryMode, undefined, async response => {
+  return fetchWithRetry(url, {credentials: "include", redirect: "follow", signal}, {mode: retryMode, read: async response => {
     if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
     return response.text();
-  });
+  }});
 }
 
 async function fetchJson(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {

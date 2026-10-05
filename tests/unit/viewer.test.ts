@@ -1037,3 +1037,203 @@ describe("toasts", () => {
     viewer.toast("gone");
   });
 });
+
+/** jsdom has no layout: give the stage and the image fixed boxes. */
+function layout(stage: {width: number; height: number}, media: {width: number; height: number; left: number; top: number}) {
+  const define = (el: Element, values: Record<string, number>) => {
+    for (const [key, value] of Object.entries(values)) Object.defineProperty(el, key, {configurable: true, value});
+  };
+  define(q(".lp-stage")!, {clientWidth: stage.width, clientHeight: stage.height});
+  define(q(".lp-image")!, {offsetWidth: media.width, offsetHeight: media.height, offsetLeft: media.left, offsetTop: media.top});
+}
+const transform = () => q(".lp-image")!.style.transform;
+const send = () => chrome.runtime.sendMessage as unknown as ReturnType<typeof vi.fn>;
+
+describe("one-handed extras", () => {
+  it("shows the hover countdown beside the pointer, restarting its fill each time, and hides it", () => {
+    const ring = viewer.host.shadowRoot!.querySelector<HTMLElement>(".lp-ring")!;
+    viewer.showHoverRing(100, 50, 300, false);
+    expect([ring.style.left, ring.style.top, ring.style.getPropertyValue("--lp-ring-ms"), ring.className]).toEqual(["114px", "64px", "300ms", "lp-ring lp-on"]);
+    const cycle = ring.dataset.cycle;
+    viewer.showHoverRing(100, 50, 0, true);
+    expect([ring.dataset.cycle !== cycle, ring.className, ring.style.getPropertyValue("--lp-ring-ms")]).toEqual([true, "lp-ring lp-on lp-ready", "1ms"]);
+    viewer.hideHoverRing();
+    expect(ring.classList.contains("lp-on")).toBe(false);
+    viewer.showHoverRing(0, 0, 300, false);
+    open();
+    expect(ring.classList.contains("lp-on")).toBe(false);
+  });
+
+  it("steps through media with the mouse's back and forward buttons", async () => {
+    open().show(result(3));
+    const up = (button: number) => {
+      const event = new MouseEvent("mouseup", {button, bubbles: true, cancelable: true});
+      q(".lp-stage")!.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(up(4)).toBe(true);
+    await flush();
+    expect(count()).toBe("2 / 3");
+    expect(up(3)).toBe(true);
+    await flush();
+    expect(count()).toBe("1 / 3");
+    expect(up(0)).toBe(false);
+  });
+
+  it("opens the original or the page in a background tab on middle-click", async () => {
+    open().show(result(2));
+    const middle = (selector: string, type = "auxclick", button = 1) => {
+      const event = new MouseEvent(type, {button, bubbles: true, cancelable: true});
+      q(selector)!.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(middle(".lp-stage", "mousedown")).toBe(true);
+    expect(middle(".lp-foot", "mousedown")).toBe(false);
+    expect(middle(".lp-stage")).toBe(true);
+    await flush();
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_OPEN_TAB", url: "https://x.test/o0", active: false});
+    expect(toast()).toBe("Opened in a background tab");
+    middle(".lp-title");
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_OPEN_TAB", url: "https://forum.test/t/a/1", active: false});
+    expect(middle(".lp-foot")).toBe(false);
+    expect(middle(".lp-stage", "auxclick", 2)).toBe(false);
+    send().mockRejectedValueOnce(new Error("gone"));
+    middle(".lp-stage");
+    await flush();
+    expect(window.open).toHaveBeenCalledWith("https://x.test/o0", "_blank", "noopener");
+  });
+
+  it("fills the panel along the long side, pans within it, and fits again", () => {
+    open().show(result(1));
+    layout({width: 400, height: 300}, {width: 100, height: 300, left: 150, top: 0});
+    press("w");
+    expect([viewer.zoom, transform(), toast()]).toEqual([4, "translate(-150px, 0px) scale(4)", "Fill · scroll to pan"]);
+    viewer.pan(0, -500);
+    expect(viewer.ty).toBe(-500);
+    viewer.pan(30, -1000);
+    expect([viewer.tx, viewer.ty]).toEqual([-150, -900]);
+    press("w");
+    expect([viewer.zoom, toast()]).toEqual([1, "Fit"]);
+    layout({width: 400, height: 300}, {width: 400, height: 100, left: 0, top: 100});
+    press("w");
+    expect(transform()).toBe("translate(0px, -100px) scale(3)");
+  });
+
+  it("does not fill without a laid-out image or outside single view", () => {
+    open().show(result(1));
+    press("w");
+    expect(viewer.zoom).toBe(1);
+    press("g");
+    press("w");
+    expect(viewer.zoom).toBe(1);
+  });
+
+  it("rotates a quarter turn at a time, swapping the box so the media still fits", () => {
+    open().show(result(1));
+    layout({width: 400, height: 300}, {width: 400, height: 100, left: 0, top: 100});
+    viewer.applyZoom(2, 0, 0);
+    press("r");
+    const holder = q(".lp-media")!;
+    expect([viewer.zoom, holder.classList.contains("lp-turned"), holder.style.width, holder.style.height, holder.style.rotate, toast()])
+      .toEqual([1, true, "300px", "400px", "90deg", "Rotated 90°"]);
+    // Turned media fills along its new long side and pans freely.
+    press("w");
+    expect(viewer.zoom).toBe(4);
+    viewer.pan(5000, 5000);
+    expect(viewer.tx).toBe(5000);
+    press("r");
+    expect([holder.classList.contains("lp-turned"), holder.style.width]).toEqual([false, ""]);
+    press("r");
+    press("r");
+    expect([holder.style.rotate, toast()]).toEqual(["", "Upright"]);
+    press("r");
+    press("0");
+    expect(holder.style.rotate).toBe("");
+    press("g");
+    press("r");
+    expect(viewer.view).toBe("grid");
+  });
+
+  it("keeps zoomed media covering the stage and centres an axis that fits", () => {
+    open().show(result(1));
+    layout({width: 400, height: 300}, {width: 400, height: 100, left: 0, top: 100});
+    viewer.applyZoom(2, 0, 0);
+    expect(viewer.ty).toBe(-50);
+    viewer.pan(-1000, 0);
+    expect(viewer.tx).toBe(-400);
+    viewer.pan(5000, 0);
+    expect(transform()).toBe("translate(0px, -50px) scale(2)");
+  });
+
+  it("downloads the whole gallery into one folder after a second press", async () => {
+    open().show(result(3, {title: "My: Trip"}));
+    press("D", {shiftKey: true});
+    expect(toast()).toBe("Press again to download all 3");
+    expect(messages).toEqual([]);
+    press("D", {shiftKey: true});
+    await flush();
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_DOWNLOAD_ALL", folder: "My Trip", items: [0, 1, 2].map(n => ({url: `https://x.test/o${n}`, filename: `f${n}`}))});
+    expect(toast()).toBe("Downloading 3 files…");
+  });
+
+  it("asks again after a pause, reports failures, and downloads a single item directly", async () => {
+    open().show(result(2));
+    press("D", {shiftKey: true});
+    vi.advanceTimersByTime(3001);
+    press("D", {shiftKey: true});
+    expect(toast()).toBe("Press again to download all 2");
+    send().mockResolvedValueOnce({error: "blocked"});
+    press("D", {shiftKey: true});
+    await flush();
+    expect(toast()).toBe("Downloads failed");
+    for (const [answer, message] of [[{started: 1, failed: 1}, "Downloading 1 of 2 files…"], [{started: 0, failed: 2}, "Downloads failed"]] as const) {
+      press("D", {shiftKey: true});
+      send().mockResolvedValueOnce(answer);
+      press("D", {shiftKey: true});
+      await flush();
+      expect(toast()).toBe(message);
+    }
+    press("D", {shiftKey: true});
+    send().mockRejectedValueOnce(new Error("gone"));
+    press("D", {shiftKey: true});
+    await flush();
+    expect(toast()).toBe("Downloads failed");
+    open().show(result(1));
+    press("D", {shiftKey: true});
+    await flush();
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_DOWNLOAD", url: "https://x.test/o0", filename: "f0"});
+    open().show(result(0));
+    expect(press("D", {shiftKey: true})).toBe(true);
+  });
+
+  it("opens the linked page itself", () => {
+    open();
+    press("O", {shiftKey: true});
+    expect(window.open).not.toHaveBeenCalled();
+    open().show(result(1));
+    press("O", {shiftKey: true});
+    expect(window.open).toHaveBeenCalledWith("https://forum.test/t/a/1", "_blank", "noopener");
+  });
+
+  it("skips the width check while a decoded image is still on its way", () => {
+    open({minWidth: 50});
+    preloader().isReady.mockReturnValue(true);
+    viewer.show({...result(1), items: [item(0, "image", {previewUrl: "https://x.test/o0"})]});
+    expect([q(".lp-image"), viewer.result!.items]).toEqual([null, [expect.objectContaining({id: "i0"})]]);
+  });
+
+  it("checks an image that was already decoded before the check began", () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(10);
+    open({minWidth: 50}).show({...result(1), items: [item(0, "image", {previewUrl: "https://x.test/o0"})]});
+    expect(q(".lp-empty")).not.toBeNull();
+  });
+
+  it("shows the empty state when the last item turns out too narrow", () => {
+    open({minWidth: 50}).show({...result(1), items: [item(0, "image", {previewUrl: "https://x.test/o0"})]});
+    const image = q<HTMLImageElement>(".lp-image")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 10});
+    image.dispatchEvent(new Event("load"));
+    expect(q(".lp-empty")).not.toBeNull();
+  });
+});

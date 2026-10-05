@@ -10,7 +10,7 @@ import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/disco
 import {scanGeneric} from "./core/generic";
 import {fetchWithRetry, readBytesCapped} from "./core/http";
 import type {LinkKind, ScanResult} from "./shared/media";
-import type {BackgroundRequest, ScanRequest} from "./shared/messages";
+import type {BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
 
 type CachedScan = {at: number; scanKey: string; result: ScanResult; seed?: DiscourseSeed};
@@ -70,7 +70,7 @@ function bytesToBase64(buffer: ArrayBuffer) {
 
 /** Fetches media bytes for the GIF frame player, which cannot read cross-origin pixels itself. */
 function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
-  const maxBytes = Math.max(1, Math.min(100, Number.isFinite(maxMb) ? maxMb : 32)) * 1024 * 1024;
+  const maxBytes = Math.max(1, Math.min(100, maxMb)) * 1024 * 1024;
   const key = url;
   const withinLimit = (entry: BinaryEntry) => {
     if (entry.bytes > maxBytes) throw new Error("GIF is larger than the configured frame-control limit");
@@ -84,11 +84,11 @@ function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
     const parsed = new URL(url);
     if (!/^https?:$/.test(parsed.protocol)) throw new Error("Unsupported media URL");
     const tooLarge = "GIF is larger than the configured frame-control limit";
-    const entry = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, "interactive", undefined, async response => {
+    const entry = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, {read: async response => {
     if (!response.ok) throw new Error(`HTTP ${response.status} for media`);
     const buffer = await readBytesCapped(response, maxBytes, tooLarge);
     return {base64: bytesToBase64(buffer), mime: response.headers.get("content-type") || "application/octet-stream", bytes: buffer.byteLength};
-    });
+    }});
     binaries.set(key, entry, entry.bytes, BINARY_BUDGET);
     return entry;
   })().finally(() => binaryTasks.delete(key));
@@ -215,6 +215,24 @@ async function download(url: string, filename?: string) {
   }
 }
 
+/** Two at a time, numbered in gallery order, into one folder; reports how many were refused. */
+async function downloadAll(msg: DownloadAllRequest) {
+  const width = String(msg.items.length).length;
+  let next = 0, failed = 0;
+  const worker = async () => {
+    while (next < msg.items.length) {
+      const index = next++, item = msg.items[index], number = String(index + 1).padStart(width, "0");
+      try {
+        await download(item.url, `${msg.folder}/${number} ${item.filename}`);
+      } catch {
+        failed++;
+      }
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  return {started: msg.items.length - failed, failed};
+}
+
 function respond(work: Promise<unknown>, sendResponse: (response: unknown) => void, onError: (error: Error) => unknown = error => ({error: error.message})) {
   work.then(sendResponse, (error: Error) => sendResponse(onError(error)));
   return true;
@@ -247,6 +265,10 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(fetchBinary(msg.url, Number(msg.maxMb) || 32), sendResponse);
     case "LINKPEEK_DOWNLOAD":
       return respond(download(msg.url, msg.filename).then(id => ({id})), sendResponse);
+    case "LINKPEEK_DOWNLOAD_ALL":
+      return respond(downloadAll(msg), sendResponse);
+    case "LINKPEEK_OPEN_TAB":
+      return respond(chrome.tabs.create({url: msg.url, active: Boolean(msg.active), index: sender.tab ? sender.tab.index + 1 : undefined, openerTabId: sender.tab?.id}).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_CLEAR_CACHE":
       scans.clear();
       binaries.clear();
