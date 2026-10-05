@@ -150,14 +150,14 @@ export class LinkPrefetcher {
       this.childIdleHandle = undefined;
       const current = this.host.budget();
       if (!current.speculative || current.nearbyLinks <= 0) return;
-      const count = Math.min(this.childQueue.size, Math.max(1, Math.min(current.nearbyLinks, current.linkConcurrency * 2)));
+      const count = Math.min(this.childQueue.size, Math.max(1, Math.min(current.nearbyLinks, current.linkConcurrency)));
       const urls = [...this.childQueue].slice(0, count);
       for (const url of urls) {
         this.childQueue.delete(url);
         const anchor = document.createElement("a");
         anchor.href = url;
         const settings = this.host.settingsFor(anchor);
-        if (settings) void this.prepareUrl(url, settings, "shallow", false, false);
+        if (settings) void this.prepareUrl(url, settings, "deep", false, false);
       }
       if (this.childQueue.size) this.scheduleChildWork();
     }, {timeout: 1500});
