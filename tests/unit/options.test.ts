@@ -166,6 +166,35 @@ describe("the settings page", () => {
   });
 });
 
+describe("what has been seen", () => {
+  it("shows how much is remembered and forgets it all on request", async () => {
+    const button = () => field("skipSeenMedia").querySelector<HTMLButtonElement>("[data-forget-seen]")!;
+    vi.resetModules();
+    loadPage("options.html");
+    harness = stubExtension({});
+    harness.store["seenMedia:a"] = ["a1", "a2"];
+    harness.store["seenMedia:b"] = "corrupt";
+    await import("../../src/pages/options");
+    await settle();
+    expect([button().textContent, button().disabled]).toEqual(["Forget what I have seen (2)", false]);
+    await click(button());
+    expect(harness.store["seenMedia:a"]).toBeUndefined();
+    expect([button().textContent, button().disabled]).toEqual(["Nothing remembered yet", true]);
+    expect(document.querySelector("#saved")!.textContent).toBe("Forgot everything you have seen");
+  });
+
+  it("opens even when what was seen cannot be counted", async () => {
+    vi.resetModules();
+    loadPage("options.html");
+    harness = stubExtension({});
+    const get = harness.chrome.storage.local.get;
+    harness.chrome.storage.local.get = vi.fn(async (keys: string | string[]) => Array.isArray(keys) && keys[0].startsWith("seenMedia:") ? Promise.reject(new Error("gone")) : get(keys));
+    await import("../../src/pages/options");
+    await settle();
+    expect(field("skipSeenMedia").querySelector("[data-forget-seen]")!.textContent).toBe("Nothing remembered yet");
+  });
+});
+
 describe("the shortcut editor", () => {
   const row = (label: string) => [...document.querySelectorAll(".shortcut-row")].find(el => el.querySelector(".shortcut-label")!.textContent === label)!;
 

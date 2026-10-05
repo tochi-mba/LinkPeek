@@ -128,7 +128,17 @@ describe("the preload inspector", () => {
     window.dispatchEvent(new Event("resize"));
     expect(frames).toHaveLength(1);
     frames.shift()!();
-    expect(q<HTMLElement>(inspector, ".pi-page-gif")!.style.left).toBe("148px");
+    const badge = q<HTMLElement>(inspector, ".pi-page-gif")!;
+    expect(badge.style.left).toBe("148px");
+    // Reused while the link stays in view, removed once it scrolls away.
+    left = 200;
+    window.dispatchEvent(new Event("scroll"));
+    frames.shift()!();
+    expect([q(inspector, ".pi-page-gif"), badge.style.left]).toEqual([badge, "248px"]);
+    left = -400;
+    window.dispatchEvent(new Event("scroll"));
+    frames.shift()!();
+    expect(q(inspector, ".pi-page-gif")).toBeNull();
 
     inspector.close();
     window.dispatchEvent(new Event("scroll"));
@@ -228,6 +238,16 @@ describe("the preload inspector", () => {
     expect(q(inspector, ".pi-list")).toBeNull();
     q<HTMLButtonElement>(inspector, '[data-action="minimize"]')!.click();
     expect(q(inspector, ".pi-list")).not.toBeNull();
+  });
+
+  it("lists links that were checked and had no media", () => {
+    entries = [entry("a", "empty")];
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    const group = q<HTMLDetailsElement>(inspector, '[data-group="empty"]')!;
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+    expect([q(inspector, '[data-group="empty"] summary')!.textContent, q(inspector, '[data-group="empty"] .pi-state')!.textContent]).toEqual(["No media1", "no media"]);
   });
 
   it("shows how long until a link is retried", () => {
