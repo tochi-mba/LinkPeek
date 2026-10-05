@@ -245,8 +245,28 @@ export class PreviewController {
     event.stopPropagation();
   }
 
-  /** Opens the next (or previous) page link whose gallery is already prepared, in document order. */
+  /** Opens the next link in a recursively fetched child page, when the current media came from one. */
+  private openAdjacentRecursive(direction: 1 | -1) {
+    const result = this.viewer.result, item = result?.items[this.viewer.index];
+    if (!result || !item || item.sourceUrl === result.url) return false;
+    const context = result.linkContexts?.find(entry => entry.sourceUrl === item.sourceUrl);
+    if (!context?.links.length) return false;
+    const current = this.openUrl;
+    const index = current ? context.links.indexOf(current) : -1;
+    const url = context.links[index < 0 ? (direction > 0 ? 0 : context.links.length - 1) : (index + direction + context.links.length) % context.links.length];
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.textContent = new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname;
+    if (!this.settingsFor(anchor)) return false;
+    this.intent.setCurrent(anchor);
+    this.viewer.cancelClose();
+    void this.activate(anchor, clamp(innerWidth / 2, 8, innerWidth - 8), clamp(innerHeight / 2, 8, innerHeight - 8));
+    return true;
+  }
+
+  /** Opens the next (or previous) link in the active browsing context. */
   openAdjacentPrepared(direction: 1 | -1) {
+    if (this.openAdjacentRecursive(direction)) return true;
     const anchors = this.prefetcher.preparedAnchors();
     const current = this.openUrl ?? this.intent.currentAnchor?.href ?? null;
     const index = anchors.findIndex(anchor => anchor.href === current);
