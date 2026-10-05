@@ -169,6 +169,7 @@ describe("Viewer runtime",()=>{
     await tick();await tick();expect(prepare).toHaveBeenCalled();
     await (v as any).mountGif(v.result!.items[0],(v as any).renderVersion);expect(fakePlayer.init).toHaveBeenCalled();
     await (v as any).mountGif(v.result!.items[0],-1);
+    (v as any).gifModulePromise=Promise.reject(new Error("stale GIF module"));await (v as any).mountGif(v.result!.items[0],-1);
 
     (v as any).gifModulePromise=Promise.resolve({GifPlayer:class{constructor(){throw new Error("boom")}},prepareGif:vi.fn(async()=>{})});
     await (v as any).mountGif(v.result!.items[0],(v as any).renderVersion);expect(v.panel.textContent).toContain("Native GIF playback");
