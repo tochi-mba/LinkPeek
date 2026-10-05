@@ -44,6 +44,8 @@ To update, replace the folder's contents with a new download and press reload on
 
 Clicking a `.crx` on a website makes the browser try to install it, and it rejects self-hosted packages with `CRX_REQUIRED_PROOF_MISSING`: only web stores supply that proof. That is why the site offers a ZIP.
 
+The install section detects the browser. Helium and other Chromium builds without Google's branding can install with a click instead: set `chrome://flags/#extension-mime-request-handling` to *Always prompt for install*, restart, and click **Install LinkPeek**. Firefox, Safari and phones are told LinkPeek needs desktop Chromium.
+
 For a stable extension identity across packaged releases, configure the repository secret `LINKPEEK_CRX_KEY_B64` with the base64-encoded PEM private key used to package the CRX. The Pages workflow signs the CRX with it and writes its public key into the unpacked copy, so both installs share one extension ID. Without the secret, the CRX's ID changes between builds; an unpacked install keeps its ID as long as it stays in the same folder.
 
 ## Development
