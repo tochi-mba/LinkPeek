@@ -25,7 +25,7 @@ async function launchExtension():Promise<{context:BrowserContext;profile:string}
 }
 async function closeExtension(context:BrowserContext,profile:string){
   await Promise.race([context.close(),new Promise<void>(resolve=>setTimeout(resolve,5_000))]);
-  await rm(profile,{recursive:true,force:true});
+  await rm(profile,{recursive:true,force:true,maxRetries:20,retryDelay:250});
 }
 async function wheelStage(page:Page,deltaY:number){
   await page.evaluate(delta=>{
@@ -91,7 +91,7 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
   const {context,profile}=await launchExtension();
   try{
     const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
-    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("Demo thread")),null,{timeout:12_000});
+    await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("3 media")),null,{timeout:12_000});
     const panel=page.locator(".lp-panel");await page.waitForTimeout(220);
     const beforePosition=await panel.evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top}));
     const before=await panel.boundingBox();expect(before).toBeTruthy();
