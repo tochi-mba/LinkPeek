@@ -3,15 +3,23 @@
   "slug": "linkpeek",
   "name": "LinkPeek",
   "tagline": "See the media behind a link without leaving the page.",
-  "description": "A touchpad-first Chromium and Helium extension that turns links into fast media previews. It classifies destinations, understands Discourse threads, prefers original uploads over page chrome, and gives one-handed gallery navigation without making you leave the page.\n\nInteractive onboarding, searchable settings, presets, per-site profiles, privacy controls and a REX Technologies GitHub Pages install site ship with the extension.",
+  "description": "A one-handed Chromium and Helium extension that turns links into instant media previews. It classifies destinations, understands Discourse threads, prefers original uploads over page chrome, and prepares the links you are likely to hover next within a budget that adapts to the device and backs off when the page is busy.\n\nEvery action has a one-handed path: touchpad gestures, mouse side buttons, middle-click to a background tab, fill, rotate and whole-gallery downloads. A preload inspector outlines what is ready, and searchable settings, per-site profiles and privacy controls ship with a REX Technologies GitHub Pages install site.",
   "highlights": [
     "Whole-thread Discourse media extraction with original/preview pairing and deduplication",
-    "One-handed touchpad browsing, scrub and zoom controls",
-    "Deep searchable settings with presets and per-site overrides",
-    "Direct CRX build and GitHub Pages distribution pipeline",
-    "Browser-level Playwright E2E coverage for the packaged extension"
+    "Adaptive link preparation driven by device tier and live page headroom",
+    "One-handed browsing: gestures, mouse buttons, hover countdown and switch protection",
+    "Preload inspector with colour-coded link outlines and priority controls",
+    "Searchable settings that store only changes, with per-site overrides",
+    "100% unit coverage plus Playwright E2E tests against the packaged extension"
   ],
-  "stack": ["TypeScript", "Manifest V3", "Chromium", "Playwright", "GitHub Actions", "GitHub Pages"],
+  "stack": [
+    "TypeScript",
+    "Manifest V3",
+    "Chromium",
+    "Playwright",
+    "GitHub Actions",
+    "GitHub Pages"
+  ],
   "category": "product",
   "status": "active",
   "featured": true,

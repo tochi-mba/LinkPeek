@@ -29,6 +29,18 @@ The viewer is a focus-first gallery with optional grid mode. Its gesture control
 
 Zoom is centered around the pointer and the transform stays local to the current media item.
 
+## Preparing links before they are opened
+
+`ResourceGovernor` turns the device tier (memory, cores) and live headroom (long tasks, compute pressure, battery, heap, slow connections) into a `Budget`: how many nearby links to prepare, how many requests at once, how many thumbnails, how much decoded memory. Auto mode recomputes it as conditions change, so preparation backs off on its own when the page is busy.
+
+`LinkPrefetcher` ranks visible links by distance from the pointer and the direction it is heading, and prepares the best few when the browser is idle. Hovered links get an urgent slot. A generation counter drops work from before a page change, waiting work is capped, and failures back off before being retried. When a gallery was built from linked pages, it also prepares the neighbours of the linked page being viewed so N is instant.
+
+`PreloadInspector` is a read-only view of that state: it redraws at most every 200 ms, only when something changed, and rewrites outline attributes only on links whose state changed. Raising a link's priority goes back through the prefetcher.
+
+## Requests
+
+`core/http.ts` gives every request a per-attempt timeout that also covers reading the body. Requests someone is waiting on are retried a couple of times on network errors and 408/429/502/503/504, honouring `Retry-After`, within a short time budget. Background preparation never retries. Page bodies are read with a byte cap.
+
 ## Media model
 
 Every `MediaItem` carries:
@@ -45,7 +57,7 @@ Deduplication happens after extraction and before UI rendering.
 
 ## Settings
 
-`LinkPeekSettings` is the single source of truth for behavior. Global settings are overlaid by exact-host or wildcard site profiles. Presets only write settings; they are not separate runtime modes.
+`LinkPeekSettings` is the single source of truth for behavior. Storage keeps only the values that differ from the defaults (settings version 2; older full copies are migrated), so improved defaults reach everyone who never changed them. Every value is validated against its allowed choices or range. Global settings are overlaid by exact-host or wildcard site profiles.
 
 ## Release
 

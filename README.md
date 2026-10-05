@@ -16,6 +16,12 @@ It is designed around one-handed touchpad use: two-finger browse, horizontal scr
 - deduplicates repeated media
 - renders its UI inside Shadow DOM so page CSS cannot break it
 - gives trackpads first-class navigation, zoom and scrub behavior
+- keeps every action under one hand: mouse back/forward buttons step through media, middle-click opens the original in a background tab, W fills the panel, R rotates, Shift+D downloads the whole gallery into one folder
+- shows a small countdown ring beside the pointer while a link arms, lit when its gallery is already prepared
+- won't switch previews when the pointer crosses another link on the way into the panel
+- prepares the links you are likely to hover next, scaled to the device and eased off when the page is busy
+- has a preload inspector (Ctrl+X, then X) that outlines every link by state and lets you raise a link's priority
+- steps through a linked page's own list with N when a gallery came from linked pages
 - ships interactive onboarding, persistent controls help and searchable settings
 - supports presets and per-site profiles
 - stores preferences locally and has no LinkPeek account, analytics backend or ad service
@@ -66,23 +72,36 @@ Load `dist/` as an unpacked extension for local development.
 
 ```text
 src/
-  background.ts        browser-side fetch/scanning service
-  content.ts           hover intent, link interception and prefetch orchestration
+  background.ts          service worker: scans, caches, GIF bytes, downloads, tabs
+  content.ts             content-script entry
+  content/
+    controller.ts        wires intent, preparation, the viewer and the inspector
+    hover-intent.ts      when a hover means "open", switch protection, countdown
+    link-prefetcher.ts   prepares likely links within the resource budget
+    resource-governor.ts device tier and live headroom -> budget
+    preload-inspector.ts bottom-left inspector and link outlines
+    image-warmer.ts      thumbnail warming
   core/
-    discourse.ts       Discourse whole-thread adapter
-    generic.ts         generic HTML/direct-media adapter
-    extract.ts         media extraction + deduplication
+    http.ts              timeouts, short retries, capped reads
+    discourse.ts         Discourse whole-thread adapter
+    generic.ts           generic HTML/direct-media adapter and linked-page search
+    extract.ts           media extraction + deduplication
   shared/
-    media.ts           shared media/link types
-    settings.ts        complete settings model, presets and site overrides
-    theme.ts           REX Technologies ink/signal tokens
+    media.ts             media/link types and helpers
+    settings.ts          settings model, validation, shortcuts and site profiles
+    settings-migration.ts
+    theme.ts             REX Technologies ink/signal tokens
   ui/
-    viewer.ts          Shadow-DOM peek/gallery
-    gesture.ts         trackpad gesture state machine
-    styles.ts          injected viewer UI
+    viewer.ts            Shadow-DOM preview/gallery
+    viewer-markup.ts     viewer HTML, help sheet
+    virtual-grid.ts      grid view that renders only visible tiles
+    gesture.ts           trackpad gesture state machine
+    gif-player.ts        frame-accurate GIF playback
+    media-preloader.ts   decoded-media window around the current item
+    styles.ts            injected viewer UI
   pages/
     popup.ts
-    options.ts
+    options.ts, settings-schema.ts
     onboarding.ts
 site/                  GitHub Pages product/help/privacy site
 tests/
