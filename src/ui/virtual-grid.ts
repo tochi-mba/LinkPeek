@@ -113,8 +113,8 @@ export class VirtualGrid {
 
   private onLoad = (event: Event) => {
     const image = event.target as HTMLImageElement;
-    const tile = image.closest?.<HTMLElement>(".lp-thumb");
-    if (tile && image.naturalWidth) this.options.onWidth?.(Number(tile.dataset.i), image.naturalWidth);
+    const tile = image.closest?.<HTMLElement>(".lp-thumb"), index = Number(tile?.dataset.i);
+    if (tile && this.items[index]?.type !== "video" && image.naturalWidth) this.options.onWidth?.(index, image.naturalWidth);
   };
 
   private schedule() {
