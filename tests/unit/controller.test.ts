@@ -561,7 +561,7 @@ describe("keyboard", () => {
     await flush();
     expect(viewer.result!.url).toBe(fresh);
     expect(viewer.result!.items.map((item: any) => item.sourceUrl)).toEqual([fresh]);
-    expect(viewer.openLoading).toHaveBeenLastCalledWith(35, 760, expect.anything(), "fresh", undefined);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(innerWidth / 2, innerHeight / 2, expect.anything(), "fresh", undefined);
 
     // The recursive child's own list becomes the active N context.
     key("n");
