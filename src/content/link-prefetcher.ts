@@ -37,6 +37,8 @@ export interface PreloadEntry {
   priority: PreloadPriority;
   /** "linked": not on this page, but next in a linked page's list (see warmAround). */
   source: "page" | "linked";
+  /** True once LinkPeek knows this destination contains at least one GIF. */
+  hasGif: boolean;
   retryAt?: number;
   title?: string;
 }
@@ -190,10 +192,15 @@ export class LinkPrefetcher {
   /** Every link on the page, then linked-page links prepared ahead, with their state. One entry per URL. */
   snapshot(): PreloadEntry[] {
     const entries = new Map<string, PreloadEntry>();
-    const add = (url: string, label: string, source: PreloadEntry["source"]) => entries.set(url, {
-      url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url))),
-      priority: this.priorities.get(url) ?? "normal", retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
-    });
+    const add = (url: string, label: string, source: PreloadEntry["source"]) => {
+      const result = this.results.get(url);
+      entries.set(url, {
+        url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url))),
+        priority: this.priorities.get(url) ?? "normal",
+        hasGif: result?.items.some(item => item.type === "gif") ?? (classifyLink(url) === "direct-image" && /\.gif(?:$|[?#])/i.test(url)),
+        retryAt: this.failedUntil.get(url), title: result?.title
+      });
+    };
     for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
       if (!entries.has(anchor.href)) add(anchor.href, anchor.text.trim() || anchor.href, "page");
     }
