@@ -10,7 +10,7 @@ import type {LinkContext, MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
-import {fetchWithRetry} from "./http";
+import {fetchWithRetry, type RetryMode} from "./http";
 
 type PageScan = {finalUrl: string; title?: string; items: MediaItem[]; html?: string; direct?: "direct-image" | "direct-video"};
 
@@ -55,14 +55,11 @@ function directItem(response: Response, requested: string, type: MediaItem["type
   return {id: response.url, type, originalUrl: response.url, previewUrl: response.url, sourceUrl: requested, filename: new URL(response.url).pathname.split("/").pop(), score: 1};
 }
 
-async function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string): Promise<PageScan> {
-  const controller = new AbortController(), abort = () => controller.abort();
-  if (signal?.aborted) abort();
-  else signal?.addEventListener("abort", abort, {once: true});
-  const timer = setTimeout(abort, clamp(settings?.fetchTimeout, 8000, 500, 30000));
+async function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive"): Promise<PageScan> {
   try {
     const credentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
-    const response = await fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal: controller.signal});
+    const timeout = clamp(settings?.fetchTimeout, 8000, 500, 30000);
+    const response = await fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal}, retryMode, timeout);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     if (type.startsWith("image/")) {
@@ -82,8 +79,7 @@ async function fetchPage(url: string, settings: LinkPeekSettings | undefined, si
     const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
     return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, {}, settings), html};
   } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
+    // fetchWithRetry owns per-attempt timers; the caller's AbortSignal owns cancellation.
   }
 }
 
@@ -146,8 +142,8 @@ function finish(raw: string, title: string | undefined, items: MediaItem[], adap
  * Scans a page. With `allowRecursive` false only the page itself is read,
  * which is what speculative prefetch uses.
  */
-export async function scanGeneric(raw: string, settings?: LinkPeekSettings, signal?: AbortSignal, allowRecursive = true): Promise<ScanResult> {
-  const root = await fetchPage(raw, settings, signal);
+export async function scanGeneric(raw: string, settings?: LinkPeekSettings, signal?: AbortSignal, allowRecursive = true, retryMode: RetryMode = "interactive"): Promise<ScanResult> {
+  const root = await fetchPage(raw, settings, signal, undefined, retryMode);
   if (root.direct) return finish(raw, root.title, root.items, "Direct media", 0, settings, root.direct);
   const recursionOn = Boolean(settings && settings.recursiveSearch !== "off");
   const wantsRecursion = allowRecursive && recursionOn && Boolean(root.html) && (root.items.length === 0 || settings!.recursiveTrigger === "always");
@@ -168,7 +164,7 @@ export async function scanGeneric(raw: string, settings?: LinkPeekSettings, sign
       pagesRead += batch.length;
       const pages = await mapWithConcurrency(batch, concurrency, async url => {
         try {
-          const page = await fetchPage(url, options, signal, rootOrigin);
+          const page = await fetchPage(url, options, signal, rootOrigin, retryMode);
           if (options.recursiveSearch !== "all" && new URL(page.finalUrl).origin !== rootOrigin) throw new Error("Left the site");
           return page;
         } catch (error) {
