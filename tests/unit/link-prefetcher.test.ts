@@ -303,12 +303,22 @@ describe("the inspector's view", () => {
     expect(byUrl.get("idle")).toMatchObject({state: "not-started", priority: "normal", label: "https://x.test/idle"});
   });
 
-  it("reports GIF presence for prepared galleries and direct GIF links only", () => {
-    const p = prefetcher(), gallery = link("https://x.test/gallery"), direct = link("https://x.test/direct.gif"), still = link("https://x.test/still.jpg");
-    p.remember(gallery.href, scan(gallery.href, [{type: "image"}, {type: "gif"}]));
+  it("reports GIF presence from type, original, preview, filename and direct GIF URLs", () => {
+    const p = prefetcher();
+    const typed = link("https://x.test/typed"), original = link("https://x.test/original"), preview = link("https://x.test/preview");
+    const named = link("https://x.test/named"), direct = link("https://x.test/direct.gif"), still = link("https://x.test/still.jpg");
+    p.remember(typed.href, scan(typed.href, [{type: "gif"}]));
+    const originalScan = scan(original.href);
+    originalScan.items[0].originalUrl = "https://cdn.test/animation.gif?x=1";
+    p.remember(original.href, originalScan);
+    const previewScan = scan(preview.href);
+    previewScan.items[0].previewUrl = "https://cdn.test/preview.gif#frame";
+    p.remember(preview.href, previewScan);
+    const namedScan = scan(named.href);
+    namedScan.items[0].filename = "animation.GIF";
+    p.remember(named.href, namedScan);
     const byUrl = new Map(p.snapshot().map(entry => [entry.url, entry]));
-    expect(byUrl.get(gallery.href)!.hasGif).toBe(true);
-    expect(byUrl.get(direct.href)!.hasGif).toBe(true);
+    expect([typed, original, preview, named, direct].map(a => byUrl.get(a.href)!.hasGif)).toEqual([true, true, true, true, true]);
     expect(byUrl.get(still.href)!.hasGif).toBe(false);
   });
 
