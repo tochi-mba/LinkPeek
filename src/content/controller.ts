@@ -226,6 +226,10 @@ export class PreviewController {
       sendResponse({open: this.inspector.isOpen});
       return false;
     }
+    if (msg?.type === "LINKPEEK_START_SHUFFLE") {
+      sendResponse({started: this.startShuffle()});
+      return false;
+    }
     const scan = this.activeScan;
     if (msg?.type !== "LINKPEEK_SCAN_PROGRESS" || !scan || msg.token !== scan.token || msg.url !== scan.url || !msg.result?.items) return false;
     this.prefetcher.remember(scan.url, msg.result);

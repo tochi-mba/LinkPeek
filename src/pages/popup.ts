@@ -43,6 +43,7 @@ function render() {
   pause.textContent = pausedHere() ? "Resume here" : "Pause here";
   // The inspector lives in the page, so it needs a page whose script answered.
   inspector.hidden = !status;
+  ($("shuffle") as HTMLButtonElement).hidden = !status?.enabled || !settings.shuffleSlideshow;
   inspector.textContent = status?.inspectorOpen ? "Hide inspector" : "Inspector";
   inspector.setAttribute("aria-pressed", String(Boolean(status?.inspectorOpen)));
   renderSegments("mode", settings.performanceMode);
@@ -92,6 +93,12 @@ async function toggleInspector() {
   if (answer.open) window.close();
 }
 
+/** Starts the shuffle on the page and gets out of the way. */
+async function startShuffle() {
+  const answer = await chrome.tabs.sendMessage(tabId!, {type: "LINKPEEK_START_SHUFFLE"}).catch(() => undefined) as {started: boolean} | undefined;
+  if (answer) window.close();
+}
+
 async function start() {
   settings = await loadSettings();
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
@@ -110,6 +117,7 @@ $("enabled").addEventListener("change", event => {
 });
 $("pauseSite").addEventListener("click", () => void togglePause());
 $("inspector").addEventListener("click", () => void toggleInspector());
+$("shuffle").addEventListener("click", () => void startShuffle());
 document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
   settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};
   void save();
