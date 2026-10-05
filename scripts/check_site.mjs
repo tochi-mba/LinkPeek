@@ -8,8 +8,11 @@ for(const f of files.filter(x=>x.endsWith(".html"))){
     const h=m[1];if(/^(https?:|mailto:)/.test(h))continue;if(h.startsWith("downloads/")&&allowMissingDownloads)continue;
     const target=resolve(dirname(f),h);try{await stat(target)}catch{console.error(`${f}: broken link ${h}`);bad++}
   }
-  for(const m of html.matchAll(/<a\b[^>]*href=["']downloads\/LinkPeek\.crx["'][^>]*>/gi)){
-    if(!/\bdownload(?:=|\s|>)/i.test(m[0])){console.error(`${f}: CRX link must force download instead of direct navigation`);bad++}
+  // Clicking a .crx makes the browser try to install it, which fails for self-hosted packages
+  // (CRX_REQUIRED_PROOF_MISSING); the site offers the ZIP, which saves like any other file.
+  if(/href=["']downloads\/LinkPeek\.crx["']/i.test(html)){console.error(`${f}: link LinkPeek.zip, not the CRX`);bad++}
+  for(const m of html.matchAll(/<a\b[^>]*href=["']downloads\/LinkPeek\.zip["'][^>]*>/gi)){
+    if(!/\bdownload(?:=|\s|>)/i.test(m[0])){console.error(`${f}: the ZIP link must be a download`);bad++}
   }
   const forbidden=[
     /open the downloaded extension/i,
@@ -20,4 +23,4 @@ for(const f of files.filter(x=>x.endsWith(".html"))){
   }
 }
 if(bad)process.exit(1);
-console.log(`Checked ${files.length} site files and CRX install guidance${allowMissingDownloads?" (release downloads optional)":""}`);
+console.log(`Checked ${files.length} site files and install guidance${allowMissingDownloads?" (release downloads optional)":""}`);

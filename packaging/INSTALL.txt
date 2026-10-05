@@ -1,0 +1,18 @@
+LinkPeek — install
+
+1. Move the LinkPeek folder from this download somewhere it can stay
+   (for example Documents\LinkPeek). The browser loads it from there.
+2. Open chrome://extensions in Helium, Chrome, Edge or Brave and turn on
+   Developer mode.
+3. Click "Load unpacked" and choose the LinkPeek folder.
+
+To update: replace the contents of that folder with the new download's
+LinkPeek folder, then press the reload button on LinkPeek's card in
+chrome://extensions. Your settings stay.
+
+Prefer the signed package? Drag LinkPeek.crx onto the chrome://extensions
+page instead (Developer mode on). Do not open the .crx file directly: the
+browser rejects that with CRX_REQUIRED_PROOF_MISSING, because only web
+stores can install extensions straight from a click.
+
+https://tochi-mba.github.io/LinkPeek/
