@@ -44,7 +44,6 @@ const PAGE_OUTLINES = `
 [data-linkpeek-preload-state="blocked"]{outline:1px dotted rgba(133,141,131,.45)!important;outline-offset:2px!important}
 [data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px ${REX.signal}!important}
 [data-linkpeek-preload-priority="maximum"]{box-shadow:0 0 0 3px ${REX.live}!important}
-[data-linkpeek-preload-gif="true"]{position:relative!important}
 [data-linkpeek-preload-gif="true"]::after{content:"▶";display:inline-grid;place-items:center;box-sizing:border-box;width:14px;height:14px;margin-left:4px;
   border-radius:4px;background:${REX.signal};color:${REX.panel};font:800 8px/1 system-ui,sans-serif;vertical-align:1px;pointer-events:none}
 `;
