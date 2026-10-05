@@ -30,6 +30,8 @@ The Pages workflow reads that secret only while packaging. Never commit the priv
 
 If the secret is absent, the workflow still produces a development CRX, but its extension ID may change on the next build.
 
+With the configured key, LinkPeek's extension ID is `mejmafejflnbjbgiclfmlnnijchldeib`. Keep a private backup of the key: GitHub secrets cannot be read back, and a new key means a new ID (existing installs would not update in place).
+
 ## Pages
 
 The release workflow copies:
@@ -53,11 +55,10 @@ GitHub Pages must be configured to use **GitHub Actions** as its publishing sour
 
 Opening or double-clicking a self-hosted CRX can fail with `CRX_REQUIRED_PROOF_MISSING`. That error is the Chromium proof requirement for direct/off-store installation; changing the local signing key does not add Chrome Web Store proof.
 
-The supported LinkPeek install flow is:
+Clicking a link to a `.crx` triggers the same direct install, so the site links `LinkPeek.zip` instead (`scripts/check_site.mjs` enforces this). The ZIP holds:
 
-1. Download `LinkPeek.crx` from the project site.
-2. Open `chrome://extensions`.
-3. Enable Developer mode.
-4. Drag the CRX onto the Extensions page and approve the prompt.
+- `LinkPeek/`: the built extension for **Load unpacked**, with the signing key's public half as `manifest.key` when `LINKPEEK_CRX_KEY_B64` is set, so it gets the CRX's extension ID;
+- `LinkPeek.crx`: the signed package, for dragging onto `chrome://extensions`;
+- `INSTALL.txt` (from `packaging/`).
 
-The public site must not tell users to open/double-click the CRX directly.
+The supported install flow is: unzip, open `chrome://extensions`, enable Developer mode, **Load unpacked** the `LinkPeek` folder (or drag the CRX onto the page). The public site must not tell users to open or double-click the CRX.

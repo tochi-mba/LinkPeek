@@ -350,7 +350,9 @@ test("onboarding and settings render, save and persist",async()=>{
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
     const keywords=page.locator('textarea[data-key="activationKeywords"]');await keywords.fill("gallery, /album/");await keywords.press("Tab");
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
-    const slideshow=page.locator(".shortcut-row",{hasText:"Slideshow"});await slideshow.locator("[data-record]").click();await expect(slideshow).toContainText("Press keys");
+    // Exact label: "Pause / resume the slideshow" also contains the word.
+    const slideshowRow=()=>page.locator(".shortcut-row").filter({has:page.locator(".shortcut-label",{hasText:/^Slideshow \(shuffle when on\)$/})});
+    const slideshow=slideshowRow();await slideshow.locator("[data-record]").click();await expect(slideshow).toContainText("Press keys");
     await page.keyboard.press("x");await expect(slideshow.locator("kbd")).toHaveText(["S","X"]);
     await page.getByLabel("Website").fill("https://forum.example.com/t/1");await page.getByRole("button",{name:"Pause LinkPeek there"}).click();
     await expect(page.locator(".site-row")).toContainText("forum.example.com");
@@ -358,7 +360,7 @@ test("onboarding and settings render, save and persist",async()=>{
     await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('textarea[data-key="activationKeywords"]')).toHaveValue("gallery\n/album/");
     await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");
     await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
-    await expect(page.locator(".shortcut-row",{hasText:"Slideshow"}).locator("kbd")).toHaveText(["S","X"]);
+    await expect(slideshowRow().locator("kbd")).toHaveText(["S","X"]);
     await expect(page.locator(".site-row")).toContainText("LinkPeek is paused here");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
     await expect(page.locator('[data-mode="auto"]')).toHaveClass(/active/);

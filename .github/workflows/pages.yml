@@ -54,6 +54,28 @@ jobs:
           mv dist.crx site/downloads/LinkPeek.crx
           rm -f dist.pem linkpeek.pem
           sha256sum site/downloads/LinkPeek.crx > site/downloads/LinkPeek.crx.sha256
+      - name: Package the download
+        env:
+          LINKPEEK_CRX_KEY_B64: ${{ secrets.LINKPEEK_CRX_KEY_B64 }}
+        run: |
+          set -euxo pipefail
+          # Browsers try to install a .crx the moment it is clicked and reject self-hosted ones
+          # (CRX_REQUIRED_PROOF_MISSING), so the site offers a ZIP: the unpacked extension for
+          # "Load unpacked", plus the signed CRX for drag-and-drop.
+          rm -rf release && mkdir -p release/LinkPeek
+          cp -R dist/. release/LinkPeek/
+          if [ -n "$LINKPEEK_CRX_KEY_B64" ]; then
+            # The public half of the signing key gives the unpacked copy the CRX's extension ID.
+            printf '%s' "$LINKPEEK_CRX_KEY_B64" | base64 -d > release.pem
+            KEY=$(openssl pkey -in release.pem -pubout -outform DER | base64 -w0)
+            rm -f release.pem
+            node -e "const fs=require('fs');const p='release/LinkPeek/manifest.json';const m=JSON.parse(fs.readFileSync(p,'utf8'));m.key=process.argv[1];fs.writeFileSync(p,JSON.stringify(m,null,2))" "$KEY"
+          fi
+          cp site/downloads/LinkPeek.crx release/LinkPeek.crx
+          cp packaging/INSTALL.txt release/INSTALL.txt
+          (cd release && zip -qr ../site/downloads/LinkPeek.zip LinkPeek LinkPeek.crx INSTALL.txt)
+          unzip -l site/downloads/LinkPeek.zip | grep -q "LinkPeek/manifest.json"
+          sha256sum site/downloads/LinkPeek.zip > site/downloads/LinkPeek.zip.sha256
       - run: node scripts/check_site.mjs
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

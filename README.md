@@ -34,18 +34,17 @@ The project site publishes the packaged extension itself:
 
 **https://tochi-mba.github.io/LinkPeek/**
 
-The primary download is `LinkPeek.crx`, not a source ZIP.
+The download is `LinkPeek.zip`: the built extension, ready for **Load unpacked**, plus the signed `LinkPeek.crx`.
 
-For Helium and other Chromium-family browsers, **do not double-click/open a self-hosted CRX directly**. Chromium may reject that path with `CRX_REQUIRED_PROOF_MISSING` because the package does not carry Chrome Web Store proof. Instead:
+1. Download `LinkPeek.zip` and unzip it. Move the `LinkPeek` folder somewhere it can stay.
+2. Open `chrome://extensions` (Helium, Chrome, Edge, Brave) and turn on Developer mode.
+3. Click **Load unpacked** and choose the `LinkPeek` folder.
 
-1. Download `LinkPeek.crx`.
-2. Open `chrome://extensions`.
-3. Enable Developer mode.
-4. Drag `LinkPeek.crx` onto the Extensions page and approve the install prompt.
+To update, replace the folder's contents with a new download and press reload on LinkPeek's card; settings stay. Alternatively, drag `LinkPeek.crx` onto the Extensions page.
 
-A true one-click install from a normal web page requires distribution through a browser extension store that supplies the required store proof.
+Clicking a `.crx` on a website makes the browser try to install it, and it rejects self-hosted packages with `CRX_REQUIRED_PROOF_MISSING`: only web stores supply that proof. That is why the site offers a ZIP.
 
-For a stable extension identity across packaged releases, configure the repository secret `LINKPEEK_CRX_KEY_B64` with the base64-encoded PEM private key used to package the CRX. The Pages workflow uses it automatically. If the secret is absent, CI can still produce a development CRX but its extension ID may change between builds.
+For a stable extension identity across packaged releases, configure the repository secret `LINKPEEK_CRX_KEY_B64` with the base64-encoded PEM private key used to package the CRX. The Pages workflow signs the CRX with it and writes its public key into the unpacked copy, so both installs share one extension ID. Without the secret, the CRX's ID changes between builds; an unpacked install keeps its ID as long as it stays in the same folder.
 
 ## Development
 
@@ -68,7 +67,7 @@ Load `dist/` as an unpacked extension for local development.
 - `npm run test:e2e` — builds then runs Chromium extension E2E tests
 - `npm run build` — produces the Manifest V3 extension in `dist/`
 - `node scripts/check_site.mjs` — checks internal GitHub Pages links
-- `npm run package` — creates a development ZIP for debugging only; public distribution uses CRX
+- `npm run package` — zips `dist/` for local testing; the public `LinkPeek.zip` is assembled by the Pages workflow
 
 ## Architecture
 
