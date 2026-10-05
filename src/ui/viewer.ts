@@ -451,7 +451,7 @@ export class Viewer {
         cell: this.gridThumbSize, current: this.index, onPick: index => this.pick(index),
         onWidth: (index, width) => {
           const candidate = this.result?.items[index];
-          if (candidate) this.rejectIfTooNarrow(candidate, width, this.renderVersion);
+          if (candidate?.previewUrl === candidate.originalUrl) this.rejectIfTooNarrow(candidate, width, this.renderVersion);
         }
       });
       return;
@@ -550,7 +550,7 @@ export class Viewer {
       else video.addEventListener("loadedmetadata", check, {once: true});
       return;
     }
-    if (item.type === "image") {
+    if (item.type === "image" && item.previewUrl === item.originalUrl) {
       const image = this.stage?.querySelector<HTMLImageElement>(".lp-image");
       if (!image) return;
       const check = () => this.rejectIfTooNarrow(item, image.naturalWidth, version);
