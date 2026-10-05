@@ -61,4 +61,4 @@ Clicking a link to a `.crx` triggers the same direct install, so the site links 
 - `LinkPeek.crx`: the signed package, for dragging onto `chrome://extensions`;
 - `INSTALL.txt` (from `packaging/`).
 
-The supported install flow is: unzip, open `chrome://extensions`, enable Developer mode, **Load unpacked** the `LinkPeek` folder (or drag the CRX onto the page). The public site must not tell users to open or double-click the CRX.
+The supported install flow is: unzip, open `chrome://extensions`, enable Developer mode, **Load unpacked** the `LinkPeek` folder (or drag the CRX onto the page). The public site must not tell users to open or double-click the CRX. `site/install.js` shows a CRX link only to Helium and other unbranded Chromium builds, which can install it from a click once `chrome://flags/#extension-mime-request-handling` is set to *Always prompt for install*; the checker accepts a CRX link only with `data-requires-flag`.
