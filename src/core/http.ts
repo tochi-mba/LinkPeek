@@ -82,13 +82,13 @@ async function oneAttempt(url: string, init: RequestInit, timeoutMs: number) {
  * network failures. Permanent HTTP errors return immediately. Interactive work
  * is deliberately patient; cancellation from the caller always wins.
  */
-export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: RetryMode = "interactive") {
-  const plan = PLANS[mode], started = Date.now();
+export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: RetryMode = "interactive", attemptTimeoutMs?: number) {
+  const plan = PLANS[mode], started = Date.now(), timeout = Math.max(500, attemptTimeoutMs ?? plan.attemptTimeoutMs);
   let lastError: unknown;
   for (let attempt = 0; attempt < plan.attempts; attempt++) {
     let response: Response | undefined;
     try {
-      response = await oneAttempt(url, init, plan.attemptTimeoutMs);
+      response = await oneAttempt(url, init, timeout);
     } catch (error) {
       if (init.signal?.aborted) throw aborted();
       lastError = error;
