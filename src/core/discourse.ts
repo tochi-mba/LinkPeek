@@ -8,7 +8,7 @@
 import type {MediaItem, ScanResult} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml} from "./extract";
-import {fetchWithRetry} from "./http";
+import {fetchWithRetry, type RetryMode} from "./http";
 
 export type DPost = {id: number; post_number: number; username?: string; cooked?: string; post_url?: string};
 export type DTopic = {id: number; title?: string; post_stream?: {posts?: DPost[]; stream?: number[]}};
@@ -33,15 +33,15 @@ function topicJsonUrl(raw: string) {
   return url;
 }
 
-async function fetchText(url: string, signal?: AbortSignal) {
+async function fetchText(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {
   ensureNotAborted(signal);
-  const response = await fetchWithRetry(url, {credentials: "include", redirect: "follow", signal});
+  const response = await fetchWithRetry(url, {credentials: "include", redirect: "follow", signal}, retryMode);
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   return response.text();
 }
 
-async function fetchJson(url: string, signal?: AbortSignal) {
-  return JSON.parse(await fetchText(url, signal));
+async function fetchJson(url: string, signal?: AbortSignal, retryMode: RetryMode = "interactive") {
+  return JSON.parse(await fetchText(url, signal, retryMode));
 }
 
 /** Reads the topic Discourse embeds in its HTML for crawlers, when the JSON endpoint is blocked. */
@@ -58,13 +58,13 @@ export function parsePreloadedDiscourseTopic(html: string, topicId: number): DTo
   return null;
 }
 
-async function fetchTopic(raw: string, jsonUrl: URL, signal?: AbortSignal): Promise<DiscourseSeed> {
+async function fetchTopic(raw: string, jsonUrl: URL, signal?: AbortSignal, retryMode: RetryMode = "interactive"): Promise<DiscourseSeed> {
   try {
-    return {topic: await fetchJson(jsonUrl.href, signal) as DTopic};
+    return {topic: await fetchJson(jsonUrl.href, signal, retryMode) as DTopic};
   } catch (primaryError) {
     if (signal?.aborted) throw primaryError;
     const id = Number(/(\d+)\.json$/.exec(jsonUrl.pathname)![1]);
-    const fallback = parsePreloadedDiscourseTopic(await fetchText(raw, signal), id);
+    const fallback = parsePreloadedDiscourseTopic(await fetchText(raw, signal, retryMode), id);
     if (!fallback) throw primaryError;
     return {topic: fallback, warning: "Used embedded Discourse topic data after the JSON endpoint was unavailable."};
   }
@@ -114,7 +114,7 @@ function initialState(raw: string, topic: DTopic, stream: number[], settings?: L
 export async function prefetchDiscourse(raw: string, settings?: LinkPeekSettings, signal?: AbortSignal): Promise<{result: ScanResult; seed: DiscourseSeed}> {
   const jsonUrl = topicJsonUrl(raw);
   if (!jsonUrl) throw new Error("Not a Discourse topic URL");
-  const seed = await fetchTopic(raw, jsonUrl, signal);
+  const seed = await fetchTopic(raw, jsonUrl, signal, "background");
   const {stream} = scopedStream(seed.topic, settings, settings?.maxPosts ?? 2000);
   return {result: initialState(raw, seed.topic, stream, settings, seed.warning).result, seed};
 }
