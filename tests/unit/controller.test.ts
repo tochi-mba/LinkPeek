@@ -408,7 +408,7 @@ describe("keyboard", () => {
     expect(key("g").defaultPrevented).toBe(true);
   });
 
-  it("uses the fetched child page's own link order for recursive media", async () => {
+  it("uses the fetched child page's own link order and skips empty links in both directions", async () => {
     await boot();
     const root = link("root", "https://dest.test/root");
     const recursive = scan(root.href, 1, {
@@ -418,31 +418,32 @@ describe("keyboard", () => {
       }],
       linkContexts: [
         {sourceUrl: root.href, links: ["https://dest.test/child"]},
-        {sourceUrl: "https://dest.test/child", links: ["https://dest.test/child/a", "https://dest.test/child/b", "https://dest.test/child/c"]}
+        {sourceUrl: "https://dest.test/child", links: ["https://dest.test/child/a", "https://dest.test/child/b", "https://dest.test/child/c", "https://dest.test/child/d"]}
       ]
     });
-    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url === root.href ? recursive : scan(msg.url!);
+    const media = new Set(["https://dest.test/child/b", "https://dest.test/child/d"]);
+    respond = msg => {
+      if (msg.type === "LINKPEEK_SCAN" && msg.url === root.href) return recursive;
+      if (msg.type === "LINKPEEK_SCAN" || msg.type === "LINKPEEK_PREFETCH") return scan(msg.url!, media.has(msg.url!) ? 1 : 0);
+      return {ok: true};
+    };
     await controller.activate(root, 30, 40);
     expect(viewer.result).toEqual(recursive);
-    // The first links of the list are prepared as soon as the gallery shows.
     await flush();
-    expect(messages.filter(msg => msg.type === "LINKPEEK_PREFETCH").map(msg => msg.url)).toEqual(["https://dest.test/child/a", "https://dest.test/child/b"]);
 
     expect(key("n").defaultPrevented).toBe(true);
     await flush();
-    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
-    // The panel opens where the gallery was, not wherever the page happens to be.
-    expect(viewer.openLoading).toHaveBeenLastCalledWith(30, 40, expect.anything(), "a", undefined);
+    expect(viewer.result!.url).toBe("https://dest.test/child/b");
+    expect(scans().some(msg => msg.url === "https://dest.test/child/a")).toBe(true);
+    // The panel stays where the recursive gallery opened.
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(30, 40, expect.anything(), "b", undefined);
 
     expect(key("n").defaultPrevented).toBe(true);
     await flush();
-    expect(scans().at(-1)!.url).toBe("https://dest.test/child/b");
+    expect(viewer.result!.url).toBe("https://dest.test/child/d");
     expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
     await flush();
-    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
-    expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
-    await flush();
-    expect(scans().at(-1)!.url).toBe("https://dest.test/child/c");
+    expect(viewer.result!.url).toBe("https://dest.test/child/b");
   });
 
   it("starts a linked page's list from its end with Shift+N, and leaves single or unusable lists alone", async () => {
@@ -457,7 +458,7 @@ describe("keyboard", () => {
     await controller.activate(root, 30, 40);
     key("N", {shiftKey: true});
     await flush();
-    expect(scans().at(-1)!.url).toBe(list[1]);
+    expect(viewer.result!.url).toBe(list[1]);
 
     // A one-link list, viewed from that link: N moves on to the prepared links on the page instead.
     viewer.close(true);
@@ -465,10 +466,10 @@ describe("keyboard", () => {
     await controller.activate(root, 30, 40);
     key("n");
     await flush();
-    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
+    expect(viewer.result!.url).toBe("https://dest.test/child/a");
     key("n");
     await flush();
-    expect(scans().at(-1)!.url).toBe(root.href);
+    expect(viewer.result!.url).toBe(root.href);
 
     // Media from the page itself, from a page with no list, or a list of blocked links: no list.
     for (const [source, links, index] of [[root.href, list, 0], ["https://dest.test/other", list, 0], ["https://dest.test/child", ["https://dest.test/logout"], 0]] as const) {
@@ -498,34 +499,159 @@ describe("keyboard", () => {
     expect(key("x").defaultPrevented).toBe(false);
   });
 
-  it("moves between prepared links with N and Shift+N, in page order, wrapping", async () => {
+  it("moves through media-bearing page links in order, skipping empties and wrapping", async () => {
     await boot();
-    const [a, b, c] = [link("a"), link("b", undefined, 2000), link("c")];
+    const [a, b, c, d] = [link("a"), link("b", undefined, 2000), link("c"), link("d")];
     b.scrollIntoView = vi.fn();
-    for (const anchor of [a, b, c]) controller.prefetcher.remember(anchor.href, scan(anchor.href));
+    const media = new Set([b.href, d.href]);
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!, media.has(msg.url!) ? 1 : 0) : scan(msg.url!, media.has(msg.url!) ? 1 : 0);
+
     expect(key("n").defaultPrevented).toBe(true);
     await flush();
-    expect(scans().at(-1)!.url).toBe(a.href);
+    expect(viewer.result!.url).toBe(b.href);
+    expect(scans().map(msg => msg.url)).toEqual([a.href, b.href]);
+    expect(b.scrollIntoView).toHaveBeenCalledWith({block: "nearest", inline: "nearest"});
+
     key("n");
     await flush();
-    expect(b.scrollIntoView).toHaveBeenCalledWith({block: "nearest", inline: "nearest"});
-    expect(scans().at(-1)!.url).toBe(b.href);
+    expect(viewer.result!.url).toBe(d.href);
+    expect(scans().map(msg => msg.url)).toContain(c.href);
+
     key("N", {shiftKey: true});
     await flush();
-    expect(scans().at(-1)!.url).toBe(a.href);
-    key("N", {shiftKey: true});
-    await flush();
-    expect(scans().at(-1)!.url).toBe(c.href);
+    expect(viewer.result!.url).toBe(b.href);
+
     viewer.close(true);
     controller.intent.setCurrent(null);
     key("N", {shiftKey: true});
     await flush();
-    expect(scans().at(-1)!.url).toBe(c.href);
+    expect(viewer.result!.url).toBe(d.href);
+
     viewer.close(true);
     controller.intent.setCurrent(a);
     expect(controller.openAdjacentPrepared(1)).toBe(true);
     await flush();
+    expect(viewer.result!.url).toBe(b.href);
     expect(key("x").defaultPrevented).toBe(false);
+  });
+
+  it("uses a recursive child with media only when it is new to the current page", async () => {
+    await boot();
+    const candidate = link("candidate"), existing = link("existing", "https://dest.test/existing"), fallback = link("fallback");
+    const fresh = "https://dest.test/child/fresh", freshNext = "https://dest.test/child/fresh/next";
+    const recursive = scan(candidate.href, 2, {
+      items: [
+        {id: "existing-media", type: "image", originalUrl: existing.href + "/x.jpg", previewUrl: existing.href + "/x.jpg", sourceUrl: existing.href, score: 1},
+        {id: "fresh-media", type: "image", originalUrl: fresh + "/x.jpg", previewUrl: fresh + "/x.jpg", sourceUrl: fresh, score: 1}
+      ],
+      linkContexts: [
+        {sourceUrl: candidate.href, links: [existing.href, fresh]},
+        {sourceUrl: existing.href, links: []},
+        {sourceUrl: fresh, links: [freshNext]}
+      ]
+    });
+    respond = msg => {
+      if (msg.type !== "LINKPEEK_SCAN") return scan(msg.url!);
+      if (msg.url === candidate.href) return recursive;
+      if (msg.url === fallback.href) return scan(fallback.href);
+      return scan(msg.url!);
+    };
+
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(viewer.result!.url).toBe(fresh);
+    expect(viewer.result!.items.map((item: any) => item.sourceUrl)).toEqual([fresh]);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(35, 760, expect.anything(), "fresh", undefined);
+
+    // The recursive child's own list becomes the active N context.
+    key("n");
+    await flush();
+    expect(viewer.result!.url).toBe(freshNext);
+  });
+
+  it("rejects recursive media that points back to current-page links and keeps searching", async () => {
+    await boot();
+    const first = link("first"), existing = link("existing", "https://dest.test/existing"), second = link("second");
+    const recursiveOnlyExisting = scan(first.href, 1, {
+      items: [{id: "m", type: "image", originalUrl: existing.href + "/m.jpg", previewUrl: existing.href + "/m.jpg", sourceUrl: existing.href, score: 1}],
+      linkContexts: [{sourceUrl: first.href, links: [existing.href]}, {sourceUrl: existing.href, links: []}]
+    });
+    respond = msg => msg.type === "LINKPEEK_SCAN"
+      ? (msg.url === first.href ? recursiveOnlyExisting : msg.url === existing.href ? scan(existing.href, 0) : scan(msg.url!))
+      : scan(msg.url!);
+
+    key("n");
+    await flush();
+    expect(viewer.result!.url).toBe(second.href);
+    expect(scans().map(msg => msg.url)).toEqual([first.href, existing.href, second.href]);
+  });
+
+  it("inside a child-page list, recursive fallback never bounces to another link from that same list", async () => {
+    await boot();
+    const root = link("root"), parent = "https://dest.test/child";
+    const list = [parent + "/a", parent + "/b"], deeper = parent + "/a/deeper";
+    const rootResult = scan(root.href, 1, {
+      items: [{id: "parent-media", type: "image", originalUrl: parent + "/m.jpg", previewUrl: parent + "/m.jpg", sourceUrl: parent, score: 1}],
+      linkContexts: [{sourceUrl: root.href, links: [parent]}, {sourceUrl: parent, links: list}]
+    });
+    const aRecursive = scan(list[0], 2, {
+      items: [
+        {id: "bounce", type: "image", originalUrl: list[1] + "/m.jpg", previewUrl: list[1] + "/m.jpg", sourceUrl: list[1], score: 1},
+        {id: "deep", type: "image", originalUrl: deeper + "/m.jpg", previewUrl: deeper + "/m.jpg", sourceUrl: deeper, score: 1}
+      ],
+      linkContexts: [
+        {sourceUrl: list[0], links: [list[1], deeper]},
+        {sourceUrl: list[1], links: []},
+        {sourceUrl: deeper, links: []}
+      ]
+    });
+    respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url === root.href ? rootResult
+      : msg.type === "LINKPEEK_SCAN" && msg.url === list[0] ? aRecursive
+      : scan(msg.url!, 0);
+
+    await controller.activate(root, 20, 20);
+    key("n");
+    await flush();
+    expect(viewer.result!.url).toBe(deeper);
+    expect(viewer.result!.items.map((item: any) => item.id)).toEqual(["deep"]);
+  });
+
+  it("ignores stale N probes when another navigation command overtakes them", async () => {
+    await boot();
+    const [a, b, c] = [link("a"), link("b"), link("c")];
+    let finishA!: (value: ScanResult) => void;
+    respond = msg => {
+      if (msg.type !== "LINKPEEK_SCAN") return scan(msg.url!);
+      if (msg.url === a.href) return new Promise(resolve => finishA = resolve);
+      return scan(msg.url!);
+    };
+    key("n");
+    await flush();
+    key("n");
+    await flush();
+    expect(viewer.result!.url).toBe(b.href);
+    finishA(scan(a.href));
+    await flush();
+    expect(viewer.result!.url).toBe(b.href);
+    expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN" && msg.url === a.href)).toBe(true);
+    expect(c.href).not.toBe(b.href);
+  });
+
+  it("leaves the current gallery in place when every candidate is empty, cancelled or failed", async () => {
+    await boot();
+    const current = link("current"), [a, b, c] = [link("a"), link("b"), link("c")];
+    await controller.activate(current, 0, 0);
+    const before = viewer.result;
+    respond = msg => {
+      if (msg.type !== "LINKPEEK_SCAN") return scan(msg.url!);
+      if (msg.url === a.href) return scan(a.href, 0);
+      if (msg.url === b.href) return {cancelled: true};
+      if (msg.url === c.href) return {error: "nope"};
+      return scan(msg.url!, 0);
+    };
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(viewer.result).toBe(before);
   });
 
   it("does nothing without another prepared link", async () => {
