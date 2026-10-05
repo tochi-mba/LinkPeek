@@ -76,6 +76,14 @@ const IDLE_SLICE_MS = 4;
 /** After consecutive failures, whole-page work pauses this long, doubling up to the cap. */
 const SITE_PAUSE_MS = 10_000;
 const SITE_PAUSE_MAX_MS = 5 * 60_000;
+/**
+ * Off-screen links checked per page visit. Links near the viewport are never
+ * limited, so wherever the person scrolls stays prepared; this only keeps a
+ * huge index page from costing hundreds of megabytes.
+ */
+const FAR_CHECK_LIMIT = 400;
+/** While whole-page work waits (pressure, a preview loading), how often it looks again. */
+const WAIT_RETRY_MS = 1000;
 
 function thumbnailUrls(result: ScanResult) {
   return result.items.map(item => item.type === "video" ? item.posterUrl ?? "" : item.previewUrl).filter(Boolean);
@@ -90,11 +98,11 @@ function remove<K, V>(map: Map<K, V>, limit: number) {
  * oldest entry at a time would make every later eviction step over the
  * deleted slots at the front of the Map.
  */
-function trim<T>(collection: Map<T, unknown> | Set<T>, limit: number) {
-  if (collection.size <= limit) return;
-  const keep = [...collection.entries()].slice(-Math.floor(limit * 0.75));
-  collection.clear();
-  for (const [key, value] of keep) collection instanceof Map ? collection.set(key, value) : collection.add(key);
+function trim<K, V>(map: Map<K, V>, limit: number) {
+  if (map.size <= limit) return;
+  const keep = [...map].slice(-Math.floor(limit * 0.75));
+  map.clear();
+  for (const [key, value] of keep) map.set(key, value);
 }
 
 export class LinkPrefetcher {
@@ -112,7 +120,7 @@ export class LinkPrefetcher {
   /** Links from a linked page's list that were prepared ahead of N; shown in the inspector. */
   private linked = new Set<string>();
   /** Links whose thumbnails were warmed, so coming back near them does not queue them again. */
-  private warmed = new Set<string>();
+  private warmed = new Map<string, true>();
   private listeners = new Set<() => void>();
   private inFlight = 0;
   private waiters: Array<() => void> = [];
@@ -124,6 +132,7 @@ export class LinkPrefetcher {
   private pageDirty = true;
   private cursor = 0;
   private pageInFlight = 0;
+  private farChecks = 0;
   private failureStreak = 0;
   private pausedUntil = 0;
   private resumeTimer: number | undefined;
@@ -185,9 +194,10 @@ export class LinkPrefetcher {
   reset() {
     this.generation++;
     for (const collection of [this.requested, this.results, this.known, this.failedUntil, this.active, this.priorities]) collection.clear();
-    for (const collection of [this.boosted, this.linked, this.warmed]) collection.clear();
+    for (const collection of [this.boosted, this.linked]) collection.clear();
+    this.warmed.clear();
     this.pageDirty = true;
-    this.pageInFlight = this.failureStreak = this.pausedUntil = 0;
+    this.pageInFlight = this.failureStreak = this.pausedUntil = this.farChecks = 0;
     this.changed();
     this.schedule();
   }
@@ -399,16 +409,12 @@ export class LinkPrefetcher {
    */
   private preparePage(deadline: IdleDeadline) {
     const budget = this.host.budget(), now = Date.now();
-    if (!budget.speculative || budget.backgroundLinks <= 0 || this.host.busy()) return;
-    if (now < this.pausedUntil) {
-      this.resumeTimer ??= window.setTimeout(() => {
-        this.resumeTimer = undefined;
-        this.schedule();
-      }, this.pausedUntil - now);
-      return;
-    }
+    // Waiting is not stopping: nothing else may come along to wake this pass, so it looks again by itself.
+    if (budget.backgroundPaused || (budget.backgroundLinks > 0 && this.host.busy())) return this.resumeIn(WAIT_RETRY_MS);
+    if (!budget.speculative || budget.backgroundLinks <= 0) return;
+    if (now < this.pausedUntil) return this.resumeIn(this.pausedUntil - now);
     const hasTime = () => this.pageInFlight < budget.backgroundLinks && (deadline.didTimeout || deadline.timeRemaining() > IDLE_SLICE_MS);
-    for (const url of this.pageCandidates()) {
+    for (const [url, far] of this.pageCandidates()) {
       if (!hasTime()) return;
       const summary = this.known.get(url), level: Level = summary ? "deep" : "shallow";
       // Only an empty quick check that a linked-page search could still change is worth a second, deeper look.
@@ -416,6 +422,7 @@ export class LinkPrefetcher {
       const settings = this.host.settingsFor(url);
       if (!settings || (summary && settings.recursiveSearch === "off") || !this.canStart(url, level, false, now)) continue;
       this.pageInFlight++;
+      if (far) this.farChecks++;
       void this.prepareUrl(url, settings, level, "page", false).finally(() => {
         this.pageInFlight--;
         this.schedule();
@@ -423,21 +430,28 @@ export class LinkPrefetcher {
     }
   }
 
+  private resumeIn(ms: number) {
+    this.resumeTimer ??= window.setTimeout(() => {
+      this.resumeTimer = undefined;
+      this.schedule();
+    }, ms);
+  }
+
   /** Near-viewport links (checked, then searched deeper), then the rest of the page from where the pass got to. */
-  private *pageCandidates() {
+  private *pageCandidates(): Generator<[string, boolean]> {
     const near = [...this.near].filter(anchor => anchor.isConnected).map(anchor => anchor.href);
-    for (const url of near) if (!this.requested.has(url)) yield url;
+    for (const url of near) if (!this.requested.has(url)) yield [url, false];
     if (this.pageDirty) {
       this.pageUrls = [...new Set([...document.querySelectorAll<HTMLAnchorElement>("a[href]")].map(anchor => anchor.href))];
       this.pageDirty = false;
       this.cursor = 0;
     }
-    while (this.cursor < this.pageUrls.length) {
+    while (this.cursor < this.pageUrls.length && this.farChecks < FAR_CHECK_LIMIT) {
       const url = this.pageUrls[this.cursor];
-      if (!this.requested.has(url) && !this.known.has(url)) yield url;
+      if (!this.requested.has(url) && !this.known.has(url)) yield [url, true];
       this.cursor++;
     }
-    yield* near;
+    for (const url of near) yield [url, false];
   }
 
   /** Whether preparing this link would do anything: not already running, done at this depth or resting after a failure. */
@@ -529,7 +543,7 @@ export class LinkPrefetcher {
       return;
     }
     if (this.warmed.has(url)) return;
-    this.warmed.add(url);
+    this.warmed.set(url, true);
     trim(this.warmed, LINK_MEMORY);
     // Nearby links warm only still images: a GIF can be megabytes for one thumbnail.
     const stills = result.items.filter(item => item.type === "image").map(item => item.previewUrl);

@@ -474,24 +474,40 @@ describe("the rest of the page", () => {
   });
 
   it("waits while a preview loads, while the page is under pressure, without idle time, and when nothing may be prepared", async () => {
-    page(2);
-    const p = prefetcher();
-    p.schedule();
-    for (const pause of [() => busy = true, () => budget.backgroundLinks = 0, () => budget.speculative = false, () => idleTime = 1]) {
-      pause();
-      runIdle();
-      await flush();
-      expect(pending).toEqual([]);
-      busy = false;
-      budget = {...budget, backgroundLinks: 1, speculative: true};
-      idleTime = 50;
+    vi.useFakeTimers({toFake: ["setTimeout", "clearTimeout"]});
+    try {
+      page(2);
+      const p = prefetcher();
+      const settle = () => vi.advanceTimersByTimeAsync(0);
       p.schedule();
+      for (const pause of [() => budget.backgroundLinks = 0, () => budget.speculative = false, () => idleTime = 1]) {
+        pause();
+        runIdle();
+        await settle();
+        expect(pending).toEqual([]);
+        budget = {...budget, backgroundLinks: 1, speculative: true};
+        idleTime = 50;
+        p.schedule();
+      }
+      // Paused by pressure or by a preview loading, it looks again by itself a moment later.
+      for (const wait of [() => budget = {...budget, backgroundLinks: 0, backgroundPaused: true}, () => busy = true]) {
+        wait();
+        runIdle();
+        await settle();
+        expect([idle.length, pending.length]).toEqual([0, 0]);
+        budget = {...budget, backgroundLinks: 1, backgroundPaused: false};
+        busy = false;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(idle).toHaveLength(1);
+      }
+      // A callback that ran out of patience still does one link's worth of work.
+      idleTime = 0;
+      runIdle(true);
+      await settle();
+      expect(pending).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
     }
-    // A callback that ran out of patience still does one link's worth of work.
-    idleTime = 0;
-    runIdle(true);
-    await flush();
-    expect(pending).toHaveLength(1);
   });
 
   it("gives a struggling site room: two failures in a row pause the pass, longer each time", async () => {
@@ -547,6 +563,28 @@ describe("the rest of the page", () => {
     }
   });
 
+  it("checks at most 400 off-screen links per visit, while links near the screen are never limited", async () => {
+    vi.stubGlobal("chrome", {runtime: {sendMessage: vi.fn(async (msg: {url: string}) => scan(msg.url, []))}});
+    const links = page(402);
+    const p = prefetcher();
+    for (let round = 0; round < 450; round++) {
+      p.schedule();
+      runIdle();
+      await flush();
+    }
+    const sent = (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(([msg]) => msg.url);
+    expect(sent).toHaveLength(400);
+    show(links[401]);
+    runIdle();
+    await flush();
+    expect((chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0].url).toBe(links[401].href);
+    p.reset();
+    p.schedule();
+    runIdle();
+    await flush();
+    expect((chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0].url).toBe(links[401].href);
+  }, 60_000);
+
   it("only keeps a full gallery from a whole-page check while there is room, never evicting one near the pointer", async () => {
     const p = prefetcher();
     for (let i = 0; i < 80; i++) p.remember(`https://x.test/kept${i}`, scan(`https://x.test/kept${i}`));
@@ -580,6 +618,27 @@ describe("the rest of the page", () => {
     expect(warmer.warm).not.toHaveBeenCalled();
     expect(pending).toHaveLength(2);
     expect(p.cached(far.href)).toBeDefined();
+  });
+});
+
+describe("full galleries for the shuffle", () => {
+  it("come from memory, from preparation already running, or from the service worker, empty ones included", async () => {
+    const p = prefetcher(), kept = link("https://x.test/kept"), running = link("https://x.test/running");
+    p.remember(kept.href, scan(kept.href));
+    expect(await p.gallery(kept.href)).toEqual(scan(kept.href));
+    expect(p.galleries().map(([url]) => url)).toEqual([kept.href]);
+    p.hover(running);
+    const waiting = p.gallery(running.href);
+    await flush();
+    expect(pending).toHaveLength(1);
+    pending[0].resolve(scan(running.href));
+    expect(await waiting).toEqual(scan(running.href));
+    const empty = p.gallery("https://x.test/empty");
+    await flush();
+    pending[1].resolve({...scan("https://x.test/empty", []), linkContexts: [{sourceUrl: "https://x.test/empty", links: ["https://x.test/deeper"]}]});
+    expect((await empty)!.linkContexts![0].links).toEqual(["https://x.test/deeper"]);
+    expect(await p.gallery("https://x.test/blocked")).toBeUndefined();
+    expect(p.pausedFor()).toBe(0);
   });
 });
 

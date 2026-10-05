@@ -20,6 +20,8 @@ export interface Budget {
    * Scaled by headroom like everything else, so it reaches 0 (paused) under pressure.
    */
   backgroundLinks: number;
+  /** Whole-page checking is on but paused by pressure; it resumes by itself once the page is calm. */
+  backgroundPaused: boolean;
   /** Link scans that may run at once. */
   linkConcurrency: number;
   /** Preview thumbnails warmed for each nearby link. */
@@ -42,7 +44,7 @@ export interface Budget {
 export type DeviceTier = 0 | 1 | 2;
 export const TIER_NAMES = ["light", "standard", "high"] as const;
 
-type Plan = Omit<Budget, "memoryBytes" | "speculative"> & {memoryMb: number};
+type Plan = Omit<Budget, "memoryBytes" | "speculative" | "backgroundPaused"> & {memoryMb: number};
 
 /** Data saver: nothing speculative, only what is on screen. Also the floor every budget keeps. */
 export const SAVER_PLAN: Plan = {
@@ -86,6 +88,7 @@ export function computeBudget(input: BudgetInput): Budget {
     nearbyLinks,
     // The first work to stop: any sign of pressure (one long task is enough) pauses it until the page is calm again.
     backgroundLinks: input.prefetch === "page" && input.headroom >= BACKGROUND_MIN_HEADROOM ? scale("backgroundLinks") : 0,
+    backgroundPaused: !saver && input.prefetch === "page" && input.headroom < BACKGROUND_MIN_HEADROOM,
     linkConcurrency: Math.min(Math.max(1, input.maxRequests), scale("linkConcurrency")),
     thumbsPerLink,
     hoverThumbs: scale("hoverThumbs"),

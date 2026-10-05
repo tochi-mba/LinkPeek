@@ -1,10 +1,21 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {PLANS, ResourceGovernor, SAVER_PLAN, computeBudget, deviceTier, type BudgetInput} from "../../src/content/resource-governor";
+import {BACKGROUND_MIN_HEADROOM, PLANS, ResourceGovernor, SAVER_PLAN, computeBudget, deviceTier, type BudgetInput} from "../../src/content/resource-governor";
 import {resolveSettings, type LinkPeekSettings} from "../../src/shared/settings";
 
 const input = (patch: Partial<BudgetInput> = {}): BudgetInput => ({mode: "auto", prefetch: "nearby", tier: 1, headroom: 1, constrained: false, maxRequests: 8, memoryCapMb: 1024, ...patch});
 
 describe("budget arithmetic", () => {
+  it("checks the rest of the page only in whole-page mode, and stops at the first sign of pressure", () => {
+    expect(computeBudget(input({prefetch: "page", tier: 2})).backgroundLinks).toBe(PLANS[2].backgroundLinks);
+    expect(computeBudget(input({prefetch: "page", headroom: BACKGROUND_MIN_HEADROOM})).backgroundLinks).toBe(1);
+    expect(computeBudget(input({prefetch: "page", headroom: 0.74}))).toMatchObject({backgroundLinks: 0, backgroundPaused: true});
+    expect(computeBudget(input({prefetch: "page"})).backgroundPaused).toBe(false);
+    expect(computeBudget(input({prefetch: "nearby", headroom: 0.3})).backgroundPaused).toBe(false);
+    expect(computeBudget(input({prefetch: "page", headroom: 0.3, mode: "saver"})).backgroundPaused).toBe(false);
+    expect(computeBudget(input({prefetch: "visible"})).backgroundLinks).toBe(0);
+    expect(computeBudget(input({prefetch: "page", mode: "saver"})).backgroundLinks).toBe(0);
+  });
+
   it("sizes auto mode by device tier and fast mode one tier up", () => {
     expect(computeBudget(input({tier: 0})).nearbyLinks).toBe(PLANS[0].nearbyLinks);
     expect(computeBudget(input({tier: 2})).memoryBytes).toBe(PLANS[2].memoryMb * 1024 * 1024);
