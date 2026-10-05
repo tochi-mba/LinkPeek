@@ -142,6 +142,16 @@ describe("showing results", () => {
     expect(q("[data-action=favorite]")!.textContent).toBe("★");
   });
 
+  it("removes media whose decoded width is below the configured minimum", () => {
+    open({minWidth: 50}).show(result(2));
+    const image = q<HTMLImageElement>(".lp-image")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 45});
+    image.dispatchEvent(new Event("load"));
+    expect(viewer.result!.items.map(entry => entry.id)).toEqual(["i1"]);
+    expect(count()).toBe("1 / 1");
+    expect(q(".lp-image")!.getAttribute("src")).toBe("https://x.test/p1");
+  });
+
   it("uses a decoded image when one is ready", () => {
     open();
     const decoded = document.createElement("img");
@@ -407,6 +417,16 @@ describe("moving through media", () => {
 });
 
 describe("the grid", () => {
+  it("removes undersized images discovered while viewing the grid", () => {
+    open({defaultView: "grid", minWidth: 50}).show(result(2));
+    const image = q<HTMLImageElement>(".lp-thumb[data-i='0'] img")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 45});
+    image.dispatchEvent(new Event("load"));
+    expect(viewer.result!.items.map(entry => entry.id)).toEqual(["i1"]);
+    expect(q(".lp-meta")!.textContent).toBe("1");
+    expect(viewer.panel.querySelectorAll(".lp-thumb")).toHaveLength(1);
+  });
+
   it("opens scrolled to the current item and opens a tile in single view", async () => {
     open().show(result(30));
     click("next");
