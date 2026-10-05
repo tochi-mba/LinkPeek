@@ -7,6 +7,7 @@ describe("settings",()=>{
     expect(DEFAULT_SETTINGS.horizontalGesture).toBe("scrub");
     expect(DEFAULT_SETTINGS.pinchZoom).toBe(true);
     expect(DEFAULT_SETTINGS.scanScope).toBe("whole");
+    expect(DEFAULT_SETTINGS.recursiveTrigger).toBe("empty");
   });
   it("has the expected power-user presets",()=>expect(Object.keys(PRESETS)).toEqual(expect.arrayContaining(["balanced","minimal","fast","touchpad","manual"])));
   it("migrates legacy resource defaults without changing customized values",()=>{

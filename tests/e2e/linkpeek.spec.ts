@@ -52,8 +52,10 @@ test.beforeAll(async()=>{
     const requestUrl=new URL(req.url||"/",base||"http://127.0.0.1"),path=requestUrl.pathname;
     if(path==="/"){
       res.setHeader("content-type","text/html");
-      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
+      res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a></body></html>`);return;
     }
+    if(path==="/empty-index"){res.setHeader("content-type","text/html");res.end('<title>Empty index</title><a href="/album/a">Album A</a><a href="/album/b">Album B</a>');return}
+    if(path==="/album/a"||path==="/album/b"){res.setHeader("content-type","text/html");res.end(`<img src="${base}/media/${path.endsWith("a")?"album-a":"album-b"}.jpg" width="800" height="600">`);return}
     if(path==="/prefetch"){res.setHeader("content-type","text/html");res.end(`<!doctype html><body>${Array.from({length:6},(_,i)=>`<a href="/t/prefetch-${i}/${800+i}">P${i}</a>`).join("<br>")}</body>`);return}
     if(path==="/t/demo/123.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(demoTopic()));return}
     if(path==="/t/large/789.json"){res.setHeader("content-type","application/json");res.end(JSON.stringify(perfTopic(789)));return}
@@ -99,6 +101,21 @@ test("Discourse hover filters page chrome and opens the whole-thread viewer",asy
     await wheelStage(page,100);await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("2 / 3")));
     await page.keyboard.press("g");await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.querySelector(".lp-grid")));
     await page.keyboard.press("g");await page.keyboard.press("?");await page.waitForFunction(()=>Array.from(document.documentElement.children).some((n:any)=>n.shadowRoot?.textContent?.includes("One-hand controls")));
+  }finally{await closeExtension(context,profile)}
+});
+
+test("panel drag/resize persists and empty pages search linked galleries",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+    const title=page.locator(".lp-title"),titleBox=await title.boundingBox();expect(titleBox).toBeTruthy();
+    if(titleBox){await page.mouse.move(titleBox.x+30,titleBox.y+15);await page.mouse.down();await page.mouse.move(titleBox.x+110,titleBox.y+70,{steps:4});await page.mouse.up()}
+    const handle=page.locator('[data-resize="se"]'),handleBox=await handle.boundingBox();expect(handleBox).toBeTruthy();
+    if(handleBox){await page.mouse.move(handleBox.x+5,handleBox.y+5);await page.mouse.down();await page.mouse.move(handleBox.x+75,handleBox.y+55,{steps:4});await page.mouse.up()}
+    const saved=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(saved.width).not.toBe("");expect(saved.height).not.toBe("");
+    await page.waitForTimeout(100);await page.keyboard.press("Escape");await page.locator("#recursive").hover();await expect(page.locator(".lp-panel")).toContainText("Empty index",{timeout:12_000});await expect(page.locator(".lp-panel")).toContainText("2 media");
+    const restored=await page.locator(".lp-panel").evaluate((el:HTMLElement)=>({left:el.style.left,top:el.style.top,width:el.style.width,height:el.style.height}));expect(restored).toEqual(saved);
+    await page.keyboard.press("Escape");const dynamic=page.locator("#recursive");await dynamic.hover();await expect(page.locator(".lp-panel")).toContainText("Empty index");await page.keyboard.press("Escape");await dynamic.evaluate((el:HTMLAnchorElement)=>el.href="/t/demo/123");await dynamic.dispatchEvent("pointermove",{clientX:30,clientY:20,bubbles:true});await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
   }finally{await closeExtension(context,profile)}
 });
 

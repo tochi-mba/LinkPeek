@@ -3,7 +3,7 @@ import {scanGeneric} from "./core/generic";
 import {DEFAULT_SETTINGS,effectiveSettings,loadSettings,type LinkPeekSettings} from "./shared/settings";
 import type {ScanResult} from "./shared/media";
 
-type CacheEntry={at:number;bytes:number;result:ScanResult;discourseSeed?:DiscourseSeed};
+type CacheEntry={at:number;bytes:number;settingsKey:string;result:ScanResult;discourseSeed?:DiscourseSeed};
 type Consumer={token:string;tabId?:number;frameId?:number};
 type ScanTask={controller:AbortController;consumers:Map<string,Consumer>;promise:Promise<ScanResult>};
 
@@ -20,19 +20,20 @@ function bytesToBase64(buffer:ArrayBuffer){
 function estimateBytes(result:ScanResult,seed?:DiscourseSeed){
   try{return new TextEncoder().encode(JSON.stringify(seed?{result,seed}:{result})).byteLength}catch{return result.items.length*256+1024}
 }
+function settingsKey(settings:LinkPeekSettings){return JSON.stringify(settings)}
 function removeCache(url:string){
   const entry=cache.get(url);if(!entry)return;cache.delete(url);cacheBytes=Math.max(0,cacheBytes-entry.bytes);
 }
 function cachedEntry(url:string,settings:LinkPeekSettings){
   const entry=cache.get(url);if(!entry)return undefined;
-  if(Date.now()-entry.at>=settings.cacheMinutes*60_000){removeCache(url);return undefined}
+  if(entry.settingsKey!==settingsKey(settings)||Date.now()-entry.at>=settings.cacheMinutes*60_000){removeCache(url);return undefined}
   cache.delete(url);cache.set(url,entry);return entry;
 }
 function putCache(url:string,result:ScanResult,settings:LinkPeekSettings,discourseSeed?:DiscourseSeed){
   removeCache(url);
   const bytes=estimateBytes(result,discourseSeed),limit=Math.max(1,settings.maxCacheMb)*1024*1024;
   if(bytes>limit)return;
-  cache.set(url,{at:Date.now(),bytes,result,discourseSeed});cacheBytes+=bytes;
+  cache.set(url,{at:Date.now(),bytes,settingsKey:settingsKey(settings),result,discourseSeed});cacheBytes+=bytes;
   while(cacheBytes>limit&&cache.size){
     const oldest=cache.keys().next().value as string;removeCache(oldest);
   }
@@ -84,12 +85,14 @@ async function executeScan(url:string,kind:string,settings:LinkPeekSettings,task
   if(settings.cacheThreads)putCache(url,result,settings);
   return result;
 }
-async function shallowPrefetch(url:string,kind:string,settings:LinkPeekSettings){
+async function shallowPrefetch(url:string,kind:string,settings:LinkPeekSettings,deep=false){
   const existing=cachedEntry(url,settings);if(existing)return existing.result;
   if(kind!=="discourse"){
     if(kind==="direct-image"){const result=directResult(url);putCache(url,result,settings);return result}
     if(kind==="generic"){
-      const result=await scanGeneric(url,{...settings,preferVersion:"displayed",progressiveScan:false});putCache(url,result,settings);return result;
+      const pending=prefetchTasks.get(url);if(pending){const result=await pending;if(deep&&!result?.items.length&&!cachedEntry(url,settings))return shallowPrefetch(url,kind,settings,true);return result}
+      let promise:Promise<ScanResult|null>;promise=scanGeneric(url,{...settings,preferVersion:"displayed",progressiveScan:false},undefined,deep).then(result=>{if(deep||(result.items.length&&settings.recursiveTrigger!=="always")||settings.recursiveSearch==="off")putCache(url,result,settings);return result}).finally(()=>{if(prefetchTasks.get(url)===promise)prefetchTasks.delete(url)});
+      prefetchTasks.set(url,promise);return promise;
     }
     return null;
   }
@@ -109,14 +112,14 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
   if(msg?.type==="LINKPEEK_PREFETCH"){
     (async()=>{
       const global=await loadSettings(),settings=effectiveSettings(global,msg.url);
-      return shallowPrefetch(msg.url,msg.kind,settings);
+      return shallowPrefetch(msg.url,msg.kind,settings,Boolean(msg.deep));
     })().then(sendResponse).catch((e:Error)=>sendResponse({error:e.message}));
     return true;
   }
   if(msg?.type==="LINKPEEK_SCAN"){
     (async()=>{
       const global=await loadSettings(),settings=effectiveSettings(global,msg.url);
-      const warm=prefetchTasks.get(msg.url);if(warm)await warm.catch(()=>null);
+      let warm:Promise<ScanResult|null>|undefined;while((warm=prefetchTasks.get(msg.url)))await warm.catch(()=>null);
       const cached=cachedEntry(msg.url,settings);
       if(cached?.result.complete)return cached.result;
       let task=tasks.get(msg.url);

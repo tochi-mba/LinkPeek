@@ -127,6 +127,45 @@ describe("shared runtime coverage",()=>{
     expect(r.kind).toBe("generic");expect(r.items).toHaveLength(1);
   });
 
+  it("recursively searches bounded same-site links only when the root has no media",async()=>{
+    const calls:Array<{url:string;credentials?:RequestCredentials}>=[];
+    const response=(url:string,body:string,status=200,type="text/html",finalUrl=url)=>{const r=new Response(body,{status,headers:{"content-type":type}});Object.defineProperty(r,"url",{configurable:true,value:finalUrl});return r};
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+      const url=String(input);calls.push({url,credentials:init?.credentials});
+      if(url==="https://x.test/root")return response(url,`<title>Root</title><a href="/empty?utm_source=x#part">Empty</a><a href="/broken">Broken</a><a href="/redirect">Redirect</a><a href="/photo.jpg">Photo</a><a href="https://other.test/out">External</a><a href="mailto:a@b.test">Mail</a><a href="/logout">Logout</a><a href="/file.pdf">PDF</a><a href="https://u:p@x.test/private">Private</a><a href="http://[">Bad</a><a href="/empty">Duplicate</a><a href="/empty" rel="nofollow">No follow</a><a href="/empty" download>Download</a>`);
+      if(url==="https://x.test/empty")return response(url,'<a href="/deep?b=2&amp;a=1">Deep</a>');
+      if(url==="https://x.test/broken")return response(url,"no",500);
+      if(url==="https://x.test/redirect")return response(url,"<p>moved</p>",200,"text/html","https://other.test/moved");
+      if(url==="https://x.test/photo.jpg")return response(url,"x",200,"image/jpeg");
+      if(url==="https://x.test/deep?a=1&b=2")return response(url,'<img src="/one.jpg" width="600" height="400"><img src="/two.jpg" width="600" height="400"><img src="/three.jpg" width="600" height="400">');
+      throw new Error(`unexpected ${url}`);
+    }));
+    const settings={...DEFAULT_SETTINGS,minWidth:0,minHeight:0,recursiveSearch:"same-origin" as const,recursiveMaxDepth:2,recursiveMaxPages:10,maxMediaItems:2,stripTracking:true,canonicalizeQuery:true};
+    const result=await scanGeneric("https://x.test/root",settings);expect(result.title).toBe("Root");expect(result.items).toHaveLength(2);expect(result.diagnostics?.adapter).toContain("linked-page");expect(result.diagnostics?.warnings.join(" ")).toContain("media limit");expect(result.diagnostics?.warnings.join(" ")).toContain("2 linked pages");
+    expect(calls.some(x=>x.url.includes("other.test/out"))).toBe(false);expect(calls.some(x=>x.url.includes("logout"))).toBe(false);expect(calls.find(x=>x.url.includes("deep"))?.credentials).toBe("include");
+    expect(result.items.some(x=>x.sourceUrl.includes("deep"))).toBe(true);
+  });
+
+  it("supports explicit cross-site recursion and recursion guards",async()=>{
+    const calls:Array<{url:string;credentials?:RequestCredentials;redirect?:RequestRedirect;referrerPolicy?:ReferrerPolicy}>=[];
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{const url=String(input);calls.push({url,credentials:init?.credentials,redirect:init?.redirect,referrerPolicy:init?.referrerPolicy});const body=url.includes("external")?'<img src="/outside.jpg" width="500" height="400">':'<a href="https://other.test/external">Outside</a>';const r=new Response(body,{headers:{"content-type":"text/html"}});Object.defineProperty(r,"url",{configurable:true,value:url});return r}));
+    const external=await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0,recursiveSearch:"all",recursiveMaxPages:2,referrerPolicy:"never",followRedirects:false});expect(external.items).toHaveLength(1);expect(calls[1]).toMatchObject({credentials:"omit",redirect:"manual",referrerPolicy:"no-referrer"});
+    const before=calls.length;await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,recursiveSearch:"off"});await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,recursiveSearch:"all",recursiveMaxPages:1});await scanGeneric("https://x.test/root",DEFAULT_SETTINGS,undefined,false);expect(calls.length-before).toBe(3);
+  });
+
+  it("defaults to empty-only recursion and supports an explicit always trigger",async()=>{
+    const calls:string[]=[];vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL)=>{const url=String(input);calls.push(url);const body=url.endsWith("/root")?'<img src="/cover.jpg" width="500" height="400"><a href="/child">Child</a>':'<img src="/child.jpg" width="500" height="400">';const r=new Response(body,{headers:{"content-type":"text/html"}});Object.defineProperty(r,"url",{value:url});return r}));
+    let result=await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0});expect(result.items).toHaveLength(1);expect(calls).toHaveLength(1);
+    calls.length=0;result=await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,minWidth:0,minHeight:0,recursiveTrigger:"always"});expect(result.items).toHaveLength(2);expect(calls).toHaveLength(2);
+  });
+
+  it("reports one linked-page failure and forwards active and pre-aborted cancellation",async()=>{
+    vi.stubGlobal("fetch",vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{const url=String(input);if(init?.signal?.aborted)throw new DOMException("Aborted","AbortError");if(url.endsWith("/root")||url.endsWith("/cancel-root")){const r=new Response(`<a href="/${url.includes("cancel")?"pending":"fail"}">Next</a>`);Object.defineProperty(r,"url",{value:url});return r}if(url.endsWith("/fail"))return new Response("no",{status:500});return await new Promise<Response>((_resolve,reject)=>init?.signal?.addEventListener("abort",()=>reject(new DOMException("Aborted","AbortError")),{once:true}))}));
+    const failed=await scanGeneric("https://x.test/root",{...DEFAULT_SETTINGS,recursiveSearch:"same-origin",recursiveMaxPages:2});expect(failed.diagnostics?.warnings.join(" ")).toContain("1 linked page that");
+    const preAborted=new AbortController();preAborted.abort();await expect(scanGeneric("https://x.test/pre-aborted",DEFAULT_SETTINGS,preAborted.signal)).rejects.toMatchObject({name:"AbortError"});
+    const active=new AbortController(),pending=scanGeneric("https://x.test/cancel-root",DEFAULT_SETTINGS,active.signal);await Promise.resolve();await Promise.resolve();active.abort();await expect(pending).rejects.toMatchObject({name:"AbortError"});
+  });
+
   it("covers extraction filtering, formats, srcsets, dimensions, quotes and missing attributes",()=>{
     const base="https://forum.test/t/a/1";
     const html=`
