@@ -17,6 +17,7 @@ export interface GridOptions {
   cell: number;
   current: number;
   onPick: (index: number) => void;
+  onWidth?: (index: number, width: number) => void;
 }
 
 function tileMarkup(item: MediaItem, index: number, total: number, current: boolean, visible: boolean, style: string) {
@@ -47,6 +48,7 @@ export class VirtualGrid {
     this.windowEl = container.lastElementChild as HTMLElement;
     container.addEventListener("scroll", this.onScroll, {passive: true});
     container.addEventListener("click", this.onClick);
+    container.addEventListener("load", this.onLoad, true);
     this.observer = new ResizeObserver(() => this.schedule());
     this.observer.observe(container);
     // Browsers clamp scrollTop while scrollHeight is still zero. Paint the
@@ -99,6 +101,7 @@ export class VirtualGrid {
     this.observer.disconnect();
     this.container.removeEventListener("scroll", this.onScroll);
     this.container.removeEventListener("click", this.onClick);
+    this.container.removeEventListener("load", this.onLoad, true);
   }
 
   private onScroll = () => this.schedule();
@@ -106,6 +109,12 @@ export class VirtualGrid {
   private onClick = (event: Event) => {
     const tile = (event.target as Element).closest?.<HTMLElement>(".lp-thumb");
     if (tile) this.options.onPick(Number(tile.dataset.i));
+  };
+
+  private onLoad = (event: Event) => {
+    const image = event.target as HTMLImageElement;
+    const tile = image.closest?.<HTMLElement>(".lp-thumb");
+    if (tile && image.naturalWidth) this.options.onWidth?.(Number(tile.dataset.i), image.naturalWidth);
   };
 
   private schedule() {
