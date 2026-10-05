@@ -145,6 +145,8 @@ input[type="range"] { accent-color: var(--signal); }
 .popup .spaced { margin-top: 14px; }
 .popup .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
 .popup .actions .button { padding: 0 8px; font-size: 12px; }
+.popup .actions.two { grid-template-columns: repeat(2, 1fr); margin-top: 0; }
+.popup .actions .button[hidden] { display: none; }
 .popup .footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11px; }
 .favorites { display: grid; gap: 7px; margin-top: 8px; max-height: 170px; overflow: auto; }
 .favorite-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }

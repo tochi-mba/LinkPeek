@@ -90,7 +90,7 @@ describe("the settings page", () => {
     expect(saved()).toMatchObject({activationMode: "click", placement: "left", activationKeywords: ["Gallery", "photos"]});
     await click(field("enabled").querySelector("[data-reset]")!);
     expect(saved()).not.toHaveProperty("enabled");
-    expect(document.querySelector("#saved")!.textContent).toBe("Saved");
+    expect(notices.at(-1)).toBe("Saved");
   });
 
   it("steps and clamps numbers, and shows range values as they move", async () => {
@@ -138,14 +138,21 @@ describe("the settings page", () => {
     expect(document.querySelector('[data-section="essentials"] .modified')).not.toBeNull();
     await click($('[data-reset-section="essentials"]'));
     expect(saved()).toEqual({blur: 3});
-    expect(document.querySelector("#saved")!.textContent).toBe("Section reset");
+    expect(notices.at(-1)).toBe("Section reset");
   });
 
-  it("clears the saved note after a moment", async () => {
+  it("clears the saved note after a moment, leaving longer notes up for longer", async () => {
     await open();
     vi.useFakeTimers({shouldAdvanceTime: true});
     await change(field("enabled").querySelector("input")!, false);
     vi.advanceTimersByTime(1200);
+    expect(document.querySelector("#saved")!.textContent).toBe("");
+    const form = $<HTMLFormElement>("[data-site-form]");
+    form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+    await settle();
+    vi.advanceTimersByTime(1200);
+    expect(document.querySelector("#saved")!.textContent).toBe("Enter a site like example.com");
+    vi.advanceTimersByTime(600);
     expect(document.querySelector("#saved")!.textContent).toBe("");
   });
 
@@ -282,7 +289,7 @@ describe("your data", () => {
     await pick(JSON.stringify({blur: 9}));
     expect(saved()).toEqual({blur: 9});
     await pick("not json");
-    expect(document.querySelector("#saved")!.textContent).toContain("not a LinkPeek settings file");
+    expect(notices.at(-1)).toContain("not a LinkPeek settings file");
     Object.defineProperty(input, "files", {configurable: true, value: []});
     input.dispatchEvent(new Event("change"));
   });

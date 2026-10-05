@@ -137,9 +137,9 @@ export function resizeHandles() {
 
 const HELP_GROUPS: Array<[string, Array<[ShortcutAction, string]>]> = [
   ["Browse", [["next", "Next media"], ["previous", "Previous media"], ["grid", "Grid / single media"], ["slideshow", "Slideshow"]]],
-  ["Links on the page", [["nextLink", "Next prepared link"], ["previousLink", "Previous prepared link"]]],
-  ["This media", [["open", "Open original"], ["download", "Download original"], ["copy", "Copy media link"], ["favorite", "Save this link"]]],
-  ["Zoom", [["zoomIn", "Zoom in"], ["zoomOut", "Zoom out"], ["resetZoom", "Reset zoom"]]],
+  ["Links", [["nextLink", "Next prepared link (or next page in a linked list)"], ["previousLink", "Previous one"], ["openPage", "Open the linked page"]]],
+  ["This media", [["open", "Open original"], ["download", "Download original"], ["downloadAll", "Download the whole gallery (press twice)"], ["copy", "Copy media link"], ["favorite", "Save this link"]]],
+  ["Zoom", [["fill", "Fill the panel / fit"], ["rotate", "Rotate"], ["zoomIn", "Zoom in"], ["zoomOut", "Zoom out"], ["resetZoom", "Reset zoom"]]],
   ["Panel", [["expand", "Expand / restore"], ["pin", "Pin open"], ["help", "These controls"], ["close", "Close"]]]
 ];
 
@@ -147,15 +147,18 @@ export function helpMarkup(shortcuts: Shortcuts, gif: boolean) {
   const rows = (pairs: Array<[string, string]>) => pairs.map(([key, label]) => `<kbd>${escapeHtml(key)}</kbd><span>${escapeHtml(label)}</span>`).join("");
   const gestures = rows([
     ["scroll ↕", "Previous / next media"], ["swipe ↔", "Fast scrub"], ["pinch", "Zoom at the pointer"],
-    ["double-click", "Zoom here / fit"], ["double-click + drag", "Pan while zoomed"], ["drag title", "Move the panel"], ["drag an edge", "Resize the panel"]
+    ["double-click", "Zoom here / fit"], ["double-click + drag", "Pan while zoomed"], ["mouse back / forward", "Previous / next media"],
+    ["middle-click", "Original in a background tab"], ["drag title", "Move the panel"], ["drag an edge", "Resize the panel"]
   ]);
   const gifRows = gif ? `<h4>GIF</h4><div class="lp-help-grid">${rows([["Space", "Play / pause"], [", / .", "Previous / next frame"], ["[ / ]", "Slower / faster"], ["timeline scroll", "Scrub frames"]])}</div>` : "";
   const groups = HELP_GROUPS.map(([title, actions]) => {
     const bound = actions.filter(([action]) => shortcuts[action].length).map(([action, label]): [string, string] => [keyHint(shortcuts, action), label]);
     return bound.length ? `<h4>${title}</h4><div class="lp-help-grid">${rows(bound)}</div>` : "";
   }).join("");
+  const inspector = shortcuts.preloadInspector[0];
+  const inspectorRow = inspector ? `<h4>Preparation</h4><div class="lp-help-grid">${rows([[`${comboLabel(inspector)}, then ${comboLabel(inspector).split("+").pop()}`, "Preload inspector"]])}</div>` : "";
   return `<div class="lp-help" role="dialog" aria-label="One-hand controls">`
     + `<button type="button" class="lp-btn lp-help-close" data-action="help" aria-label="Close controls" title="Close controls">×</button>`
-    + `<h3>One-hand controls</h3><h4>Touchpad and mouse</h4><div class="lp-help-grid">${gestures}</div>${gifRows}${groups}`
+    + `<h3>One-hand controls</h3><h4>Touchpad and mouse</h4><div class="lp-help-grid">${gestures}</div>${gifRows}${groups}${inspectorRow}`
     + `<p class="lp-help-foot">Change any key in LinkPeek settings → Keyboard.</p></div>`;
 }

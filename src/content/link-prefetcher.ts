@@ -6,8 +6,14 @@
  * heading, and the closest few are scanned cheaply in the service worker.
  * Results with media are kept here too, so opening a prepared link shows its
  * gallery in the first frame without a round trip.
+ *
+ * While a gallery built from linked pages is open, the links next to the one
+ * being viewed are prepared too, so stepping through them with N is instant.
+ *
+ * The preload inspector reads live state from here and can raise a link's
+ * priority: "high" prepares it in the next idle moment, "maximum" right away.
  */
-import {classifyLink, type ScanResult} from "../shared/media";
+import {classifyLink, linkLabel, type ScanResult} from "../shared/media";
 import type {PrefetchRequest} from "../shared/messages";
 import type {LinkPeekSettings} from "../shared/settings";
 import type {ImageWarmer} from "./image-warmer";
@@ -15,7 +21,7 @@ import type {Budget} from "./resource-governor";
 
 export interface PrefetchHost {
   /** Effective settings when this link may be previewed here, otherwise undefined. */
-  settingsFor(anchor: HTMLAnchorElement): LinkPeekSettings | undefined;
+  settingsFor(url: string): LinkPeekSettings | undefined;
   pointer(): {x: number; y: number; vx: number; vy: number};
   budget(): Budget;
 }
@@ -23,17 +29,23 @@ export interface PrefetchHost {
 type Level = "shallow" | "deep";
 export type PreloadPriority = "normal" | "high" | "maximum";
 export type PreloadState = "not-started" | "queued" | "loading" | "prepared" | "backoff" | "blocked";
+
 export interface PreloadEntry {
   url: string;
   label: string;
   state: PreloadState;
   priority: PreloadPriority;
-  source: "page" | "recursive";
+  /** "linked": not on this page, but next in a linked page's list (see warmAround). */
+  source: "page" | "linked";
   retryAt?: number;
   title?: string;
 }
 
 const RESULT_CACHE_SIZE = 80;
+/** Links remembered as already requested; older ones may be requested again. */
+const REQUEST_MEMORY = 1000;
+/** Requests allowed to wait for a slot; beyond this, speculative work is simply skipped. */
+const MAX_WAITING = 80;
 const RETRY_AFTER_MS = 30_000;
 const LOOKAHEAD_MS = 150;
 
@@ -47,91 +59,21 @@ export class LinkPrefetcher {
   private requested = new Map<string, Level>();
   private results = new Map<string, ScanResult>();
   private failedUntil = new Map<string, number>();
+  /** Only work in progress; prepared and backoff are derived from results and failures. */
+  private active = new Map<string, "queued" | "loading">();
+  private priorities = new Map<string, PreloadPriority>();
+  /** Links raised to "high", waiting for the next idle moment. */
+  private boosted = new Set<string>();
+  /** Links from a linked page's list that were prepared ahead of N; shown in the inspector. */
+  private linked = new Set<string>();
+  private listeners = new Set<() => void>();
   private inFlight = 0;
   private waiters: Array<() => void> = [];
   private idleHandle: number | undefined;
-  private childIdleHandle: number | undefined;
-  private childQueue = new Set<string>();
-  private states = new Map<string, PreloadState>();
-  private priorities = new Map<string, PreloadPriority>();
-  private recursiveUrls = new Set<string>();
-  private listeners = new Set<() => void>();
+  /** Bumped by reset(), so answers to earlier requests are ignored. */
   private generation = 0;
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
-
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private changed() {
-    // Bound history on infinite-scroll pages without discarding work still in flight.
-    if (this.states.size > RESULT_CACHE_SIZE * 3) {
-      for (const [url, state] of this.states) {
-        if (state === "loading" || state === "queued") continue;
-        this.states.delete(url);
-        this.requested.delete(url);
-        this.failedUntil.delete(url);
-        if (this.states.size <= RESULT_CACHE_SIZE * 3) break;
-      }
-    }
-    for (const listener of this.listeners) listener();
-  }
-
-  private priority(url: string): PreloadPriority {
-    return this.priorities.get(url) ?? "normal";
-  }
-
-  snapshot(): PreloadEntry[] {
-    const entries = new Map<string, PreloadEntry>();
-    for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
-      const url = anchor.href, allowed = Boolean(this.host.settingsFor(anchor));
-      entries.set(url, {
-        url, label: anchor.textContent?.trim() || url,
-        state: allowed ? this.stateFor(url) : "blocked", priority: this.priority(url), source: "page",
-        retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
-      });
-    }
-    for (const url of this.recursiveUrls) {
-      if (entries.has(url)) continue;
-      entries.set(url, {
-        url, label: new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname,
-        state: this.stateFor(url), priority: this.priority(url), source: "recursive",
-        retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
-      });
-    }
-    return [...entries.values()];
-  }
-
-  private stateFor(url: string): PreloadState {
-    if (this.results.has(url)) return "prepared";
-    if ((this.failedUntil.get(url) ?? 0) > Date.now()) return "backoff";
-    const state = this.states.get(url);
-    return state === "backoff" || state === "prepared" ? "not-started" : state ?? "not-started";
-  }
-
-  setPriority(urls: Iterable<string>, priority: PreloadPriority) {
-    const selected = [...new Set(urls)];
-    for (const url of selected) {
-      if (priority === "normal") this.priorities.delete(url);
-      else this.priorities.set(url, priority);
-      while (this.priorities.size > RESULT_CACHE_SIZE) this.priorities.delete(this.priorities.keys().next().value!);
-    }
-    this.changed();
-    for (const url of selected) {
-      const anchor = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(candidate => candidate.href === url) ?? Object.assign(document.createElement("a"), {href: url});
-      const settings = this.host.settingsFor(anchor);
-      if (!settings || priority === "normal") continue;
-      if (priority === "maximum") void this.prepareUrl(url, settings, "deep", true, true);
-      else {
-        this.childQueue.delete(url);
-        this.childQueue = new Set([url, ...this.childQueue]);
-        this.states.set(url, "queued");
-        this.scheduleChildWork();
-      }
-    }
-  }
 
   /** Starts tracking every link already on the page. */
   start() {
@@ -163,15 +105,33 @@ export class LinkPrefetcher {
     for (const anchor of anchors) this.observer?.observe(anchor);
   }
 
+  /** Called whenever the inspector should refresh. Returns an unsubscribe function. */
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private changed() {
+    for (const listener of this.listeners) listener();
+  }
+
+  private setActive(url: string, state: "queued" | "loading" | undefined) {
+    if (state) this.active.set(url, state);
+    else this.active.delete(url);
+    this.changed();
+  }
+
   /** Forgets everything prepared, for example after settings change what a scan returns. */
   reset() {
     this.generation++;
     this.requested.clear();
     this.results.clear();
     this.failedUntil.clear();
-    this.childQueue.clear();
-    this.states.clear();
-    this.recursiveUrls.clear();
+    this.active.clear();
+    this.boosted.clear();
+    this.linked.clear();
     this.priorities.clear();
     this.changed();
     this.schedule();
@@ -182,8 +142,8 @@ export class LinkPrefetcher {
     if (this.idleHandle !== undefined || document.hidden) return;
     this.idleHandle = requestIdleCallback(() => {
       this.idleHandle = undefined;
+      this.prepareBoosted();
       this.prepareNearest();
-      this.scheduleChildWork();
     }, {timeout: 600});
   }
 
@@ -208,14 +168,14 @@ export class LinkPrefetcher {
   preparedAnchors(): HTMLAnchorElement[] {
     const seen = new Set<string>();
     return [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].filter(anchor => {
-      if (seen.has(anchor.href) || !this.results.has(anchor.href) || !this.host.settingsFor(anchor)) return false;
+      if (seen.has(anchor.href) || !this.results.has(anchor.href) || !this.host.settingsFor(anchor.href)) return false;
       seen.add(anchor.href);
       return true;
     });
   }
 
   /** Records a gallery that a full scan produced, so it reopens instantly and counts as prepared. */
-  remember(url: string, result: ScanResult, queueChildren = true) {
+  remember(url: string, result: ScanResult) {
     if (!result.items.length) return;
     this.results.delete(url);
     this.results.set(url, result);
@@ -223,65 +183,91 @@ export class LinkPrefetcher {
       const oldest = this.results.keys().next().value!;
       this.results.delete(oldest);
       this.requested.delete(oldest);
-      this.states.delete(oldest);
-    }
-    this.states.set(url, "prepared");
-    this.changed();
-    if (queueChildren) this.queueChildLinks(result);
-  }
-
-  /** Child-page links are priority-2 work: bounded, idle-only and governed by current headroom. */
-  private queueChildLinks(result: ScanResult) {
-    const contexts = result.linkContexts?.filter(context => context.sourceUrl !== result.url) ?? [];
-    for (const context of contexts) {
-      for (const url of context.links) {
-        if (this.childQueue.size >= 32) break;
-        this.recursiveUrls.add(url);
-        while (this.recursiveUrls.size > RESULT_CACHE_SIZE) this.recursiveUrls.delete(this.recursiveUrls.values().next().value!);
-        if (!this.results.has(url) && !this.requested.has(url)) {
-          this.childQueue.add(url);
-          this.states.set(url, "queued");
-        }
-      }
-      if (this.childQueue.size >= 32) break;
     }
     this.changed();
-    this.scheduleChildWork();
   }
 
-  private scheduleChildWork() {
-    if (this.childIdleHandle !== undefined || document.hidden || !this.childQueue.size) return;
-    const budget = this.host.budget();
-    if (!budget.speculative || budget.nearbyLinks <= 0) return;
-    this.childIdleHandle = requestIdleCallback(() => {
-      this.childIdleHandle = undefined;
-      const current = this.host.budget();
-      if (!current.speculative || current.nearbyLinks <= 0) return;
-      const count = Math.min(this.childQueue.size, Math.max(1, Math.min(current.nearbyLinks, current.linkConcurrency)));
-      const urls = [...this.childQueue].sort((a, b) => {
-        const rank = (url: string) => this.priority(url) === "high" ? 0 : 1;
-        return rank(a) - rank(b);
-      }).slice(0, count);
-      for (const url of urls) {
-        this.childQueue.delete(url);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        const settings = this.host.settingsFor(anchor);
-        if (settings) void this.prepareUrl(url, settings, "deep", false, false);
+  /** Every link on the page, then linked-page links prepared ahead, with their state. One entry per URL. */
+  snapshot(): PreloadEntry[] {
+    const entries = new Map<string, PreloadEntry>();
+    const add = (url: string, label: string, source: PreloadEntry["source"]) => entries.set(url, {
+      url, label, source, state: this.stateFor(url, Boolean(this.host.settingsFor(url))),
+      priority: this.priorities.get(url) ?? "normal", retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
+    });
+    for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      if (!entries.has(anchor.href)) add(anchor.href, anchor.text.trim() || anchor.href, "page");
+    }
+    for (const url of this.linked) if (!entries.has(url)) add(url, linkLabel(url), "linked");
+    return [...entries.values()];
+  }
+
+  private stateFor(url: string, allowed: boolean): PreloadState {
+    if (!allowed) return "blocked";
+    if (this.results.has(url)) return "prepared";
+    const active = this.active.get(url);
+    if (active) return active;
+    if ((this.failedUntil.get(url) ?? 0) > Date.now()) return "backoff";
+    return this.boosted.has(url) ? "queued" : "not-started";
+  }
+
+  /** Raises or resets the priority of links, from the inspector. */
+  setPriority(urls: Iterable<string>, priority: PreloadPriority) {
+    for (const url of new Set(urls)) {
+      const settings = this.host.settingsFor(url);
+      this.boosted.delete(url);
+      if (priority === "normal" || !settings) {
+        this.priorities.delete(url);
+        continue;
       }
-      if (this.childQueue.size) this.scheduleChildWork();
-    }, {timeout: 1500});
+      this.priorities.set(url, priority);
+      if (priority === "maximum") void this.prepareUrl(url, settings, "deep", true, true);
+      else this.boosted.add(url);
+    }
+    this.changed();
+    this.schedule();
   }
 
   /** The pointer reached a link: prepare it now, ahead of any queued nearby work. */
   hover(anchor: HTMLAnchorElement) {
-    if (this.host.budget().speculative) void this.prepare(anchor, "shallow", true);
+    const settings = this.host.settingsFor(anchor.href);
+    if (settings && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "shallow", true, false);
   }
 
   /** The pointer is staying on a link: also run the deeper linked-page search if it is enabled. */
   deepen(anchor: HTMLAnchorElement) {
-    const settings = this.host.settingsFor(anchor);
-    if (settings && settings.recursiveSearch !== "off" && this.host.budget().speculative) void this.prepare(anchor, "deep", true);
+    const settings = this.host.settingsFor(anchor.href);
+    if (settings && settings.recursiveSearch !== "off" && this.host.budget().speculative) void this.prepareUrl(anchor.href, settings, "deep", true, false);
+  }
+
+  /**
+   * Prepares the neighbours of `links[index]` (the next two and the previous
+   * one, wrapping) so N and Shift+N through a linked page's list open instantly.
+   */
+  warmAround(links: readonly string[], index: number) {
+    const budget = this.host.budget();
+    if (!budget.speculative || links.length < 2) return;
+    const ahead = Math.max(1, Math.min(2, budget.nearbyLinks)), at = (offset: number) => links[(index + offset + links.length) % links.length];
+    const urls = new Set([...Array.from({length: ahead}, (_, i) => at(i + 1)), at(-1)].filter(url => url !== links[index]));
+    for (const url of urls) {
+      const settings = this.host.settingsFor(url);
+      if (!settings) continue;
+      this.linked.delete(url);
+      this.linked.add(url);
+      while (this.linked.size > RESULT_CACHE_SIZE) this.linked.delete(this.linked.values().next().value!);
+      void this.prepareUrl(url, settings, "shallow", false, false);
+    }
+    this.changed();
+  }
+
+  /** "High" links go first in idle time, a few at a time. */
+  private prepareBoosted() {
+    const count = Math.max(1, this.host.budget().linkConcurrency);
+    for (const url of [...this.boosted].slice(0, count)) {
+      this.boosted.delete(url);
+      const settings = this.host.settingsFor(url);
+      if (settings) void this.prepareUrl(url, settings, "deep", false, true);
+    }
+    if (this.boosted.size) this.schedule();
   }
 
   private prepareNearest() {
@@ -289,29 +275,30 @@ export class LinkPrefetcher {
     if (!budget.speculative || budget.nearbyLinks <= 0) return;
     const {x, y, vx, vy} = this.host.pointer();
     const aimX = Math.max(0, Math.min(innerWidth, x + vx * LOOKAHEAD_MS)), aimY = Math.max(0, Math.min(innerHeight, y + vy * LOOKAHEAD_MS));
-    const ranked: Array<{anchor: HTMLAnchorElement; distance: number}> = [];
+    const ranked: Array<{anchor: HTMLAnchorElement; settings: LinkPeekSettings; distance: number}> = [];
     for (const anchor of this.near) {
       if (!anchor.isConnected) {
         this.near.delete(anchor);
         continue;
       }
-      if (!this.host.settingsFor(anchor)) continue;
+      const settings = this.host.settingsFor(anchor.href);
+      if (!settings) continue;
       const rect = anchor.getBoundingClientRect();
       const dx = Math.max(rect.left - aimX, 0, aimX - rect.right), dy = Math.max(rect.top - aimY, 0, aimY - rect.bottom);
-      ranked.push({anchor, distance: Math.hypot(dx, dy)});
+      ranked.push({anchor, settings, distance: Math.hypot(dx, dy)});
     }
     ranked.sort((a, b) => a.distance - b.distance);
     const chosen = new Set<string>();
-    for (const {anchor} of ranked) {
+    for (const {anchor, settings} of ranked) {
       if (chosen.size >= budget.nearbyLinks) break;
       if (chosen.has(anchor.href)) continue;
       chosen.add(anchor.href);
-      void this.prepare(anchor, "shallow", false);
+      void this.prepareUrl(anchor.href, settings, "shallow", false, false);
     }
   }
 
+  /** Waits for a request slot. Pointer intent may use one extra slot and jumps the queue. */
   private async slot(urgent: boolean) {
-    // Reserve one slot for pointer intent, not one unlimited slot per pointer event.
     while (this.inFlight >= Math.max(1, this.host.budget().linkConcurrency) + (urgent ? 1 : 0)) {
       await new Promise<void>(resolve => urgent ? this.waiters.unshift(resolve) : this.waiters.push(resolve));
     }
@@ -323,44 +310,40 @@ export class LinkPrefetcher {
     this.waiters.shift()?.();
   }
 
-  private async prepare(anchor: HTMLAnchorElement, level: Level, urgent: boolean) {
-    const settings = this.host.settingsFor(anchor);
-    if (!settings) return;
-    await this.prepareUrl(anchor.href, settings, level, urgent, true);
-  }
-
-  private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, urgent: boolean, queueChildren: boolean) {
-    const generation = this.generation;
-    if (this.waiters.length >= RESULT_CACHE_SIZE) return;
-    const previous = this.requested.get(url);
-    if (document.hidden || previous === "deep" || (level === "shallow" && previous)) return;
+  /**
+   * Prepares one link. `explicit` work was asked for in the inspector and is
+   * allowed even when speculative preparation is off.
+   */
+  private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, urgent: boolean, explicit: boolean) {
+    const generation = this.generation, previous = this.requested.get(url);
+    if (document.hidden || this.waiters.length >= MAX_WAITING || previous === "deep" || (level === "shallow" && previous)) return;
     if ((this.failedUntil.get(url) ?? 0) > Date.now()) return;
     this.requested.set(url, level);
-    this.states.set(url, "queued");
-    this.changed();
-    const request: PrefetchRequest = {type: "LINKPEEK_PREFETCH", url, kind: classifyLink(url), deep: level === "deep"};
+    while (this.requested.size > REQUEST_MEMORY) this.requested.delete(this.requested.keys().next().value!);
+    this.setActive(url, "queued");
     await this.slot(urgent);
-    if (generation !== this.generation || document.hidden || !this.host.budget().speculative) {
-      if (generation === this.generation) { this.requested.delete(url); this.states.delete(url); }
-      this.release();
-      return;
-    }
-    this.states.set(url, "loading");
-    this.changed();
     try {
+      if (generation !== this.generation) return;
+      if (document.hidden || (!explicit && !this.host.budget().speculative)) {
+        this.requested.delete(url);
+        this.setActive(url, undefined);
+        return;
+      }
+      this.setActive(url, "loading");
+      const request: PrefetchRequest = {type: "LINKPEEK_PREFETCH", url, kind: classifyLink(url), deep: level === "deep"};
       const result = await chrome.runtime.sendMessage(request) as ScanResult | null | {error: string};
       if (generation !== this.generation) return;
+      this.active.delete(url);
       if (!result || "error" in result) throw new Error(result?.error ?? "No result");
-      this.remember(url, result, queueChildren);
+      this.remember(url, result);
+      this.changed();
       this.warmThumbnails(result, urgent);
-      if (!result.items.length) { this.states.delete(url); this.changed(); }
     } catch {
       if (generation !== this.generation) return;
       if (previous) this.requested.set(url, previous);
       else this.requested.delete(url);
       this.failedUntil.set(url, Date.now() + RETRY_AFTER_MS);
-      this.states.set(url, "backoff");
-      this.changed();
+      this.setActive(url, undefined);
     } finally {
       this.release();
     }

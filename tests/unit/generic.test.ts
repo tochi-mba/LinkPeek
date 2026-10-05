@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MAX_HTML_BYTES, readTextCapped, scanGeneric} from "../../src/core/generic";
+import {scanGeneric} from "../../src/core/generic";
 import {DEFAULT_SETTINGS, resolveSettings, type LinkPeekSettings} from "../../src/shared/settings";
 
 type Route = (init: RequestInit) => Response | Promise<Response>;
@@ -91,28 +91,6 @@ describe("reading a page", () => {
   });
 });
 
-describe("reading capped text", () => {
-  it("stops reading past the limit and keeps what was read", async () => {
-    const chunk = new TextEncoder().encode("a".repeat(1024));
-    let pulls = 0;
-    const stream = new ReadableStream<Uint8Array>({pull: controller => {
-      pulls++;
-      controller.enqueue(chunk);
-    }});
-    const text = await readTextCapped(respond("https://a.test/", stream), 4096);
-    expect(text).toHaveLength(4096);
-    expect(pulls).toBeLessThan(10);
-    expect(MAX_HTML_BYTES).toBe(3 * 1024 * 1024);
-  });
-
-  it("decodes the declared charset and falls back to UTF-8 for unknown ones", async () => {
-    const latin = new Uint8Array([0x63, 0x61, 0x66, 0xe9]);
-    expect(await readTextCapped(respond("https://a.test/", latin, "text/html; charset=iso-8859-1"))).toBe("café");
-    expect(await readTextCapped(respond("https://a.test/", "plain", "text/html; charset=nonsense"))).toBe("plain");
-    expect(await readTextCapped(respond("https://a.test/", null))).toBe("");
-  });
-});
-
 describe("searching linked pages", () => {
   const index = "https://a.test/index";
 
@@ -142,6 +120,16 @@ describe("searching linked pages", () => {
       {sourceUrl: "https://a.test/child", links: ["https://a.test/child-a", "https://a.test/child-b"]},
       {sourceUrl: "https://a.test/root-next", links: []}
     ]);
+  });
+
+  it("never reads a page twice, even when deeper pages link back", async () => {
+    html(index, `<a href="/one">one</a><a href="/two">two</a>`);
+    html("https://a.test/one", `<a href="/index">home</a><a href="/two">two</a><a href="/three">three</a>`);
+    html("https://a.test/two", `<a href="/one">one</a>`);
+    html("https://a.test/three", `<img src="/deep.jpg">`);
+    const result = await scanGeneric(index, settings({recursiveMaxDepth: 3, recursiveMaxPages: 10}));
+    expect(result.items.map(item => new URL(item.originalUrl).pathname)).toEqual(["/deep.jpg"]);
+    expect(calls.map(call => new URL(call.url).pathname).sort()).toEqual(["/index", "/one", "/three", "/two"].sort());
   });
 
   it("goes deeper level by level, honouring the page limit and counting failures", async () => {

@@ -174,11 +174,12 @@ function rerender() {
   scrollTo(0, scroll);
 }
 
+/** Shows a short note by the title; longer notes (usually problems) stay long enough to read. */
 function flashSaved(text = "Saved") {
   const saved = $("saved");
   saved.textContent = text;
   clearTimeout(savedTimer);
-  savedTimer = window.setTimeout(() => saved.textContent = "", 1200);
+  savedTimer = window.setTimeout(() => saved.textContent = "", Math.max(1200, text.length * 60));
 }
 
 async function persist(text?: string) {

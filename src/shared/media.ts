@@ -41,6 +41,30 @@ export interface ScanResult {
 /** Link kinds LinkPeek can open a preview for. */
 export const PREVIEWABLE_KINDS: ReadonlySet<LinkKind> = new Set(["direct-image", "direct-video", "discourse", "generic"]);
 
+/** A short name for a link that is not on the page: its last path segment, or its host. */
+export function linkLabel(url: string) {
+  const parsed = new URL(url), segment = parsed.pathname.split("/").filter(Boolean).at(-1) ?? "";
+  try {
+    return decodeURIComponent(segment) || parsed.hostname;
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * The links worth stepping through on a fetched page: the ones under the page's
+ * own path (an album's photos, a category's threads) when there are at least
+ * two, so site navigation does not get in the way; otherwise all of them.
+ */
+export function contentLinks(context: LinkContext): string[] {
+  const base = new URL(context.sourceUrl), prefix = `${base.pathname.replace(/\/$/, "")}/`;
+  const children = context.links.filter(link => {
+    const url = new URL(link);
+    return url.origin === base.origin && url.pathname.startsWith(prefix) && url.pathname.length > prefix.length;
+  });
+  return children.length >= 2 ? children : context.links;
+}
+
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])/i;
 const VIDEO_FILE = /\.(?:mp4|webm|mov|m4v)(?:$|[?#])/i;
 const DOWNLOAD_FILE = /\.(?:zip|rar|7z|gz|tar|pdf|exe|msi|dmg|pkg|apk|iso|docx?|xlsx?|pptx?)(?:$|[?#])/i;
@@ -129,6 +153,13 @@ export function uniqueMediaItems(items: MediaItem[]): {items: MediaItem[]; dupli
   return {items: out, duplicates};
 }
 
+const UNSAFE_NAME_CHARS = /[\\/:*?"<>|\x00-\x1f]+/g;
+
+/** A folder name every desktop OS accepts, for downloading a whole gallery. */
+export function safeFolderName(title: string) {
+  return title.replace(UNSAFE_NAME_CHARS, " ").replace(/\s+/g, " ").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 80) || "LinkPeek gallery";
+}
+
 /** A filename that every desktop OS accepts, keeping the media file's extension. */
 export function safeDownloadName(item: Pick<MediaItem, "originalUrl" | "filename">) {
   let path = "";
@@ -139,6 +170,6 @@ export function safeDownloadName(item: Pick<MediaItem, "originalUrl" | "filename
   }
   const extension = /\.([a-z0-9]{2,5})$/i.exec(path)?.[0] ?? "";
   const base = (item.filename?.trim() || path || "media").replace(/\.[a-z0-9]{2,5}$/i, "");
-  const clean = base.replace(/[\\/:*?"<>|\x00-\x1f]+/g, " ").replace(/\s+/g, " ").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 120) || "media";
+  const clean = base.replace(UNSAFE_NAME_CHARS, " ").replace(/\s+/g, " ").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 120) || "media";
   return `${clean}${extension.toLowerCase()}`;
 }

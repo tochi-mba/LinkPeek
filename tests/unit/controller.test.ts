@@ -25,6 +25,8 @@ vi.mock("../../src/ui/viewer", () => ({
     scheduleClose = vi.fn();
     cancelClose = vi.fn();
     containsPoint = vi.fn(() => false);
+    showHoverRing = vi.fn();
+    hideHoverRing = vi.fn();
     key = vi.fn(() => false);
     budget: () => unknown;
     close = vi.fn((force = false) => {
@@ -420,12 +422,17 @@ describe("keyboard", () => {
       ]
     });
     respond = msg => msg.type === "LINKPEEK_SCAN" && msg.url === root.href ? recursive : scan(msg.url!);
-    await controller.activate(root, 0, 0);
+    await controller.activate(root, 30, 40);
     expect(viewer.result).toEqual(recursive);
+    // The first links of the list are prepared as soon as the gallery shows.
+    await flush();
+    expect(messages.filter(msg => msg.type === "LINKPEEK_PREFETCH").map(msg => msg.url)).toEqual(["https://dest.test/child/a", "https://dest.test/child/b"]);
 
     expect(key("n").defaultPrevented).toBe(true);
     await flush();
     expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
+    // The panel opens where the gallery was, not wherever the page happens to be.
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(30, 40, expect.anything(), "a", undefined);
 
     expect(key("n").defaultPrevented).toBe(true);
     await flush();
@@ -436,6 +443,44 @@ describe("keyboard", () => {
     expect(key("N", {shiftKey: true}).defaultPrevented).toBe(true);
     await flush();
     expect(scans().at(-1)!.url).toBe("https://dest.test/child/c");
+  });
+
+  it("starts a linked page's list from its end with Shift+N, and leaves single or unusable lists alone", async () => {
+    await boot();
+    const root = link("root", "https://dest.test/root");
+    const child = (sourceUrl: string, links: string[], items = 1): ScanResult => scan(root.href, items, {
+      items: Array.from({length: items}, (_, i) => ({id: `m${i}`, type: "image" as const, originalUrl: `${sourceUrl}/${i}.jpg`, previewUrl: `${sourceUrl}/${i}.jpg`, sourceUrl: i ? root.href : sourceUrl, score: 1})),
+      linkContexts: [{sourceUrl: "https://dest.test/child", links}]
+    });
+    const list = ["https://dest.test/child/a", "https://dest.test/child/b"];
+    respond = msg => msg.url === root.href ? child("https://dest.test/child", list) : scan(msg.url!);
+    await controller.activate(root, 30, 40);
+    key("N", {shiftKey: true});
+    await flush();
+    expect(scans().at(-1)!.url).toBe(list[1]);
+
+    // A one-link list, viewed from that link: N moves on to the prepared links on the page instead.
+    viewer.close(true);
+    respond = msg => msg.url === root.href ? child("https://dest.test/child", ["https://dest.test/child/a"]) : scan(msg.url!);
+    await controller.activate(root, 30, 40);
+    key("n");
+    await flush();
+    expect(scans().at(-1)!.url).toBe("https://dest.test/child/a");
+    key("n");
+    await flush();
+    expect(scans().at(-1)!.url).toBe(root.href);
+
+    // Media from the page itself, from a page with no list, or a list of blocked links: no list.
+    for (const [source, links, index] of [[root.href, list, 0], ["https://dest.test/other", list, 0], ["https://dest.test/child", ["https://dest.test/logout"], 0]] as const) {
+      viewer.close(true);
+      respond = msg => msg.url === root.href ? child(source, [...links], 2) : scan(msg.url!);
+      await controller.activate(root, 30, 40);
+      viewer.index = index;
+      const count = scans().length;
+      key("n");
+      await flush();
+      expect(scans()).toHaveLength(count);
+    }
   });
 
   it("opens the inspector only after a complete chord and leaves Cut untouched", async () => {
@@ -556,5 +601,98 @@ describe("page activity", () => {
     key("n");
     window.dispatchEvent(new KeyboardEvent("keydown", {key: "n"}));
     expect(scans()).toHaveLength(1);
+  });
+});
+
+describe("the preload inspector", () => {
+  it("opens and closes from the popup, and the popup can tell", async () => {
+    await boot();
+    const send = vi.fn();
+    runtimeListeners[0]({type: "LINKPEEK_TOGGLE_INSPECTOR"}, {}, send);
+    expect(send).toHaveBeenLastCalledWith({open: true});
+    expect(controller.status().inspectorOpen).toBe(true);
+    runtimeListeners[0]({type: "LINKPEEK_TOGGLE_INSPECTOR"}, {}, send);
+    expect(send).toHaveBeenLastCalledWith({open: false});
+  });
+
+  it("opens a page link from the inspector beside the link, and others where the last preview was", async () => {
+    await boot();
+    const a = link("a", undefined, 3000);
+    a.scrollIntoView = vi.fn();
+    controller.inspector.open();
+    (controller as unknown as {openUrlFromInspector: (url: string) => void}).openUrlFromInspector(a.href);
+    await flush();
+    expect(a.scrollIntoView).toHaveBeenCalled();
+    expect(scans().at(-1)!.url).toBe(a.href);
+    viewer.close(true);
+    (controller as unknown as {openUrlFromInspector: (url: string) => void}).openUrlFromInspector("https://dest.test/elsewhere/page");
+    await flush();
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(35, 760, expect.anything(), "page", undefined);
+    (controller as unknown as {openUrlFromInspector: (url: string) => void}).openUrlFromInspector("https://dest.test/logout");
+    await flush();
+    expect(scans()).toHaveLength(2);
+  });
+
+  it("raises priorities and opens links from the inspector's rows", async () => {
+    await boot();
+    const a = link("a");
+    controller.prefetcher.remember(a.href, scan(a.href));
+    const raise = vi.spyOn(controller.prefetcher, "setPriority");
+    controller.inspector.open();
+    const panel = controller.inspector.host.shadowRoot!;
+    const box = panel.querySelector<HTMLInputElement>(`[data-select="${a.href}"]`)!;
+    box.checked = true;
+    box.dispatchEvent(new Event("change", {bubbles: true}));
+    panel.querySelector<HTMLButtonElement>('[data-action="maximum"]')!.click();
+    expect(raise).toHaveBeenCalledWith([a.href], "maximum");
+    panel.querySelector<HTMLButtonElement>(`[data-open="${a.href}"]`)!.click();
+    await flush();
+    expect(scans().at(-1)!.url).toBe(a.href);
+  });
+
+  it("does not count clicks inside the inspector as clicks outside the preview", async () => {
+    await boot();
+    await controller.activate(link("a"), 0, 0);
+    controller.inspector.open();
+    pointer("pointerdown", controller.inspector.host);
+    expect(viewer.isOpen).toBe(true);
+  });
+});
+
+describe("switching links while a preview is open", () => {
+  it("ignores links crossed on the way from the open link to the preview", async () => {
+    await boot();
+    const a = link("a"), b = link("b");
+    const rect = {left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON() {}} as DOMRect;
+    a.getBoundingClientRect = () => rect;
+    await controller.activate(a, 20, 15);
+    viewer.containsPoint.mockImplementation((_x: number, _y: number, from?: DOMRect) => Boolean(from));
+    const opened = scans().length;
+    pointer("pointerover", b, 20, 15);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(scans()).toHaveLength(opened);
+    expect(viewer.containsPoint).toHaveBeenCalledWith(20, 15, rect);
+    a.remove();
+    pointer("pointerout", b, 20, 15, {relatedTarget: document.body});
+    pointer("pointerover", b, 500, 400);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(scans().at(-1)!.url).toBe(b.href);
+  });
+});
+
+describe("the hover countdown", () => {
+  it("shows beside the pointer while a link arms, green when it is prepared, and can be turned off", async () => {
+    await boot();
+    const a = link("a");
+    controller.prefetcher.remember(a.href, scan(a.href));
+    pointer("pointerover", a, 21, 16);
+    expect(viewer.showHoverRing).toHaveBeenCalledWith(21, 16, 100, true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(viewer.hideHoverRing).toHaveBeenCalled();
+    await setSettings({showHoverRing: false});
+    viewer.close(true);
+    pointer("pointerout", a, 21, 16, {relatedTarget: document.body});
+    pointer("pointerover", link("b"), 40, 16);
+    expect(viewer.showHoverRing).toHaveBeenCalledTimes(1);
   });
 });

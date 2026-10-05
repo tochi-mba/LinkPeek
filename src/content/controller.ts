@@ -2,17 +2,17 @@
  * The content script: wires pointer intent, preparation and the viewer together.
  *
  * Owns the open preview's scan (sharing, cancelling and progress), the keyboard
- * shortcuts that act on page links, per-gallery resume positions and the
- * status the toolbar popup shows.
+ * shortcuts that act on page links, per-gallery resume positions, the preload
+ * inspector and the status the toolbar popup shows.
  */
-import {PREVIEWABLE_KINDS, classifyLink, type ScanResult} from "../shared/media";
+import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResult} from "../shared/media";
 import type {ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
 import {HoverIntent, anchorFrom} from "./hover-intent";
 import {ImageWarmer} from "./image-warmer";
-import {LinkPrefetcher, type PreloadPriority} from "./link-prefetcher";
+import {LinkPrefetcher} from "./link-prefetcher";
 import {PreloadInspector} from "./preload-inspector";
 import {ResourceGovernor, TIER_NAMES} from "./resource-governor";
 
@@ -32,11 +32,14 @@ export class PreviewController {
   private requestId = 0;
   private openAnchor: HTMLAnchorElement | null = null;
   private openUrl: string | null = null;
+  /** Where the current preview was opened, so stepping through linked pages keeps the panel in place. */
+  private lastPoint = {x: innerWidth / 2, y: innerHeight / 2};
+  /** The linked page's list that N is stepping through, fixed until the preview closes. */
+  private linkedList?: string[];
   private positions = new Map<string, number>();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
   private inspectorChordKey = "";
-  private recursiveLinks?: string[];
   private disposers: Array<() => void> = [];
   readonly viewer: Viewer;
   readonly governor: ResourceGovernor;
@@ -55,21 +58,26 @@ export class PreviewController {
       viewer: this.viewer,
       isPrepared: url => this.prefetcher.isPrepared(url),
       isOpenAnchor: anchor => this.isOpenAnchor(anchor),
+      openAnchorRect: () => this.openAnchor?.isConnected ? this.openAnchor.getBoundingClientRect() : undefined,
       isScanning: () => Boolean(this.activeScan),
       onReach: anchor => this.prefetcher.hover(anchor),
       onLinger: anchor => this.prefetcher.deepen(anchor),
       onActivate: (anchor, x, y) => void this.activate(anchor, x, y),
-      onLeave: () => this.onLeave()
+      onLeave: () => this.onLeave(),
+      onArm: (anchor, delayMs, x, y) => {
+        if (this.pageSettings().showHoverRing) this.viewer.showHoverRing(x, y, delayMs, this.prefetcher.isPrepared(anchor.href));
+      },
+      onDisarm: () => this.viewer.hideHoverRing()
     });
     this.prefetcher = new LinkPrefetcher({
-      settingsFor: anchor => this.settingsFor(anchor),
+      settingsFor: url => this.settingsForUrl(url),
       pointer: () => this.intent.pointer(),
       budget: () => this.governor.budget()
     }, this.warmer);
     this.inspector = new PreloadInspector({
       snapshot: () => this.prefetcher.snapshot(),
-      setPriority: (urls: Iterable<string>, priority: PreloadPriority) => this.prefetcher.setPriority(urls, priority),
-      openUrl: url => this.openInspectorUrl(url),
+      setPriority: (urls, priority) => this.prefetcher.setPriority(urls, priority),
+      openUrl: url => this.openUrlFromInspector(url),
       subscribe: listener => this.prefetcher.subscribe(listener)
     });
   }
@@ -149,13 +157,17 @@ export class PreviewController {
     return this.pageCache.value;
   }
 
-  /** Settings to preview this link with, or undefined when it should be left alone. */
-  settingsFor(anchor: HTMLAnchorElement): LinkPeekSettings | undefined {
+  /** Settings to preview this URL with, or undefined when it should be left alone. */
+  settingsForUrl(url: string): LinkPeekSettings | undefined {
     const settings = this.pageSettings();
-    if (!settings.enabled || !linkMatchesKeywords(settings, anchor.href)) return undefined;
-    const kind = classifyLink(anchor.href);
+    if (!settings.enabled || !linkMatchesKeywords(settings, url)) return undefined;
+    const kind = classifyLink(url);
     if (!PREVIEWABLE_KINDS.has(kind) || (kind === "direct-video" && !settings.includeVideo)) return undefined;
     return settings;
+  }
+
+  settingsFor(anchor: HTMLAnchorElement) {
+    return this.settingsForUrl(anchor.href);
   }
 
   private isOpenAnchor(anchor: HTMLAnchorElement) {
@@ -173,6 +185,11 @@ export class PreviewController {
       sendResponse(this.status());
       return false;
     }
+    if (msg?.type === "LINKPEEK_TOGGLE_INSPECTOR") {
+      this.inspector.toggle();
+      sendResponse({open: this.inspector.isOpen});
+      return false;
+    }
     const scan = this.activeScan;
     if (msg?.type !== "LINKPEEK_SCAN_PROGRESS" || !scan || msg.token !== scan.token || msg.url !== scan.url || !msg.result?.items) return false;
     this.prefetcher.remember(scan.url, msg.result);
@@ -184,7 +201,7 @@ export class PreviewController {
     const settings = this.pageSettings(), governor = this.governor.status();
     return {
       enabled: settings.enabled, mode: settings.performanceMode, headroom: governor.headroom, reason: governor.reason,
-      tier: TIER_NAMES[governor.tier], prepared: this.prefetcher.preparedCount
+      tier: TIER_NAMES[governor.tier], prepared: this.prefetcher.preparedCount, inspectorOpen: this.inspector.isOpen
     };
   }
 
@@ -212,14 +229,14 @@ export class PreviewController {
     this.intent.clearTimers();
     this.openAnchor = null;
     this.openUrl = null;
-    this.recursiveLinks = undefined;
+    this.linkedList = undefined;
   }
 
   private onPointerDown(event: PointerEvent) {
     const settings = this.pageSettings();
     if (!this.viewer.isOpen || this.viewer.pinned || !settings.closeOnOutsideClick) return;
     const path = event.composedPath();
-    if (path.includes(this.viewer.host)) return;
+    if (path.includes(this.viewer.host) || path.includes(this.inspector.host)) return;
     // In click mode the open link toggles its preview on click instead.
     if (settings.activationMode === "click" && this.openAnchor && path.includes(this.openAnchor)) return;
     this.viewer.close(true);
@@ -238,27 +255,28 @@ export class PreviewController {
     void this.activate(anchor, event.clientX, event.clientY);
   }
 
-  /** Ctrl+X, then X toggles the live preload inspector. Escape closes it. */
+  /**
+   * The inspector chord: the inspector shortcut (Ctrl+X by default), then the same
+   * key alone within the chord interval. Arming never blocks the page's own Cut.
+   */
   private inspectorKey(event: KeyboardEvent) {
     if (this.inspector.key(event)) return true;
-    if (!this.pageSettings().enabled || isTypingEvent(event)) {
+    const settings = this.pageSettings();
+    if (!settings.enabled || isTypingEvent(event) || event.repeat) {
       this.inspectorChordUntil = 0;
       return false;
     }
     const now = performance.now();
-    if (!event.repeat && matchesCombo(event, this.pageSettings().shortcuts.preloadInspector)) {
+    if (matchesCombo(event, settings.shortcuts.preloadInspector)) {
       this.inspectorChordKey = event.key.toLowerCase();
-      this.inspectorChordUntil = now + this.pageSettings().inspectorChordMs;
-      // Merely arming the chord must not steal Cut from the page.
+      this.inspectorChordUntil = now + settings.inspectorChordMs;
       return false;
     }
-    const armed = this.inspectorChordUntil > 0 && this.inspectorChordUntil >= now;
+    const armed = this.inspectorChordUntil >= now;
     this.inspectorChordUntil = 0;
-    if (armed && event.key.toLowerCase() === this.inspectorChordKey && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-      this.inspector.toggle();
-      return true;
-    }
-    return false;
+    if (!armed || event.key.toLowerCase() !== this.inspectorChordKey || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return false;
+    this.inspector.toggle();
+    return true;
   }
 
   /** While a preview is open, LinkPeek owns the keyboard: its keys never reach the page. */
@@ -271,67 +289,79 @@ export class PreviewController {
     if (this.viewer.isOpen) this.linkKey(event);
   }
 
-  /** Next / previous prepared link. */
+  /** Next / previous link: within a linked page's list when the gallery came from one, else prepared page links. */
   private linkKey(event: KeyboardEvent) {
     const settings = this.pageSettings();
     if (!settings.enabled || this.viewer.help || isTypingEvent(event)) return;
     const direction = matchesCombo(event, settings.shortcuts.nextLink) ? 1 : matchesCombo(event, settings.shortcuts.previousLink) ? -1 : 0;
-    if (!direction || !this.openAdjacentPrepared(direction)) return;
+    if (!direction || !(this.openAdjacentLinked(direction) || this.openAdjacentPrepared(direction))) return;
     event.preventDefault();
     event.stopPropagation();
   }
 
-  private openInspectorUrl(url: string) {
-    const anchor = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(candidate => candidate.href === url)
-      ?? Object.assign(document.createElement("a"), {href: url, textContent: new URL(url).hostname});
-    if (!this.settingsFor(anchor)) return;
-    const rect = anchor.isConnected ? anchor.getBoundingClientRect() : undefined;
-    const x = rect ? clamp(rect.left + rect.width / 2, 8, innerWidth - 8) : clamp(innerWidth / 2, 8, innerWidth - 8);
-    const y = rect ? clamp(rect.top + rect.height / 2, 8, innerHeight - 8) : clamp(innerHeight / 2, 8, innerHeight - 8);
-    this.intent.setCurrent(anchor);
-    this.viewer.cancelClose();
-    void this.activate(anchor, x, y);
+  private openUrlFromInspector(url: string) {
+    const anchor = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(candidate => candidate.href === url);
+    if (anchor) this.openPageLink(anchor);
+    else this.openOffPage(url, false);
   }
 
-  /** Opens the next link in a recursively fetched child page, when the current media came from one. */
-  private openAdjacentRecursive(direction: 1 | -1) {
-    const result = this.viewer.result, item = result?.items[this.viewer.index];
-    if (!this.recursiveLinks && result && item && item.sourceUrl !== result.url) {
-      this.recursiveLinks = result.linkContexts?.find(entry => entry.sourceUrl === item.sourceUrl)?.links;
+  /** Opens a link that is on the page, scrolling it into view first when needed. */
+  private openPageLink(anchor: HTMLAnchorElement) {
+    let rect = anchor.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > innerHeight) {
+      anchor.scrollIntoView?.({block: "nearest", inline: "nearest"});
+      rect = anchor.getBoundingClientRect();
     }
-    const links = this.recursiveLinks?.filter(url => this.settingsFor(Object.assign(document.createElement("a"), {href: url})));
-    if (!links?.length) return false;
-    const current = this.openUrl;
-    const index = current ? links.indexOf(current) : -1;
-    if (links.length === 1 && index === 0) return false;
-    const url = links[index < 0 ? (direction > 0 ? 0 : links.length - 1) : (index + direction + links.length) % links.length];
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.textContent = new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname;
-    if (!this.settingsFor(anchor)) return false;
     this.intent.setCurrent(anchor);
     this.viewer.cancelClose();
-    void this.activate(anchor, clamp(innerWidth / 2, 8, innerWidth - 8), clamp(innerHeight / 2, 8, innerHeight - 8), true);
+    void this.activate(anchor, clamp(rect.left + rect.width / 2, 8, innerWidth - 8), clamp(rect.top + rect.height / 2, 8, innerHeight - 8));
+  }
+
+  /** Opens a link that is not on this page where the last preview opened, so the panel stays put. */
+  private openOffPage(url: string, keepList: boolean) {
+    if (!this.settingsForUrl(url)) return;
+    const anchor = Object.assign(document.createElement("a"), {href: url, textContent: linkLabel(url)});
+    this.intent.setCurrent(anchor);
+    this.viewer.cancelClose();
+    void this.activate(anchor, this.lastPoint.x, this.lastPoint.y, keepList);
+  }
+
+  /** The linked page's list for the item on screen, when the gallery was built from linked pages. */
+  private linkedListForCurrent() {
+    const result = this.viewer.result, source = result?.items[this.viewer.index]?.sourceUrl;
+    const context = source !== result?.url ? result?.linkContexts?.find(entry => entry.sourceUrl === source) : undefined;
+    const links = context && contentLinks(context).filter(url => this.settingsForUrl(url));
+    return links?.length ? links : undefined;
+  }
+
+  /** Steps through a linked page's list, keeping that list until the preview closes. */
+  private openAdjacentLinked(direction: 1 | -1) {
+    const links = this.linkedList ?? this.linkedListForCurrent();
+    if (!links) return false;
+    // Off the list (on the page that linked to it), N starts at its first link and Shift+N at its last.
+    const index = links.indexOf(this.openUrl!);
+    if (links.length === 1 && index === 0) return false;
+    const next = index < 0 ? (direction > 0 ? 0 : links.length - 1) : (index + direction + links.length) % links.length;
+    this.linkedList = links;
+    this.openOffPage(links[next], true);
+    this.prefetcher.warmAround(links, next);
     return true;
   }
 
-  /** Opens the next (or previous) link in the active browsing context. */
+  /** Opens the next (or previous) page link whose gallery is already prepared, in document order. */
   openAdjacentPrepared(direction: 1 | -1) {
-    if (this.openAdjacentRecursive(direction)) return true;
     const anchors = this.prefetcher.preparedAnchors();
     const current = this.openUrl ?? this.intent.currentAnchor?.href ?? null;
     const index = anchors.findIndex(anchor => anchor.href === current);
     if (!anchors.length || (anchors.length === 1 && index === 0)) return false;
-    const next = anchors[index < 0 ? (direction > 0 ? 0 : anchors.length - 1) : (index + direction + anchors.length) % anchors.length];
-    let rect = next.getBoundingClientRect();
-    if (rect.bottom < 0 || rect.top > innerHeight) {
-      next.scrollIntoView?.({block: "nearest", inline: "nearest"});
-      rect = next.getBoundingClientRect();
-    }
-    this.intent.setCurrent(next);
-    this.viewer.cancelClose();
-    void this.activate(next, clamp(rect.left + rect.width / 2, 8, innerWidth - 8), clamp(rect.top + rect.height / 2, 8, innerHeight - 8));
+    this.openPageLink(anchors[index < 0 ? (direction > 0 ? 0 : anchors.length - 1) : (index + direction + anchors.length) % anchors.length]);
     return true;
+  }
+
+  /** When a gallery built from linked pages appears, prepare the first links of its list so N is instant. */
+  private warmLinkedList() {
+    const links = this.linkedList ?? this.linkedListForCurrent();
+    if (links) this.prefetcher.warmAround(links, links.indexOf(this.openUrl!));
   }
 
   private rememberPosition(url: string, index: number) {
@@ -356,10 +386,11 @@ export class PreviewController {
     this.cancelScan(scan);
   }
 
-  async activate(anchor: HTMLAnchorElement, x: number, y: number, preserveContext = false) {
+  /** Opens a preview. `keepList` keeps the linked page's list N is stepping through. */
+  async activate(anchor: HTMLAnchorElement, x: number, y: number, keepList = false) {
     this.intent.clearTimers();
     if (this.isOpenAnchor(anchor)) return;
-    if (!preserveContext) this.recursiveLinks = undefined;
+    if (!keepList) this.linkedList = undefined;
     if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
     const settings = this.settingsFor(anchor);
     if (!settings) return;
@@ -367,6 +398,7 @@ export class PreviewController {
     this.activeScan = {url, token, settings};
     this.openAnchor = anchor;
     this.openUrl = url;
+    this.lastPoint = {x, y};
     this.viewer.openLoading(x, y, settings, anchor.textContent?.trim().slice(0, 80) || "Scanning link…", settings.resumePosition ? this.positions.get(url) : undefined);
     // A prepared gallery shows in the first frame; the full scan then fills in the rest.
     const prepared = this.prefetcher.cached(url);
@@ -380,6 +412,7 @@ export class PreviewController {
       if ("error" in response) throw new Error(response.error);
       this.prefetcher.remember(url, response);
       this.viewer.show(response);
+      this.warmLinkedList();
     } catch (error) {
       if (id === this.requestId && this.activeScan?.token === token) this.viewer.error(error instanceof Error ? error.message : String(error));
     } finally {

@@ -26,7 +26,7 @@ function link(href: string, top = 0, left = 0) {
 }
 
 const host: PrefetchHost = {
-  settingsFor: anchor => anchor.href.includes("blocked") ? undefined : settings,
+  settingsFor: url => url.includes("blocked") ? undefined : settings,
   pointer: () => pointer,
   budget: () => budget as Budget
 };
@@ -234,53 +234,155 @@ describe("the link under the pointer", () => {
   });
 });
 
-describe("recursive child preloading", () => {
-  it("deep-prepares child-page links as bounded priority-2 idle work", async () => {
+describe("linked-page lists", () => {
+  const list = ["a", "b", "c", "d", "e"].map(name => `https://x.test/list/${name}`);
+
+  it("prepare the next two links and the previous one around the link being viewed, wrapping", async () => {
+    budget.linkConcurrency = 4;
     const p = prefetcher();
-    const root = scan("https://x.test/root");
-    root.linkContexts = [
-      {sourceUrl: "https://x.test/root", links: ["https://x.test/child"]},
-      {sourceUrl: "https://x.test/child", links: ["https://x.test/next-a", "https://x.test/next-b"]}
-    ];
-    p.remember(root.url, root);
-    expect(pending).toEqual([]);
-    expect(idle).toHaveLength(1);
-
-    runIdle();
+    p.warmAround(list, 0);
     await flush();
-    expect(pending.map(entry => entry.msg)).toEqual([
-      expect.objectContaining({url: "https://x.test/next-a", deep: true})
-    ]);
-
-    // The second child waits behind the normal link-concurrency budget.
-    runIdle();
+    expect(pending.map(entry => entry.msg)).toEqual([list[1], list[2], list[4]].map(url => ({type: "LINKPEEK_PREFETCH", url, kind: "generic", deep: false})));
+    p.warmAround(list, -1);
     await flush();
-    expect(pending).toHaveLength(1);
-    pending[0].resolve(scan("https://x.test/next-a"));
-    await flush();
-    expect(pending.map(entry => entry.msg.url)).toEqual(["https://x.test/next-a", "https://x.test/next-b"]);
-    pending[1].resolve(scan("https://x.test/next-b"));
-    await flush();
-    expect(p.isPrepared("https://x.test/next-a")).toBe(true);
-    expect(p.isPrepared("https://x.test/next-b")).toBe(true);
+    expect(pending.map(entry => entry.msg.url)).toContain(list[0]);
   });
 
-  it("does no child work when speculative preparation is disabled, then resumes when headroom returns", async () => {
+  it("reach one link ahead on a small budget and skip links that may not be previewed", async () => {
+    budget = {...budget, nearbyLinks: 0, linkConcurrency: 4};
     const p = prefetcher();
-    budget.speculative = false;
-    const root = scan("https://x.test/root");
-    root.linkContexts = [{sourceUrl: "https://x.test/child", links: ["https://x.test/later"]}];
-    p.remember(root.url, root);
-    expect(idle).toHaveLength(0);
+    p.warmAround(["https://x.test/one", "https://x.test/blocked"], 0);
+    p.warmAround(["https://x.test/x", "https://x.test/y", "https://x.test/z"], 1);
+    await flush();
+    expect(pending.map(entry => entry.msg.url)).toEqual(["https://x.test/z", "https://x.test/x"]);
+  });
 
-    budget.speculative = true;
-    p.schedule();
-    expect(idle).toHaveLength(1);
+  it("do nothing when nothing may be prepared ahead or there is nowhere to go", async () => {
+    const p = prefetcher();
+    p.warmAround(["https://x.test/only"], 0);
+    budget.speculative = false;
+    p.warmAround(list, 0);
+    await flush();
+    expect(pending).toEqual([]);
+  });
+
+  it("appear in the inspector as linked pages, keeping only the most recent", async () => {
+    const p = prefetcher();
+    p.warmAround(["https://x.test/start", "https://x.test/gallery/%E0%A4%A", "https://x.test/"], 0);
+    const linked = p.snapshot().filter(entry => entry.source === "linked");
+    expect(linked.map(entry => entry.label)).toEqual(["%E0%A4%A", "x.test"]);
+    for (let i = 0; i < 90; i++) p.warmAround([`https://x.test/from${i}`, `https://x.test/to${i}`], 0);
+    expect(p.snapshot().filter(entry => entry.source === "linked")).toHaveLength(80);
+  });
+});
+
+describe("the inspector's view", () => {
+  it("lists every page link once, with what is happening to it", async () => {
+    budget.linkConcurrency = 1;
+    const p = prefetcher();
+    const [ready, loading, failed, inFlight, waiting] = ["ready", "loading", "failed", "in-flight", "waiting"].map(name => link(`https://x.test/${name}`));
+    link("https://x.test/blocked");
+    link("https://x.test/idle").textContent = "  ";
+    link("https://x.test/ready");
+    p.remember(ready.href, {...scan(ready.href), title: "Ready gallery"});
+    p.hover(loading);
+    p.hover(failed);
+    await flush();
+    pending[1].reject(new Error("offline"));
+    await flush();
+    p.hover(inFlight);
+    p.hover(waiting);
+    await flush();
+    const byUrl = new Map(p.snapshot().map(entry => [entry.url.split("/").pop(), entry]));
+    expect(p.snapshot().filter(entry => entry.url === ready.href)).toHaveLength(1);
+    expect(byUrl.get("ready")).toMatchObject({state: "prepared", title: "Ready gallery", label: ready.href, source: "page"});
+    expect(byUrl.get("loading")!.state).toBe("loading");
+    expect(byUrl.get("waiting")!.state).toBe("queued");
+    expect(byUrl.get("failed")).toMatchObject({state: "backoff", retryAt: expect.any(Number)});
+    expect(byUrl.get("blocked")!.state).toBe("blocked");
+    expect(byUrl.get("idle")).toMatchObject({state: "not-started", priority: "normal", label: "https://x.test/idle"});
+  });
+
+  it("tells subscribers about changes until they unsubscribe", () => {
+    const p = prefetcher(), listener = vi.fn(), unsubscribe = p.subscribe(listener);
+    p.remember("https://x.test/a", scan("https://x.test/a"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    p.reset();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepares a link at maximum priority now, at high priority when idle, and clears normal", async () => {
+    budget = {...budget, speculative: false, linkConcurrency: 1};
+    const p = prefetcher(), [now, soon, later, blocked] = ["now", "soon", "later", "blocked"].map(name => link(`https://x.test/${name}`));
+    p.setPriority([now.href], "maximum");
+    await flush();
+    expect(pending.map(entry => entry.msg)).toEqual([expect.objectContaining({url: now.href, deep: true})]);
+    p.setPriority([soon.href, later.href, blocked.href], "high");
+    expect(p.snapshot().find(entry => entry.url === soon.href)).toMatchObject({state: "queued", priority: "high"});
+    expect(p.snapshot().find(entry => entry.url === blocked.href)!.priority).toBe("normal");
     runIdle();
     expect(idle).toHaveLength(1);
     runIdle();
     await flush();
-    expect(pending[0].msg).toMatchObject({url: "https://x.test/later", deep: true});
+    pending[0].resolve(scan(now.href));
+    await flush();
+    pending[1].resolve(scan(soon.href));
+    await flush();
+    expect(pending.map(entry => entry.msg.url)).toEqual([now.href, soon.href, later.href]);
+    p.setPriority([now.href], "normal");
+    expect(p.snapshot().find(entry => entry.url === now.href)!.priority).toBe("normal");
+  });
+
+  it("drops a raised link that was removed from the page or blocked meanwhile", async () => {
+    const p = prefetcher(), gone = link("https://x.test/gone"), original = host.settingsFor;
+    p.setPriority([gone.href], "high");
+    host.settingsFor = () => undefined;
+    runIdle();
+    host.settingsFor = original;
+    await flush();
+    expect(pending).toEqual([]);
+  });
+});
+
+describe("limits", () => {
+  it("skip new work while too much is already waiting", async () => {
+    budget.linkConcurrency = 1;
+    const p = prefetcher(), anchors = Array.from({length: 84}, (_, i) => link(`https://x.test/w${i}`));
+    for (const anchor of anchors) p.hover(anchor);
+    await flush();
+    expect(pending).toHaveLength(2);
+    expect(p.snapshot().find(entry => entry.url === anchors[81].href)!.state).toBe("queued");
+    expect(p.snapshot().find(entry => entry.url === anchors[83].href)!.state).toBe("not-started");
+  });
+
+  it("drop work that was waiting for a slot when the page changed", async () => {
+    budget.linkConcurrency = 1;
+    const p = prefetcher();
+    for (const name of ["a", "b", "c"]) p.hover(link(`https://x.test/${name}`));
+    await flush();
+    expect(pending).toHaveLength(2);
+    p.reset();
+    pending[0].resolve(scan(pending[0].msg.url));
+    await flush();
+    expect(pending).toHaveLength(2);
+  });
+
+  it("forget the oldest requests past a thousand, so those links can be prepared again", async () => {
+    const send = vi.fn(async (msg: {url: string}) => scan(msg.url, []));
+    vi.stubGlobal("chrome", {runtime: {sendMessage: send}});
+    budget.linkConcurrency = 8;
+    const p = prefetcher(), first = link("https://x.test/m0");
+    p.hover(first);
+    await flush();
+    for (let i = 1; i <= 1000; i++) {
+      p.hover(link(`https://x.test/m${i}`));
+      if (i % 50 === 0) await flush();
+    }
+    await flush();
+    p.hover(first);
+    await flush();
+    expect(send.mock.calls.filter(([msg]) => msg.url === first.href)).toHaveLength(2);
   });
 });
 

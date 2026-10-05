@@ -2,7 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {HoverIntent, anchorFrom, type IntentHost} from "../../src/content/hover-intent";
 import {resolveSettings, type LinkPeekSettings} from "../../src/shared/settings";
 
-let settings: LinkPeekSettings, intent: HoverIntent, openAnchor: HTMLAnchorElement | null, prepared: Set<string>, scanning: boolean;
+let settings: LinkPeekSettings, intent: HoverIntent, openAnchor: HTMLAnchorElement | null, prepared: Set<string>, scanning: boolean, openRect: DOMRect | undefined;
 const viewer = {host: document.createElement("div"), isOpen: false, pinned: false, containsPoint: vi.fn(() => false), cancelClose: vi.fn()};
 const host: IntentHost = {
   settings: () => settings,
@@ -10,11 +10,14 @@ const host: IntentHost = {
   viewer,
   isPrepared: url => prepared.has(url),
   isOpenAnchor: anchor => anchor === openAnchor,
+  openAnchorRect: () => openRect,
   isScanning: () => scanning,
   onReach: vi.fn(),
   onLinger: vi.fn(),
   onActivate: vi.fn(),
-  onLeave: vi.fn()
+  onLeave: vi.fn(),
+  onArm: vi.fn(),
+  onDisarm: vi.fn()
 };
 const activations = () => (host.onActivate as ReturnType<typeof vi.fn>).mock.calls.map(([anchor, x, y]) => [(anchor as HTMLAnchorElement).id, x, y]);
 
@@ -55,7 +58,8 @@ beforeEach(() => {
   viewer.pinned = false;
   viewer.containsPoint.mockReset().mockReturnValue(false);
   viewer.cancelClose.mockReset();
-  for (const fn of [host.onReach, host.onLinger, host.onActivate, host.onLeave]) (fn as ReturnType<typeof vi.fn>).mockReset();
+  openRect = undefined;
+  for (const fn of [host.onReach, host.onLinger, host.onActivate, host.onLeave, host.onArm, host.onDisarm]) (fn as ReturnType<typeof vi.fn>).mockReset();
   intent = new HoverIntent(host);
   wire();
 });
@@ -272,6 +276,9 @@ describe("leaving and the preview", () => {
     pointer("pointerover", a, 0, 0);
     viewer.containsPoint.mockReturnValue(true);
     pointer("pointermove", document.body, 50, 50);
+    expect(viewer.cancelClose).toHaveBeenCalledTimes(2);
+    viewer.isOpen = true;
+    pointer("pointermove", document.body, 51, 50);
     expect(viewer.cancelClose).toHaveBeenCalledTimes(3);
   });
 
@@ -385,5 +392,63 @@ describe("timer guards", () => {
     settings = resolveSettings({activationMode: "hover"});
     internal.consider(a);
     expect(activations()).toEqual([]);
+  });
+});
+
+describe("while a preview is open", () => {
+  beforeEach(() => {
+    viewer.isOpen = true;
+    openAnchor = link("open");
+    openRect = openAnchor.getBoundingClientRect();
+  });
+
+  it("never lets a link on the way to the preview take over", () => {
+    viewer.containsPoint.mockReturnValue(true);
+    const crossing = link("crossing");
+    pointer("pointerover", crossing, 10, 10);
+    pointer("pointermove", crossing, 40, 10);
+    vi.advanceTimersByTime(5000);
+    expect(activations()).toEqual([]);
+    expect(host.onArm).not.toHaveBeenCalled();
+    expect(viewer.containsPoint).toHaveBeenCalledWith(40, 10, openRect);
+  });
+
+  it("switches to another link only after the longer switch delay, with no early opening", () => {
+    const other = link("other");
+    prepared.add(other.href);
+    pointer("pointerover", other, 10, 10);
+    expect(host.onArm).toHaveBeenCalledWith(other, 650, 10, 10);
+    vi.advanceTimersByTime(649);
+    expect(activations()).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(activations()).toEqual([["other", 10, 10]]);
+  });
+
+  it("uses the switch delay when it is longer than a re-arm", () => {
+    settings = resolveSettings({hoverDelay: 300, switchDelay: 1000});
+    const other = link("other");
+    pointer("pointerover", other, 0, 0);
+    vi.advanceTimersByTime(100);
+    pointer("pointermove", other, 40, 0);
+    vi.advanceTimersByTime(90 + 999);
+    expect(activations()).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(activations()).toHaveLength(1);
+  });
+});
+
+describe("the hover countdown", () => {
+  it("starts when a link arms and stops when it is cancelled or opens", () => {
+    const a = link("a"), outside = document.createElement("p");
+    document.body.append(outside);
+    pointer("pointerover", a, 5, 6);
+    expect(host.onArm).toHaveBeenCalledWith(a, 300, 5, 6);
+    pointer("pointerout", a, 5, 6, {relatedTarget: outside});
+    expect(host.onDisarm).toHaveBeenCalledTimes(1);
+    pointer("pointerover", a, 7, 6);
+    vi.advanceTimersByTime(300);
+    expect(host.onDisarm).toHaveBeenCalledTimes(2);
+    intent.clearTimers();
+    expect(host.onDisarm).toHaveBeenCalledTimes(2);
   });
 });

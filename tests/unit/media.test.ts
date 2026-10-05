@@ -1,6 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {
-  PREVIEWABLE_KINDS, canonicalMediaUrl, classifyLink, isStateChangingUrl, safeDownloadName, stripTrackingParams, uniqueMediaItems,
+  PREVIEWABLE_KINDS, canonicalMediaUrl, classifyLink, contentLinks, isStateChangingUrl, linkLabel, safeDownloadName, safeFolderName, stripTrackingParams,
+  uniqueMediaItems,
   type MediaItem
 } from "../../src/shared/media";
 
@@ -74,5 +75,26 @@ describe("download names", () => {
     expect(safeDownloadName({originalUrl: "https://x.test/%E0%A4%A", filename: "x"})).toBe("x");
     expect(safeDownloadName({originalUrl: "nope", filename: "y.gif"})).toBe("y");
     expect(safeDownloadName({originalUrl: "https://x.test/a.webp", filename: "a".repeat(200)})).toHaveLength(125);
+  });
+});
+
+describe("linked-page helpers", () => {
+  it("step through the links under a page's own path when it has a few, else all of them", () => {
+    const sourceUrl = "https://a.test/gallery/";
+    const links = ["https://a.test/gallery/1", "https://a.test/about", "https://a.test/gallery/2", "https://b.test/gallery/3", "https://a.test/gallery/"];
+    expect(contentLinks({sourceUrl, links})).toEqual(["https://a.test/gallery/1", "https://a.test/gallery/2"]);
+    expect(contentLinks({sourceUrl, links: links.slice(0, 2)})).toEqual(links.slice(0, 2));
+  });
+
+  it("label a link by its last path segment, or its site", () => {
+    expect(linkLabel("https://a.test/t/My%20Trip/")).toBe("My Trip");
+    expect(linkLabel("https://a.test/%E0%A4%A")).toBe("%E0%A4%A");
+    expect(linkLabel("https://a.test/")).toBe("a.test");
+  });
+
+  it("make folder names every desktop OS accepts", () => {
+    expect(safeFolderName(" ..My: Trip / 2024?.. ")).toBe("My Trip 2024");
+    expect(safeFolderName("x".repeat(100))).toHaveLength(80);
+    expect(safeFolderName("<>:")).toBe("LinkPeek gallery");
   });
 });

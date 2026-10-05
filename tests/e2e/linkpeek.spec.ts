@@ -328,3 +328,23 @@ test("video links preview as video and sign-out links are never requested",async
     await expect(page.locator(".lp-panel")).toHaveCount(0);expect(logoutRequests).toBe(0);
   }finally{await closeExtension(context,profile)}
 });
+
+test("one-handed extras: fill, rotate, middle-click to a background tab and the preload inspector",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:50}})});
+    const page=await context.newPage();await page.goto(base);
+    await page.locator("#shortcut-a").hover();const image=page.locator(".lp-image");await expect(image).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
+    await page.keyboard.press("w");await expect(page.locator(".lp-toast")).toHaveText("Fill · scroll to pan");
+    await expect.poll(async()=>(await image.evaluate(el=>(el as HTMLElement).style.transform))).toMatch(/scale\((?!1\))/);
+    await page.keyboard.press("r");await expect(page.locator(".lp-media")).toHaveClass(/lp-turned/);await expect(page.locator(".lp-toast")).toHaveText("Rotated 90°");
+    const opened=context.waitForEvent("page");await page.locator(".lp-stage").click({button:"middle"});
+    expect((await opened).url()).toMatch(/shortcut-a\.jpg/);await expect(page.locator(".lp-toast")).toHaveText("Opened in a background tab");
+    await page.keyboard.press("Escape");await expect(page.locator(".lp-panel")).toHaveCount(0);
+    await page.mouse.move(1,1);await page.keyboard.press("Control+x");await page.keyboard.press("x");
+    const inspector=page.getByRole("dialog",{name:"LinkPeek preload inspector"});await expect(inspector).toBeVisible();
+    await expect(inspector.locator(".pi-sum")).toContainText("ready");
+    await expect.poll(()=>page.locator("a[data-linkpeek-preload-state]").count()).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");await expect(inspector).toHaveCount(0);await expect(page.locator("a[data-linkpeek-preload-state]")).toHaveCount(0);
+  }finally{await closeExtension(context,profile)}
+});

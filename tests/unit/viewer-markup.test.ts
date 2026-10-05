@@ -122,10 +122,14 @@ describe("other states", () => {
   });
 
   it("build the help sheet from the actual bindings", () => {
-    const el = html(markup.helpMarkup({...DEFAULT_SHORTCUTS, nextLink: [], previousLink: [], slideshow: ["Shift+s"]}, true));
+    const el = html(markup.helpMarkup({...DEFAULT_SHORTCUTS, nextLink: [], previousLink: [], openPage: [], preloadInspector: [], slideshow: ["Shift+s"]}, true));
     expect(el.textContent).toContain("Play / pause");
-    expect(el.textContent).not.toContain("Links on the page");
+    expect([...el.querySelectorAll("h4")].map(h => h.textContent)).not.toContain("Links");
+    expect(el.textContent).not.toContain("Preload inspector");
     expect(el.textContent).toContain("Shift+S");
-    expect(html(markup.helpMarkup(DEFAULT_SHORTCUTS, false)).textContent).not.toContain("GIF");
+    const defaults = html(markup.helpMarkup(DEFAULT_SHORTCUTS, false));
+    expect(defaults.textContent).not.toContain("GIF");
+    expect(defaults.textContent).toContain("Ctrl+X, then X");
+    expect(defaults.textContent).toContain("Original in a background tab");
   });
 });

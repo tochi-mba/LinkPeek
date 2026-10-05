@@ -16,7 +16,8 @@ export type Placement = "auto" | "right" | "left" | "above" | "below";
 
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
-  "open", "download", "copy", "slideshow", "zoomIn", "zoomOut", "resetZoom", "help", "close", "preloadInspector"
+  "open", "openPage", "download", "downloadAll", "copy", "slideshow", "fill", "rotate", "zoomIn", "zoomOut", "resetZoom",
+  "help", "close", "preloadInspector"
 ] as const;
 export type ShortcutAction = typeof SHORTCUT_ACTIONS[number];
 export type Shortcuts = Record<ShortcutAction, string[]>;
@@ -27,8 +28,10 @@ export interface LinkPeekSettings {
   enabled: boolean;
   activationMode: ActivationMode;
   hoverDelay: number;
+  switchDelay: number;
   inspectorChordMs: number;
   quickOpenWhenStill: boolean;
+  showHoverRing: boolean;
   ignoreScrollHover: boolean;
   cancelMovePx: number;
   closeDelay: number;
@@ -161,6 +164,10 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   resetZoom: ["0"],
   help: ["?"],
   close: ["Escape"],
+  openPage: ["Shift+o"],
+  downloadAll: ["Shift+d"],
+  fill: ["w"],
+  rotate: ["r"],
   preloadInspector: ["Ctrl+x"]
 };
 
@@ -168,8 +175,10 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   enabled: true,
   activationMode: "hover",
   hoverDelay: 300,
+  switchDelay: 650,
   inspectorChordMs: 900,
   quickOpenWhenStill: true,
+  showHoverRing: true,
   ignoreScrollHover: true,
   cancelMovePx: 18,
   closeDelay: 180,
@@ -303,6 +312,7 @@ export interface NumberRange {min: number; max: number; step: number}
 /** Inclusive bounds and step for every numeric setting. */
 export const SETTING_RANGES: Partial<Record<keyof LinkPeekSettings, NumberRange>> = {
   hoverDelay: {min: 0, max: 2000, step: 25},
+  switchDelay: {min: 0, max: 3000, step: 50},
   cancelMovePx: {min: 4, max: 80, step: 2},
   closeDelay: {min: 0, max: 2000, step: 20},
   magneticBridgeStrength: {min: 0, max: 1, step: 0.05},

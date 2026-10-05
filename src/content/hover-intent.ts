@@ -5,6 +5,10 @@
  * a link whose media is already prepared. Moving across a link, a link that
  * slides under a still pointer while the page scrolls, and a link whose preview
  * was just dismissed never open by themselves.
+ *
+ * While a preview is open, other links are slow to take over: links on the path
+ * between the open link and its preview never do, and any other link needs the
+ * longer switch delay, so reaching for the preview never swaps it out.
  */
 import type {LinkPeekSettings} from "../shared/settings";
 
@@ -23,6 +27,8 @@ export interface IntentHost {
   viewer: IntentViewer;
   isPrepared(url: string): boolean;
   isOpenAnchor(anchor: HTMLAnchorElement): boolean;
+  /** Where the link whose preview is open sits, for the path to the preview. */
+  openAnchorRect(): DOMRect | undefined;
   isScanning(): boolean;
   /** The pointer reached a previewable link. */
   onReach(anchor: HTMLAnchorElement): void;
@@ -31,6 +37,10 @@ export interface IntentHost {
   onActivate(anchor: HTMLAnchorElement, x: number, y: number): void;
   /** The pointer left the current link without moving into the preview. */
   onLeave(anchor: HTMLAnchorElement): void;
+  /** A link will open in `delayMs` unless the pointer moves on (drives the hover ring). */
+  onArm(anchor: HTMLAnchorElement, delayMs: number, x: number, y: number): void;
+  /** The pending open was cancelled or happened. */
+  onDisarm(): void;
 }
 
 /** How long the pointer must be motionless to count as resting on a link. */
@@ -120,6 +130,11 @@ export class HoverIntent {
     return moved;
   }
 
+  /** The pointer is inside the open preview, its margin, or the corridor from its link to it. */
+  private onPathToPreview() {
+    return this.host.viewer.isOpen && this.host.viewer.containsPoint(this.x, this.y, this.host.openAnchorRect());
+  }
+
   private isCurrent(anchor: HTMLAnchorElement) {
     return anchor === this.current && anchor.href === this.currentUrl;
   }
@@ -144,7 +159,7 @@ export class HoverIntent {
       const anchor = anchorFrom(event.target);
       if (anchor && !this.isCurrent(anchor)) this.consider(anchor);
     }
-    if (this.host.viewer.containsPoint(event.clientX, event.clientY, this.current?.getBoundingClientRect())) return this.host.viewer.cancelClose();
+    if (this.onPathToPreview()) return this.host.viewer.cancelClose();
     const current = this.current;
     // Only a real hand movement arms a link; a link that scrolled under the pointer waits for one.
     if (!current || mode === "click" || this.host.isOpenAnchor(current) || !physical) return;
@@ -216,11 +231,16 @@ export class HoverIntent {
   private arm(anchor: HTMLAnchorElement, delay = this.host.settings().hoverDelay) {
     this.clearTimer("armTimer");
     this.clearTimer("stillTimer");
+    const settings = this.host.settings(), switching = this.host.viewer.isOpen && !this.host.isOpenAnchor(anchor);
+    // On the way to the open preview: the link underneath is not a request to switch.
+    if (switching && this.onPathToPreview()) return;
+    if (switching) delay = Math.max(delay, settings.switchDelay);
     this.startX = this.x;
     this.startY = this.y;
     const url = anchor.href;
     this.armTimer = window.setTimeout(() => this.fire(anchor, url), delay);
-    if (this.host.settings().quickOpenWhenStill && delay >= 2 * STILL_MS) {
+    this.host.onArm(anchor, delay, this.x, this.y);
+    if (!switching && settings.quickOpenWhenStill && delay >= 2 * STILL_MS) {
       this.stillTimer = window.setTimeout(() => this.checkStill(anchor, url), Math.max(STILL_MS, delay / 2));
     }
   }
@@ -249,6 +269,7 @@ export class HoverIntent {
   }
 
   private clearTimer(name: "armTimer" | "stillTimer" | "rearmTimer" | "lingerTimer") {
+    if (name === "armTimer" && this.armTimer !== undefined) this.host.onDisarm();
     clearTimeout(this[name]);
     this[name] = undefined;
   }
