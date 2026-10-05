@@ -111,6 +111,16 @@ describe("the GIF player", () => {
     expect(el.querySelector(".lp-gif-time")!.textContent).toBe("0:00.00 / 0:00.09 · F 1/3");
   });
 
+  it("knows how long one loop takes at the current speed", async () => {
+    const el = stage(), player = new GifPlayer(el, "https://x.test/a.gif", settings());
+    expect(player.loopMs()).toBe(0);
+    await player.init();
+    expect(player.loopMs()).toBe(90);
+    el.querySelector<HTMLSelectElement>(".lp-gif-speed")!.value = "2";
+    el.querySelector<HTMLSelectElement>(".lp-gif-speed")!.dispatchEvent(new Event("change"));
+    expect(player.loopMs()).toBe(45);
+  });
+
   it("autoplays, loops and applies frame disposal", async () => {
     const {player, time} = await ready({gifAutoplay: true});
     vi.advanceTimersByTime(20);

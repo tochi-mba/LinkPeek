@@ -95,6 +95,14 @@ describe("what has been seen", () => {
     expect(listeners).toEqual([]);
   });
 
+  it("starts a bucket afresh when nothing was stored in it", async () => {
+    const seen = new SeenMedia();
+    await seen.load();
+    seen.add(media("fresh.jpg"));
+    await seen.flush();
+    expect(store[bucketOf("fresh.jpg")]).toEqual([mediaKey(media("fresh.jpg"))]);
+  });
+
   it("carries on in memory when storage is unavailable", async () => {
     (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("gone"));
     const seen = new SeenMedia();

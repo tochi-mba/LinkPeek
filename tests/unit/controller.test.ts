@@ -974,6 +974,24 @@ describe("the hover countdown", () => {
   });
 });
 
+describe("searching for the next link with media", () => {
+  it("scans at most eight unknown links per press, carrying on from there with the next press", async () => {
+    await boot();
+    const links = Array.from({length: 12}, (_, i) => link(`l${i}`));
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!, msg.url === links[10].href ? 1 : 0) : {ok: true};
+    await controller.activate(links[0], 0, 0);
+    key("n");
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 10; i++) await flush();
+    expect(viewer.toast).toHaveBeenLastCalledWith("No media in the next 8 links. Press again to keep looking.");
+    expect(scans().map(msg => msg.url)).toEqual(links.slice(0, 9).map(a => a.href));
+    key("n");
+    for (let i = 0; i < 4; i++) await flush();
+    expect(scans().at(-1)!.url).toBe(links[10].href);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(expect.any(Number), expect.any(Number), expect.anything(), "l10", undefined);
+  });
+});
+
 describe("the shuffle", () => {
   const sources = () => (viewer.result as ScanResult).items.map(item => item.sourceUrl);
   const prefetches = () => messages.filter(msg => msg.type === "LINKPEEK_PREFETCH").map(msg => msg.url);
@@ -984,6 +1002,8 @@ describe("the shuffle", () => {
     const event = key("s");
     expect(event.defaultPrevented).toBe(true);
     expect(viewer.openLoading).toHaveBeenLastCalledWith(innerWidth / 2, innerHeight / 3, expect.anything(), "Shuffle");
+    // Whole-page preparation steps aside while the shuffle reads links.
+    expect((controller.prefetcher as unknown as {host: {busy: () => boolean}}).host.busy()).toBe(true);
     await flush();
     await flush();
     expect(prefetches().sort()).toEqual([a.href, b.href, c.href]);
@@ -1067,6 +1087,29 @@ describe("the shuffle", () => {
     expect(prefetches()).toEqual([a.href]);
     viewer.onSeen(scan(a.href).items[0]);
     expect(controller.seen.size).toBe(0);
+  });
+
+  it("leaves a preview that is still loading behind when it starts", async () => {
+    await boot();
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(() => undefined) : {ok: true};
+    const a = link("a");
+    void controller.activate(a, 0, 0);
+    await flush();
+    const host = (controller.prefetcher as unknown as {host: {busy: () => boolean}}).host;
+    expect(host.busy()).toBe(true);
+    viewer.onSlideshowStart();
+    expect(messages.some(msg => msg.type === "LINKPEEK_CANCEL_SCAN" && msg.url === a.href)).toBe(true);
+    await flush();
+    expect(host.busy()).toBe(false);
+  });
+
+  it("starts from the toolbar popup", async () => {
+    await boot();
+    const send = vi.fn();
+    runtimeListeners[0]({type: "LINKPEEK_START_SHUFFLE"}, {}, send);
+    expect(send).toHaveBeenCalledWith({started: true});
+    runtimeListeners[0]({type: "LINKPEEK_START_SHUFFLE"}, {}, send);
+    expect(send).toHaveBeenLastCalledWith({started: false});
   });
 
   it("is left to the viewer's own slideshow when turned off", async () => {

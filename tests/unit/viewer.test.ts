@@ -1321,6 +1321,13 @@ describe("slideshow pacing", () => {
     expect(count()).toBe("2 / 2");
   });
 
+  it("uses the normal speed for a GIF whose player is still loading", async () => {
+    open({slideshowSeconds: 1}).show({...result(2), items: [item(0, "gif"), item(1)]});
+    press("s");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(count()).toBe("2 / 2");
+  });
+
   it("waits at the end of a gallery that is still growing, asking for more, instead of wrapping", async () => {
     const more = vi.fn();
     viewer.onNeedMore = more;
