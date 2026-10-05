@@ -6,7 +6,7 @@
  * follows its links to find galleries behind index pages. As a last resort the
  * page's own preview picture (og:image) is used.
  */
-import type {MediaItem, ScanResult} from "../shared/media";
+import type {LinkContext, MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
@@ -87,9 +87,9 @@ async function fetchPage(url: string, settings: LinkPeekSettings | undefined, si
   }
 }
 
-/** Same-site (or any-site) links worth following from a page, skipping downloads, sign-outs and repeats. */
-function linkedPages(html: string, base: string, rootOrigin: string, settings: LinkPeekSettings, seen: Set<string>) {
-  const out: string[] = [];
+/** Safe links in one fetched page, kept in document order for recursion and keyboard navigation. */
+function pageLinks(html: string, base: string, rootOrigin: string, settings: LinkPeekSettings) {
+  const out: string[] = [], local = new Set<string>();
   const anchors = /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi;
   let match: RegExpExecArray | null;
   while ((match = anchors.exec(html))) {
@@ -106,11 +106,20 @@ function linkedPages(html: string, base: string, rootOrigin: string, settings: L
     url.hash = "";
     if (settings.stripTracking) stripTrackingParams(url);
     if (settings.canonicalizeQuery) url.searchParams.sort();
-    if (seen.has(url.href)) continue;
-    seen.add(url.href);
+    if (url.href === base || local.has(url.href)) continue;
+    local.add(url.href);
     out.push(url.href);
   }
   return out;
+}
+
+/** Recursion additionally removes links already visited anywhere in this scan. */
+function linkedPages(html: string, base: string, rootOrigin: string, settings: LinkPeekSettings, seen: Set<string>) {
+  return pageLinks(html, base, rootOrigin, settings).filter(url => {
+    if (seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
 }
 
 async function mapWithConcurrency<T, R>(values: T[], concurrency: number, work: (value: T) => Promise<R>) {
@@ -126,11 +135,11 @@ async function mapWithConcurrency<T, R>(values: T[], concurrency: number, work: 
   return results;
 }
 
-function finish(raw: string, title: string | undefined, items: MediaItem[], adapter: string, failures: number, settings: LinkPeekSettings | undefined, kind: ScanResult["kind"] = "generic"): ScanResult {
+function finish(raw: string, title: string | undefined, items: MediaItem[], adapter: string, failures: number, settings: LinkPeekSettings | undefined, kind: ScanResult["kind"] = "generic", linkContexts?: LinkContext[]): ScanResult {
   const deduped = dedupeMedia(items), cap = clamp(settings?.maxMediaItems, 400, 1, 5000), warnings: string[] = [];
   if (deduped.items.length > cap) warnings.push(`Stopped at the configured ${cap} media limit.`);
   if (failures) warnings.push(`Skipped ${failures} linked page${failures === 1 ? "" : "s"} that could not be read.`);
-  return {url: raw, kind, title, items: deduped.items.slice(0, cap), complete: true, diagnostics: {adapter, ignored: failures, duplicates: deduped.duplicates, warnings}};
+  return {url: raw, kind, title, items: deduped.items.slice(0, cap), complete: true, linkContexts, diagnostics: {adapter, ignored: failures, duplicates: deduped.duplicates, warnings}};
 }
 
 /**
@@ -143,6 +152,11 @@ export async function scanGeneric(raw: string, settings?: LinkPeekSettings, sign
   const recursionOn = Boolean(settings && settings.recursiveSearch !== "off");
   const wantsRecursion = allowRecursive && recursionOn && Boolean(root.html) && (root.items.length === 0 || settings!.recursiveTrigger === "always");
   let items = root.items, pagesRead = 1, failures = 0;
+  const linkContexts: LinkContext[] = [];
+  if (settings && root.html) {
+    const rootOrigin = new URL(root.finalUrl).origin;
+    linkContexts.push({sourceUrl: root.finalUrl, links: pageLinks(root.html, root.finalUrl, rootOrigin, settings)});
+  }
   if (wantsRecursion) {
     const options = settings!, rootOrigin = new URL(root.finalUrl).origin;
     const maxDepth = clamp(options.recursiveMaxDepth, 1, 1, 3), maxPages = clamp(options.recursiveMaxPages, 6, 1, 50), cap = clamp(options.maxMediaItems, 400, 1, 5000);
@@ -167,7 +181,10 @@ export async function scanGeneric(raw: string, settings?: LinkPeekSettings, sign
       for (const page of pages) {
         if (!page) continue;
         found.push(...page.items);
-        if (!page.direct && page.html && depth < maxDepth) next.push(...linkedPages(page.html, page.finalUrl, rootOrigin, options, seen));
+        if (!page.direct && page.html) {
+          linkContexts.push({sourceUrl: page.finalUrl, links: pageLinks(page.html, page.finalUrl, rootOrigin, options)});
+          if (depth < maxDepth) next.push(...linkedPages(page.html, page.finalUrl, rootOrigin, options, seen));
+        }
       }
       frontier = next;
       depth++;
@@ -177,7 +194,7 @@ export async function scanGeneric(raw: string, settings?: LinkPeekSettings, sign
   // A page's preview picture is better than an empty gallery, but must not stop a pending linked-page search.
   if (!items.length && root.html && (allowRecursive || !recursionOn)) {
     const preview = extractPageMetaMedia(root.html, root.finalUrl);
-    if (preview.length) return finish(raw, root.title, preview, "Page preview image", failures, settings);
+    if (preview.length) return finish(raw, root.title, preview, "Page preview image", failures, settings, "generic", linkContexts);
   }
-  return finish(raw, root.title, items, pagesRead > 1 ? "Generic linked-page search" : "Generic HTML", failures, settings);
+  return finish(raw, root.title, items, pagesRead > 1 ? "Generic linked-page search" : "Generic HTML", failures, settings, "generic", linkContexts);
 }
