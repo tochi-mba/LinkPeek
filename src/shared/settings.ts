@@ -16,7 +16,7 @@ export type Placement = "auto" | "right" | "left" | "above" | "below";
 
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
-  "open", "openPage", "download", "downloadAll", "copy", "slideshow", "fill", "rotate", "zoomIn", "zoomOut", "resetZoom",
+  "open", "openPage", "download", "downloadAll", "copy", "slideshow", "pause", "fill", "rotate", "zoomIn", "zoomOut", "resetZoom",
   "help", "close", "preloadInspector"
 ] as const;
 export type ShortcutAction = typeof SHORTCUT_ACTIONS[number];
@@ -63,6 +63,14 @@ export interface LinkPeekSettings {
   wrapAround: boolean;
   resumePosition: boolean;
   slideshowSeconds: number;
+  /** Videos and GIFs stay up until they have played through (up to a minute). */
+  slideshowPlayThrough: boolean;
+  /** S starts an endless slideshow mixing media from every link on the page. */
+  shuffleSlideshow: boolean;
+  /** The shuffle skips media LinkPeek has already shown. */
+  skipSeenMedia: boolean;
+  /** When the page runs out, the shuffle follows links to further pages. */
+  shuffleFollowLinks: boolean;
   thumbnailSize: number;
   verticalGesture: "navigate" | "off";
   horizontalGesture: "scrub" | "navigate" | "off";
@@ -159,6 +167,7 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   download: ["d"],
   copy: ["c"],
   slideshow: ["s"],
+  pause: ["Space"],
   zoomIn: ["+", "="],
   zoomOut: ["-"],
   resetZoom: ["0"],
@@ -208,6 +217,10 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   wrapAround: true,
   resumePosition: true,
   slideshowSeconds: 3,
+  slideshowPlayThrough: true,
+  shuffleSlideshow: true,
+  skipSeenMedia: true,
+  shuffleFollowLinks: true,
   thumbnailSize: 120,
   verticalGesture: "navigate",
   horizontalGesture: "scrub",

@@ -127,6 +127,8 @@ export class LinkPrefetcher {
   private failureStreak = 0;
   private pausedUntil = 0;
   private resumeTimer: number | undefined;
+  /** Preparation in progress per link, so a caller that needs the result can wait for it. */
+  private inflight = new Map<string, Promise<ScanResult | undefined>>();
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
 
@@ -219,6 +221,30 @@ export class LinkPrefetcher {
     this.results.delete(url);
     this.results.set(url, result);
     return result;
+  }
+
+  /** Galleries with media kept in memory, most recently used last. */
+  galleries() {
+    return [...this.results];
+  }
+
+  /** Milliseconds until a site that kept failing may be asked again; 0 when it may be asked now. */
+  pausedFor() {
+    return Math.max(0, this.pausedUntil - Date.now());
+  }
+
+  /**
+   * A link's full scan result, empty or not (the shuffle needs its links too):
+   * from memory, from a preparation already running, or asked of the service
+   * worker, which answers links checked before from its cache.
+   */
+  async gallery(url: string): Promise<ScanResult | undefined> {
+    const running = this.inflight.get(url);
+    if (running) await running;
+    const kept = this.results.get(url);
+    if (kept) return kept;
+    const settings = this.host.settingsFor(url);
+    return settings ? this.prepareUrl(url, settings, "shallow", "nearby", true, true) : undefined;
   }
 
   /** Links known to have media. */
@@ -440,9 +466,17 @@ export class LinkPrefetcher {
    * allowed even when speculative preparation is off. `refresh` fetches a link
    * already checked again, which the service worker answers from its cache.
    */
-  private async prepareUrl(url: string, settings: LinkPeekSettings, level: Level, tier: Tier, explicit: boolean, refresh = false) {
+  private prepareUrl(url: string, settings: LinkPeekSettings, level: Level, tier: Tier, explicit: boolean, refresh = false) {
+    if (!this.canStart(url, level, refresh, Date.now())) return Promise.resolve(undefined);
+    const work = this.runPrepare(url, settings, level, tier, explicit, refresh).finally(() => {
+      if (this.inflight.get(url) === work) this.inflight.delete(url);
+    });
+    this.inflight.set(url, work);
+    return work;
+  }
+
+  private async runPrepare(url: string, settings: LinkPeekSettings, level: Level, tier: Tier, explicit: boolean, refresh: boolean): Promise<ScanResult | undefined> {
     const generation = this.generation, previous = this.requested.get(url), urgent = tier === "intent";
-    if (!this.canStart(url, level, refresh, Date.now())) return;
     this.requested.set(url, refresh && previous ? previous : level);
     trim(this.requested, LINK_MEMORY);
     this.setActive(url, "queued");
@@ -465,13 +499,15 @@ export class LinkPrefetcher {
       const final = result.complete && (level === "deep" || classifyLink(url) !== "generic" || settings.recursiveSearch === "off");
       this.remember(url, result, final, tier !== "page");
       if (tier !== "page") this.warmThumbnails(url, result, urgent);
+      return result;
     } catch {
       if (generation !== this.generation) return;
       if (previous) this.requested.set(url, previous);
       else this.requested.delete(url);
       this.failedUntil.set(url, Date.now() + RETRY_AFTER_MS);
       trim(this.failedUntil, LINK_MEMORY);
-      if (!explicit) this.backOff();
+      // A link someone pointed at failing says little about the site; a run of background failures does.
+      if (tier !== "intent") this.backOff();
       this.setActive(url, undefined);
     } finally {
       this.release();

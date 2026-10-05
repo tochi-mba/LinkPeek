@@ -136,6 +136,11 @@ export class GifPlayer {
     }
   }
 
+  /** One loop at the current speed, once the frames are decoded; 0 before that. */
+  loopMs() {
+    return gifDuration(this.frames) / this.speed;
+  }
+
   destroy() {
     this.destroyed = true;
     this.pause();

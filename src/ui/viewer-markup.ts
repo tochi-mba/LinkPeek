@@ -30,8 +30,17 @@ export interface HeaderState {
   pinned: boolean;
   favorite: boolean;
   slideshow: boolean;
+  slideshowPaused: boolean;
   help: boolean;
   settings: LinkPeekSettings;
+}
+
+/** While a slideshow runs the button pauses and resumes it; S itself stops it. */
+function slideshowButton(state: HeaderState) {
+  const keys = state.settings.shortcuts;
+  if (!state.slideshow) return button("slideshow", "▶", "Start slideshow", withKey("Slideshow", keys, "slideshow"), false, "lp-slideshow");
+  const label = state.slideshowPaused ? "Resume slideshow" : "Pause slideshow";
+  return button("pause", state.slideshowPaused ? "▶" : "❚❚", label, withKey(label, keys, "pause"), true, "lp-slideshow");
 }
 
 export function headerMarkup(state: HeaderState) {
@@ -47,7 +56,7 @@ export function headerMarkup(state: HeaderState) {
     + `<span class="lp-title" title="Drag to move · double-click to reset the layout">${escapeHtml(state.title)}</span>`
     + `<span class="lp-meta">${state.count ?? ""}</span>`
     + density + grid + expand
-    + button("slideshow", state.slideshow ? "❚❚" : "▶", state.slideshow ? "Stop slideshow" : "Start slideshow", withKey(state.slideshow ? "Stop slideshow" : "Slideshow", keys, "slideshow"), state.slideshow, "lp-slideshow")
+    + slideshowButton(state)
     + button("favorite", state.favorite ? "★" : "☆", state.favorite ? "Remove saved link" : "Save link", withKey(state.favorite ? "Remove saved link" : "Save link", keys, "favorite"), state.favorite, "lp-favorite")
     + button("help", "?", "Show controls", withKey("Controls", keys, "help"), undefined, "lp-helpbtn", ` aria-expanded="${state.help}"`)
     + button("pin", "⌖", state.pinned ? "Unpin preview" : "Pin preview", withKey(state.pinned ? "Unpin preview" : "Pin preview", keys, "pin"), state.pinned, "lp-pin")
@@ -61,6 +70,7 @@ export interface FooterState {
   view: View;
   gridThumbSize: number;
   slideshow: boolean;
+  slideshowPaused: boolean;
   settings: LinkPeekSettings;
 }
 
@@ -89,7 +99,7 @@ export function footerMarkup(state: FooterState) {
       + button("download", "⤓", "Download original", withKey("Download", keys, "download"), undefined, "lp-action")
       + button("copy", "⧉", "Copy media link", withKey("Copy link", keys, "copy"), undefined, "lp-action")
     : "";
-  const status = state.slideshow ? `Slideshow · ${settings.slideshowSeconds}s` : progressText(result);
+  const status = !state.slideshow ? progressText(result) : state.slideshowPaused ? "Paused · Space to resume" : `Slideshow · ${settings.slideshowSeconds}s`;
   return `<footer class="lp-foot"><div class="lp-navgroup">${nav}</div>${post}${tiles}<span class="lp-spacer"></span>${actions}<span class="lp-signal">${escapeHtml(status)}</span></footer>`;
 }
 
@@ -136,7 +146,7 @@ export function resizeHandles() {
 }
 
 const HELP_GROUPS: Array<[string, Array<[ShortcutAction, string]>]> = [
-  ["Browse", [["next", "Next media"], ["previous", "Previous media"], ["grid", "Grid / single media"], ["slideshow", "Slideshow"]]],
+  ["Browse", [["next", "Next media"], ["previous", "Previous media"], ["grid", "Grid / single media"], ["slideshow", "Slideshow (shuffle when on)"], ["pause", "Pause / resume the slideshow"]]],
   ["Links", [["nextLink", "Next link with media (skip empty pages)"], ["previousLink", "Previous link with media"], ["openPage", "Open the linked page"]]],
   ["This media", [["open", "Open original"], ["download", "Download original"], ["downloadAll", "Download the whole gallery (press twice)"], ["copy", "Copy media link"], ["favorite", "Save this link"]]],
   ["Zoom", [["fill", "Fill the panel / fit"], ["rotate", "Rotate"], ["zoomIn", "Zoom in"], ["zoomOut", "Zoom out"], ["resetZoom", "Reset zoom"]]],

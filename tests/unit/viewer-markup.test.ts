@@ -11,7 +11,7 @@ const html = (markupString: string) => {
   el.innerHTML = markupString;
   return el;
 };
-const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, help: false, settings, ...patch}));
+const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, slideshowPaused: false, help: false, settings, ...patch}));
 
 describe("key hints", () => {
   it("show up to two bindings", () => {
@@ -53,7 +53,7 @@ describe("the header", () => {
 });
 
 describe("the footer", () => {
-  const footer = (patch: Partial<markup.FooterState> = {}) => html(markup.footerMarkup({result: result(), index: 0, view: "focus", gridThumbSize: 120, slideshow: false, settings, ...patch}));
+  const footer = (patch: Partial<markup.FooterState> = {}) => html(markup.footerMarkup({result: result(), index: 0, view: "focus", gridThumbSize: 120, slideshow: false, slideshowPaused: false, settings, ...patch}));
 
   it("shows navigation, actions and status for the current item", () => {
     const el = footer();

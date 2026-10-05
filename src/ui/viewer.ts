@@ -9,7 +9,7 @@
 import type {Budget} from "../content/resource-governor";
 import {escapeHtml} from "../shared/dom";
 import {isFavorite, toggleFavorite} from "../shared/favorites";
-import {safeDownloadName, safeFolderName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
+import {linkLabel, safeDownloadName, safeFolderName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
 import {DEFAULT_SETTINGS, type LinkPeekSettings, type ShortcutAction} from "../shared/settings";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {GestureController} from "./gesture";
@@ -19,7 +19,7 @@ import {overlayCss} from "./styles";
 import * as markup from "./viewer-markup";
 import {VirtualGrid} from "./virtual-grid";
 
-type GifPlayerLike = {init: () => Promise<void>; destroy: () => void; key: (event: KeyboardEvent) => boolean};
+type GifPlayerLike = {init: () => Promise<void>; destroy: () => void; key: (event: KeyboardEvent) => boolean; loopMs: () => number};
 export type GifModule = {
   GifPlayer: new (stage: HTMLElement, url: string, settings: LinkPeekSettings, onNotice?: (message: string) => void, onWidth?: (width: number) => void) => GifPlayerLike;
   prepareGif: (url: string, maxMb: number) => Promise<unknown>;
@@ -34,6 +34,10 @@ const KEY_ACTIONS: readonly ShortcutAction[] = [
 ];
 /** How long the first Shift+D waits for the second before forgetting it. */
 const CONFIRM_MS = 3000;
+/** Longest a video or GIF holds a slide while it plays through. */
+const PLAY_THROUGH_MAX_MS = 60_000;
+/** How often a slideshow at the end of a growing gallery looks for the next item. */
+const MORE_POLL_MS = 1000;
 const TOAST_MS = 900;
 const BUSY_AFTER_MS = 120;
 const ZOOM_STEP = 1.2;
@@ -57,6 +61,12 @@ export class Viewer {
   help = false;
   onDismiss?: (explicit: boolean) => void;
   onPosition?: (url: string, index: number) => void;
+  /** Asked before a slideshow starts; returning true means the host started its own (the shuffle). */
+  onSlideshowStart?: () => boolean;
+  /** Each item shown in single view. */
+  onSeen?: (item: MediaItem) => void;
+  /** Reached the end of a gallery that is still growing. */
+  onNeedMore?: () => void;
   private expanded = false;
   private gridThumbSize = 120;
   private remembered: {view?: View; gridThumbSize?: number; expanded?: boolean} = {};
@@ -72,6 +82,8 @@ export class Viewer {
   private toastTimer?: number;
   private slideshowTimer?: number;
   private slideshow = false;
+  private slideshowPaused = false;
+  private waitingForMore = false;
   private failure?: string;
   private title = "";
   private openX = 0;
@@ -299,6 +311,8 @@ export class Viewer {
       this.close(true);
       return true;
     }
+    // While a slideshow runs, its pause key comes first (by default Space, which otherwise means next).
+    if (this.slideshow && hit("pause")) return this.perform("pause");
     if (this.view === "focus" && this.gifPlayer?.key(event)) return true;
     if (this.view === "grid" && this.gridKey(event)) return true;
     const action = KEY_ACTIONS.find(hit);
@@ -338,8 +352,10 @@ export class Viewer {
     switch (action) {
       case "next":
       case "previous":
-        this.stopSlideshow();
-        void this.navigate(action === "next" ? 1 : -1);
+        void this.navigate(action === "next" ? 1 : -1).then(() => this.keepSlideshowGoing());
+        return true;
+      case "pause":
+        this.toggleSlideshowPause();
         return true;
       case "grid":
         this.toggleView();
@@ -362,9 +378,11 @@ export class Viewer {
       case "post":
         if (item) window.open(action === "post" ? item.sourceUrl : item.originalUrl, "_blank", "noopener");
         return true;
-      case "openPage":
-        if (this.result) window.open(this.result.url, "_blank", "noopener");
+      case "openPage": {
+        const page = this.pageUrl();
+        if (page) window.open(page, "_blank", "noopener");
         return true;
+      }
       case "downloadAll":
         this.downloadAll();
         return true;
@@ -382,7 +400,7 @@ export class Viewer {
         return true;
       case "slideshow":
         if (this.slideshow) this.stopSlideshow(true);
-        else this.startSlideshow();
+        else if (!this.onSlideshowStart?.()) this.startSlideshow();
         return true;
       case "zoomIn":
       case "zoomOut":
@@ -438,7 +456,7 @@ export class Viewer {
   private onPanelAuxClick = (event: MouseEvent) => {
     if (event.button !== 1) return;
     const target = event.target as Element, item = this.result?.items[this.index];
-    const url = target.closest?.(".lp-title") ? this.result?.url : target.closest?.(".lp-stage") ? item?.originalUrl : undefined;
+    const url = target.closest?.(".lp-title") ? this.pageUrl() : target.closest?.(".lp-stage") ? item?.originalUrl : undefined;
     if (!url) return;
     event.preventDefault();
     chrome.runtime.sendMessage({type: "LINKPEEK_OPEN_TAB", url, active: false})
@@ -479,15 +497,23 @@ export class Viewer {
     }
   }
 
+  /** The page the media on screen belongs to: the gallery's link, or in a shuffle, the link this item came from. */
+  private pageUrl() {
+    return this.result?.mixed ? this.result.items[this.index]?.sourceUrl : this.result?.url;
+  }
+
   private headerMarkup() {
     return markup.headerMarkup({
       title: this.headerTitle(), count: this.result?.items.length, view: this.view, expanded: this.expanded, pinned: this.pinned,
-      favorite: this.favorite, slideshow: this.slideshow, help: this.help, settings: this.settings
+      favorite: this.favorite, slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, help: this.help, settings: this.settings
     });
   }
 
   private footerMarkup() {
-    return markup.footerMarkup({result: this.result, index: this.pendingIndex ?? this.index, view: this.view, gridThumbSize: this.gridThumbSize, slideshow: this.slideshow, settings: this.settings});
+    return markup.footerMarkup({
+      result: this.result, index: this.pendingIndex ?? this.index, view: this.view, gridThumbSize: this.gridThumbSize,
+      slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, settings: this.settings
+    });
   }
 
   private bodyMarkup() {
@@ -578,6 +604,9 @@ export class Viewer {
       slot.replaceWith(decoded);
     }
     if (item.type === "gif") void this.mountGif(item, version);
+    this.onSeen?.(item);
+    // In a shuffle each item may come from a different link, so the saved-link star follows it.
+    if (this.result?.mixed) void this.refreshFavorite();
     this.watchActualWidth(item, version);
     this.paintTransform();
     void this.prepareNextGif();
@@ -680,8 +709,7 @@ export class Viewer {
   }
 
   private navigateFromGesture(delta: number) {
-    this.stopSlideshow();
-    void this.navigate(delta);
+    void this.navigate(delta).then(() => this.keepSlideshowGoing());
   }
 
   /** Moves through the gallery. The counter updates at once; the media swaps when it is decoded. */
@@ -689,6 +717,12 @@ export class Viewer {
     const items = this.result?.items;
     if (!items?.length) return;
     const base = this.pendingIndex ?? this.index;
+    if (!this.result!.complete && base + delta >= items.length) {
+      // A gallery that is still growing waits for more rather than wrapping back to the start.
+      this.onNeedMore?.();
+      this.toast("Loading more…");
+      return;
+    }
     const target = this.settings.wrapAround ? ((base + delta) % items.length + items.length) % items.length : Math.max(0, Math.min(items.length - 1, base + delta));
     this.pendingStart = null;
     if (target === base) {
@@ -743,9 +777,12 @@ export class Viewer {
     this.toast(`${this.gridThumbSize}px tiles`);
   }
 
-  private startSlideshow() {
+  /** Starts a slideshow of the gallery on screen. Public so the shuffle can start one on the gallery it builds. */
+  startSlideshow() {
     if (!this.result?.items.length) return;
     this.slideshow = true;
+    this.slideshowPaused = false;
+    this.waitingForMore = false;
     if (this.view === "grid") {
       this.view = "focus";
       this.render();
@@ -757,23 +794,89 @@ export class Viewer {
     this.queueSlide();
   }
 
-  private queueSlide() {
+  private queueSlide(delay = this.slideDelay()) {
     clearTimeout(this.slideshowTimer);
-    this.slideshowTimer = window.setTimeout(async () => {
-      const items = this.result?.items ?? [];
-      if (!this.settings.wrapAround && this.index >= items.length - 1) {
+    this.slideshowTimer = window.setTimeout(() => void this.advanceSlide(), delay);
+  }
+
+  private async advanceSlide() {
+    const items = this.result?.items ?? [];
+    if (this.index >= items.length - 1) {
+      if (!this.result?.complete) {
+        // Still growing (a long thread loading, or the shuffle finding more): wait for the next item.
+        this.onNeedMore?.();
+        if (!this.waitingForMore) this.toast("Finding more media…");
+        this.waitingForMore = true;
+        return this.queueSlide(MORE_POLL_MS);
+      }
+      // A finished shuffle stops rather than replay what was just seen.
+      if (!this.settings.wrapAround || this.result?.mixed) {
         this.stopSlideshow();
         this.toast("End of gallery");
         return;
       }
-      await this.navigate(1);
-      if (this.slideshow) this.queueSlide();
-    }, this.settings.slideshowSeconds * 1000);
+    }
+    this.waitingForMore = false;
+    await this.navigate(1);
+    if (this.slideshow && !this.slideshowPaused) this.queueSlide();
+  }
+
+  /**
+   * How long the item on screen stays up: the slideshow speed, or for a video
+   * or GIF that should play through, the rest of its running time (capped).
+   */
+  private slideDelay() {
+    const base = this.settings.slideshowSeconds * 1000, item = this.result?.items[this.index];
+    if (!this.settings.slideshowPlayThrough || !item) return base;
+    let playing = 0;
+    if (item.type === "video") {
+      const video = this.stage?.querySelector<HTMLVideoElement>(".lp-video");
+      if (video && (video.autoplay || !video.paused) && Number.isFinite(video.duration) && video.duration > 0) {
+        playing = (video.duration - video.currentTime) * 1000;
+      } else if (video?.readyState === 0) {
+        // Its length is not known yet: look again once it is.
+        video.addEventListener("loadedmetadata", () => {
+          if (this.slideshow && !this.slideshowPaused && this.result?.items[this.index] === item) this.queueSlide();
+        }, {once: true});
+      }
+    } else if (item.type === "gif") {
+      playing = this.gifPlayer?.loopMs() ?? 0;
+    }
+    return Math.min(PLAY_THROUGH_MAX_MS, Math.max(base, playing));
+  }
+
+  /** After moving by hand during a slideshow, the next slide is a full interval away again. */
+  private keepSlideshowGoing() {
+    if (this.slideshow && !this.slideshowPaused) this.queueSlide();
+  }
+
+  private pauseSlideshow() {
+    if (!this.slideshow || this.slideshowPaused) return;
+    this.slideshowPaused = true;
+    clearTimeout(this.slideshowTimer);
+    this.renderHeader();
+    this.updateChrome();
+  }
+
+  private toggleSlideshowPause() {
+    if (!this.slideshow) return;
+    if (this.slideshowPaused) {
+      this.slideshowPaused = false;
+      this.renderHeader();
+      this.updateChrome();
+      this.toast("Slideshow playing");
+      this.queueSlide();
+    } else {
+      this.pauseSlideshow();
+      this.toast("Paused · Space to resume");
+    }
   }
 
   private stopSlideshow(announce = false) {
     if (!this.slideshow) return;
     this.slideshow = false;
+    this.slideshowPaused = false;
+    this.waitingForMore = false;
     clearTimeout(this.slideshowTimer);
     if (!this.isOpen) return;
     this.renderHeader();
@@ -871,7 +974,8 @@ export class Viewer {
   }
 
   applyZoom(factor: number, x: number, y: number) {
-    this.stopSlideshow();
+    // Looking closer pauses a slideshow rather than ending it.
+    this.pauseSlideshow();
     const old = this.zoom;
     this.zoom = Math.max(1, Math.min(this.settings.maxZoom, this.zoom * factor));
     if (old === this.zoom && factor > 1 && old > 1) {
@@ -936,11 +1040,11 @@ export class Viewer {
   }
 
   private async refreshFavorite() {
-    const url = this.result?.url, version = ++this.favoriteVersion;
+    const url = this.pageUrl(), version = ++this.favoriteVersion;
     if (!url) return;
     try {
       const value = await isFavorite(url);
-      if (version !== this.favoriteVersion || this.result?.url !== url || this.favorite === value) return;
+      if (version !== this.favoriteVersion || this.pageUrl() !== url || this.favorite === value) return;
       this.favorite = value;
       this.renderHeader();
     } catch {
@@ -949,11 +1053,13 @@ export class Viewer {
   }
 
   private async toggleFavorite() {
-    const current = this.result;
-    if (!current) return;
+    const current = this.result, url = this.pageUrl();
+    if (!current || !url) return;
     try {
-      const outcome = await toggleFavorite({url: current.url, title: this.headerTitle(), mediaCount: current.items.length});
-      if (this.result?.url !== current.url) return;
+      const outcome = current.mixed
+        ? await toggleFavorite({url, title: linkLabel(url), mediaCount: current.items.filter(item => item.sourceUrl === url).length})
+        : await toggleFavorite({url, title: this.headerTitle(), mediaCount: current.items.length});
+      if (this.pageUrl() !== url) return;
       this.favorite = outcome.saved;
       this.renderHeader();
       this.toast(outcome.saved ? "Link saved" : "Saved link removed");

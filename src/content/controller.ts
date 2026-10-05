@@ -8,6 +8,7 @@
 import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResult} from "../shared/media";
 import type {ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, loadSettings, type LinkPeekSettings} from "../shared/settings";
+import {SeenMedia} from "../shared/seen-media";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
 import {HoverIntent, anchorFrom} from "./hover-intent";
@@ -15,8 +16,10 @@ import {ImageWarmer} from "./image-warmer";
 import {LinkPrefetcher} from "./link-prefetcher";
 import {PreloadInspector} from "./preload-inspector";
 import {ResourceGovernor, TIER_NAMES} from "./resource-governor";
+import {ShuffleMix} from "./shuffle";
 
 type ActiveScan = {url: string; token: string; settings: LinkPeekSettings};
+type ShuffleSession = {mix: ShuffleMix; settings: LinkPeekSettings; exploring: number; started: boolean; resumeTimer?: number};
 type NavigationTarget =
   | {recursive: false; url: string; result: ScanResult}
   | {recursive: true; url: string; result: ScanResult; linkedSource: string; linkedList?: string[]; linkedExcluded: Set<string>};
@@ -26,6 +29,12 @@ const BRIEF_CONTINUE_MS = 1000;
 /** Links one N press may scan over the network; the next press carries on from there. */
 const MAX_NAVIGATION_PROBES = 8;
 const NAVIGATION_NOTICE_MS = 300;
+/** The shuffle's gallery: not a real page, so it is never stored or reopened. */
+export const SHUFFLE_URL = "linkpeek:shuffle";
+/** Items the shuffle keeps queued ahead of the one on screen, and adds at a time. */
+const SHUFFLE_AHEAD = 6;
+/** Below this many waiting items, the shuffle reads more links. */
+const SHUFFLE_LOW = 12;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -51,6 +60,8 @@ export class PreviewController {
   private linkNavigationCursor?: string;
   private navigationProbe?: {url: string; token: string};
   private positions = new Map<string, number>();
+  private shuffle?: ShuffleSession;
+  readonly seen = new SeenMedia();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
   private inspectorChordKey = "";
@@ -76,10 +87,13 @@ export class PreviewController {
       isScanning: () => Boolean(this.activeScan),
       onReach: anchor => this.prefetcher.hover(anchor),
       onLinger: anchor => this.prefetcher.deepen(anchor),
-      onActivate: (anchor, x, y) => void this.activate(anchor, x, y),
+      // While the shuffle is open, hovering a link on the way somewhere never replaces it.
+      onActivate: (anchor, x, y) => {
+        if (!this.viewer.result?.mixed) void this.activate(anchor, x, y);
+      },
       onLeave: () => this.onLeave(),
       onArm: (anchor, delayMs, x, y) => {
-        if (this.pageSettings().showHoverRing) this.viewer.showHoverRing(x, y, delayMs, this.prefetcher.isPrepared(anchor.href));
+        if (this.pageSettings().showHoverRing && !this.viewer.result?.mixed) this.viewer.showHoverRing(x, y, delayMs, this.prefetcher.isPrepared(anchor.href));
       },
       onDisarm: () => this.viewer.hideHoverRing()
     });
@@ -87,7 +101,7 @@ export class PreviewController {
       settingsFor: url => this.settingsForUrl(url),
       pointer: () => this.intent.pointer(),
       budget: () => this.governor.budget(),
-      busy: () => Boolean(this.activeScan)
+      busy: () => Boolean(this.activeScan || this.shuffle?.exploring)
     }, this.warmer);
     this.inspector = new PreloadInspector({
       snapshot: () => this.prefetcher.snapshot(),
@@ -102,7 +116,13 @@ export class PreviewController {
     const stored = await chrome.storage.local.get("viewerState");
     this.viewer.restoreViewerState(stored.viewerState as ViewerState | undefined);
     this.viewer.onDismiss = explicit => this.onDismiss(explicit);
-    this.viewer.onPosition = (url, index) => this.rememberPosition(url, index);
+    this.viewer.onPosition = (url, index) => url === SHUFFLE_URL ? this.refillShuffle() : this.rememberPosition(url, index);
+    this.viewer.onSlideshowStart = () => this.startShuffle();
+    this.viewer.onNeedMore = () => this.refillShuffle();
+    this.viewer.onSeen = item => {
+      if (this.pageSettings().skipSeenMedia) this.seen.add(item);
+    };
+    void this.seen.load();
 
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void this.onStorageChanged(changes, area);
     chrome.storage.onChanged.addListener(onStorage);
@@ -237,6 +257,7 @@ export class PreviewController {
   }
 
   private onDismiss(explicit: boolean) {
+    this.shuffle = undefined;
     this.requestId++;
     if (this.activeScan) this.detachOrCancel(this.activeScan, "out");
     if (explicit) this.intent.dismiss();
@@ -314,9 +335,99 @@ export class PreviewController {
     const settings = this.pageSettings();
     if (!settings.enabled || this.viewer.help || isTypingEvent(event)) return;
     const direction = matchesCombo(event, settings.shortcuts.nextLink) ? 1 : matchesCombo(event, settings.shortcuts.previousLink) ? -1 : 0;
-    if (!direction || !(this.openAdjacentLinked(direction) || this.openAdjacentPageLink(direction))) return;
+    // With no preview open, the slideshow key starts the shuffle right where you are.
+    const handled = direction
+      ? this.openAdjacentLinked(direction) || this.openAdjacentPageLink(direction)
+      : !this.viewer.isOpen && matchesCombo(event, settings.shortcuts.slideshow) && this.startShuffle();
+    if (!handled) return;
     event.preventDefault();
     event.stopPropagation();
+  }
+
+  /**
+   * The endless shuffle: a slideshow of media from every link on the page,
+   * then from the pages those links lead to. Returns false when shuffling is
+   * off (or the shuffle is already on screen), so the viewer runs its own slideshow.
+   */
+  private startShuffle() {
+    const settings = this.pageSettings();
+    if (!settings.enabled || !settings.shuffleSlideshow || this.viewer.result?.mixed) return false;
+    const mix = new ShuffleMix(item => settings.skipSeenMedia && this.seen.has(item));
+    // What is open now and everything already prepared join first; the page's links are explored next.
+    if (this.viewer.isOpen && this.viewer.result && this.openUrl) mix.add(this.openUrl, this.viewer.result, settings.shuffleFollowLinks);
+    for (const [url, result] of this.prefetcher.galleries()) mix.add(url, result, settings.shuffleFollowLinks);
+    mix.explore([...document.querySelectorAll<HTMLAnchorElement>("a[href]")].map(anchor => anchor.href).filter(url => this.settingsForUrl(url)));
+    const point = this.viewer.isOpen ? this.lastPoint : {x: innerWidth / 2, y: innerHeight / 3};
+    this.endPreview();
+    this.shuffle = {mix, settings, exploring: 0, started: false};
+    this.viewer.openLoading(point.x, point.y, settings, "Shuffle");
+    this.refillShuffle();
+    return true;
+  }
+
+  /** Keeps the shuffle a few items ahead of the screen, reading more links when it runs low. */
+  private refillShuffle() {
+    const session = this.shuffle;
+    if (!session || !this.viewer.isOpen) return;
+    const {mix} = session, shown = this.viewer.result;
+    const ahead = shown?.mixed ? shown.items.length - 1 - this.viewer.index : -1;
+    // With nothing left to explore, a lone remaining link may follow itself rather than stall.
+    const exhausted = !mix.exploring && !session.exploring;
+    if (ahead < SHUFFLE_AHEAD) {
+      const items = mix.take(SHUFFLE_AHEAD * 2, exhausted);
+      if (items.length) {
+        this.viewer.show({url: SHUFFLE_URL, kind: "generic", title: "Shuffle", complete: false, mixed: true, items});
+        if (!session.started) {
+          session.started = true;
+          this.viewer.startSlideshow();
+        }
+      } else if (exhausted && !mix.remaining && ahead <= 0) {
+        // Everything reachable has been shown: end here instead of starting over.
+        this.viewer.show({url: SHUFFLE_URL, kind: "generic", title: "Shuffle", complete: true, mixed: true, items: []});
+        this.viewer.toast(shown?.items.length ? "That is everything new from here" : "Nothing new to show from here");
+        this.shuffle = undefined;
+        return;
+      }
+    }
+    if (mix.remaining < SHUFFLE_LOW) this.exploreShuffle(session);
+  }
+
+  /** Reads the next links of the shuffle's frontier, a few at a time, pausing while the site needs room. */
+  private exploreShuffle(session: ShuffleSession) {
+    const wait = this.prefetcher.pausedFor();
+    if (wait) {
+      session.resumeTimer ??= window.setTimeout(() => {
+        session.resumeTimer = undefined;
+        if (this.shuffle === session) this.refillShuffle();
+      }, wait);
+      return;
+    }
+    const limit = Math.max(1, this.governor.budget().linkConcurrency);
+    for (const url of session.mix.nextLinks(limit - session.exploring)) {
+      if (session.mix.has(url) || !this.settingsForUrl(url)) continue;
+      session.exploring++;
+      void this.prefetcher.gallery(url).then(result => {
+        if (result && this.shuffle === session) session.mix.add(url, result, session.settings.shuffleFollowLinks);
+      }).finally(() => {
+        session.exploring--;
+        if (this.shuffle === session) this.refillShuffle();
+      });
+    }
+  }
+
+  /** Leaves the preview on screen behind (its scan, its link, any N in progress) without closing the panel. */
+  private endPreview() {
+    this.requestId++;
+    if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
+    this.cancelNavigationProbe();
+    this.linkNavigationId++;
+    this.linkNavigationCursor = undefined;
+    this.openAnchor = null;
+    this.openUrl = null;
+    this.linkedList = undefined;
+    this.linkedSource = undefined;
+    this.linkedExcluded = undefined;
+    this.intent.setCurrent(null);
   }
 
   private openUrlFromInspector(url: string) {
@@ -580,6 +691,7 @@ export class PreviewController {
   async activate(anchor: HTMLAnchorElement, x: number, y: number, keepList = false, resolved?: ScanResult) {
     this.intent.clearTimers();
     if (this.isOpenAnchor(anchor) && !resolved) return;
+    this.shuffle = undefined;
     this.cancelNavigationProbe();
     this.linkNavigationId++;
     this.linkNavigationCursor = undefined;

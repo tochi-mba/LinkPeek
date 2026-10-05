@@ -36,6 +36,8 @@ export interface ScanResult {
   postsScanned?: number;
   totalPosts?: number;
   diagnostics?: {ignored: number; duplicates: number; adapter: string; warnings: string[]};
+  /** A shuffle of media from many links: page actions apply to the link each item came from. */
+  mixed?: boolean;
 }
 
 /** Link kinds LinkPeek can open a preview for. */
