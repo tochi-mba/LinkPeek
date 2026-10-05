@@ -10,7 +10,7 @@ import {normalizeCombo} from "./shortcuts";
 
 export type ActivationMode = "hover" | "modifier" | "click";
 export type PerformanceMode = "auto" | "saver" | "fast";
-export type PrefetchMode = "off" | "nearby" | "visible";
+export type PrefetchMode = "off" | "nearby" | "visible" | "page";
 export type ViewMode = "focus" | "grid";
 export type Placement = "auto" | "right" | "left" | "above" | "below";
 
@@ -264,7 +264,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   videoMuted: true,
 
   performanceMode: "auto",
-  prefetch: "nearby",
+  prefetch: "page",
   meteredOff: true,
   maxRequests: 4,
   preloadMemoryMb: 256,
@@ -302,7 +302,7 @@ export const SETTING_CHOICES: Partial<Record<keyof LinkPeekSettings, readonly st
   continueAfterClose: ["no", "brief", "always"],
   gifControls: ["always", "hover", "minimal"],
   performanceMode: ["auto", "saver", "fast"],
-  prefetch: ["off", "nearby", "visible"],
+  prefetch: ["off", "nearby", "visible", "page"],
   preloadOriginals: ["never", "next"],
   referrerPolicy: ["default", "same-origin", "never"]
 };

@@ -21,6 +21,7 @@ export const INSPECTOR_GROUPS: ReadonlyArray<[PreloadState, string]> = [
   ["loading", "Loading"],
   ["queued", "Queued"],
   ["prepared", "Prepared"],
+  ["empty", "No media"],
   ["backoff", "Waiting to retry"],
   ["not-started", "Not started"],
   ["blocked", "Not previewable"]
@@ -39,6 +40,7 @@ const PAGE_OUTLINES = `
 [data-linkpeek-preload-state="queued"]{outline:2px dashed ${REX.live}!important;outline-offset:2px!important}
 [data-linkpeek-preload-state="backoff"]{outline:2px dotted ${REX.live}!important;outline-offset:2px!important}
 [data-linkpeek-preload-state="prepared"]{outline:2px solid ${REX.signal}!important;outline-offset:2px!important}
+[data-linkpeek-preload-state="empty"]{outline:1px solid ${REX.muted}!important;outline-offset:2px!important}
 [data-linkpeek-preload-state="not-started"]{outline:1px dashed ${REX.muted}!important;outline-offset:2px!important}
 [data-linkpeek-preload-state="blocked"]{outline:1px dotted rgba(133,141,131,.45)!important;outline-offset:2px!important}
 [data-linkpeek-preload-priority="high"]{box-shadow:0 0 0 2px ${REX.signal}!important}
@@ -91,12 +93,14 @@ const SWATCH: Record<PreloadState, string> = {
   queued: `border:2px dashed ${REX.live}`,
   backoff: `border:2px dotted ${REX.live}`,
   prepared: `border:2px solid ${REX.signal}`,
+  empty: `border:1px solid ${REX.muted}`,
   "not-started": `border:1px dashed ${REX.muted}`,
   blocked: "border:1px dotted rgba(133,141,131,.6)"
 };
 
 function stateLabel(entry: PreloadEntry, now: number) {
   if (entry.state === "backoff" && entry.retryAt) return `retry in ${Math.max(0, Math.ceil((entry.retryAt - now) / 1000))}s`;
+  if (entry.state === "empty") return "no media";
   return entry.state.replace("-", " ");
 }
 
@@ -114,7 +118,9 @@ export class PreloadInspector {
   private frame = 0;
   private badgeFrame = 0;
   private lastDraw = 0;
-  private lastEntries: PreloadEntry[] = [];
+  /** Links whose destination has a GIF, found during the outline pass, and the badge pinned beside each. */
+  private gifAnchors: HTMLAnchorElement[] = [];
+  private badges = new Map<HTMLAnchorElement, HTMLElement>();
 
   constructor(private source: PreloadInspectorHost) {
     this.root.dataset.linkpeekInspector = "true";
@@ -162,7 +168,8 @@ export class PreloadInspector {
     this.timer = undefined;
     this.frame = 0;
     this.badgeFrame = 0;
-    this.lastEntries = [];
+    this.gifAnchors = [];
+    this.badges.clear();
     this.root.remove();
     this.pageStyle?.remove();
     this.pageStyle = undefined;
@@ -181,12 +188,12 @@ export class PreloadInspector {
     return true;
   }
 
-  /** Keeps shadow-root GIF badges pinned to links while the page scrolls or resizes. */
+  /** Keeps GIF badges pinned to their links while the page scrolls or resizes: one repositioning per frame. */
   private onViewport = () => {
-    if (!this.isOpen || this.badgeFrame) return;
+    if (!this.isOpen || this.badgeFrame || !this.gifAnchors.length) return;
     this.badgeFrame = requestAnimationFrame(() => {
       this.badgeFrame = 0;
-      this.renderPageGifBadges(this.lastEntries);
+      this.placeGifBadges();
     });
   };
 
@@ -240,14 +247,13 @@ export class PreloadInspector {
   private draw(force = false) {
     this.lastDraw = performance.now();
     const entries = this.source.snapshot(), now = Date.now();
-    this.lastEntries = entries;
     const urls = new Set(entries.map(entry => entry.url));
     for (const url of this.selected) if (!urls.has(url)) this.selected.delete(url);
     this.updateOutlines(entries);
     // URLs cannot contain spaces or newlines, so these separators are unambiguous.
     const signature = entries.map(entry => `${entry.url} ${entry.state} ${entry.priority} ${entry.hasGif ? "gif" : ""}`).join("\n");
     if (!force && signature === this.signature) {
-      this.renderPageGifBadges(entries);
+      this.placeGifBadges();
       return;
     }
     this.signature = signature;
@@ -268,28 +274,42 @@ export class PreloadInspector {
       + `</section>`;
     const fresh = this.shadow.querySelector(".pi-list");
     if (fresh) fresh.scrollTop = scroll;
-    this.renderPageGifBadges(entries);
+    // Rebuilding the panel replaced the shadow root's contents, badges included.
+    this.badges.clear();
+    this.placeGifBadges();
   }
 
-  /** Real shadow-root badges cannot be hidden or restyled by the host page. */
-  private renderPageGifBadges(entries: PreloadEntry[]) {
-    this.shadow.querySelectorAll(".pi-page-gif").forEach(badge => badge.remove());
-    const gifs = new Set(entries.filter(entry => entry.hasGif).map(entry => entry.url));
-    if (!gifs.size) return;
-    for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
-      if (!gifs.has(anchor.href)) continue;
+  /**
+   * Pins a GIF badge beside each GIF link in view. Badges live in the
+   * inspector's shadow root, so the page cannot hide or restyle them, and are
+   * reused between frames. All positions are read before any is written, so
+   * this never forces more than one layout.
+   */
+  private placeGifBadges() {
+    const placed = this.gifAnchors.map(anchor => {
+      // The first line box keeps the badge beside where a wrapped link starts.
       const rect = anchor.getClientRects()[0] ?? anchor.getBoundingClientRect();
-      if (!rect || (rect.width <= 0 && rect.height <= 0) || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) continue;
-      const badge = document.createElement("i");
-      badge.className = "pi-page-gif";
-      badge.textContent = "▶";
-      badge.title = "Contains GIF";
-      badge.setAttribute("aria-label", "Contains GIF");
-      const left = Math.max(9, Math.min(innerWidth - 9, rect.right + 8));
-      const top = Math.max(9, Math.min(innerHeight - 9, rect.top + Math.min(9, Math.max(5, rect.height / 2))));
-      badge.style.left = `${Math.round(left)}px`;
-      badge.style.top = `${Math.round(top)}px`;
-      this.shadow.append(badge);
+      const visible = (rect.width > 0 || rect.height > 0) && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth;
+      return visible ? {anchor, left: Math.max(9, Math.min(innerWidth - 9, rect.right + 8)), top: Math.max(9, Math.min(innerHeight - 9, rect.top + Math.min(9, Math.max(5, rect.height / 2))))} : undefined;
+    });
+    const shown = new Set<HTMLAnchorElement>();
+    for (const spot of placed) {
+      if (!spot) continue;
+      shown.add(spot.anchor);
+      let badge = this.badges.get(spot.anchor);
+      if (!badge) {
+        badge = Object.assign(document.createElement("i"), {className: "pi-page-gif", textContent: "▶", title: "Contains GIF"});
+        badge.setAttribute("aria-label", "Contains GIF");
+        this.badges.set(spot.anchor, badge);
+        this.shadow.append(badge);
+      }
+      badge.style.left = `${Math.round(spot.left)}px`;
+      badge.style.top = `${Math.round(spot.top)}px`;
+    }
+    for (const [anchor, badge] of this.badges) {
+      if (shown.has(anchor)) continue;
+      badge.remove();
+      this.badges.delete(anchor);
     }
   }
 
@@ -311,11 +331,12 @@ export class PreloadInspector {
   /** Writes outline attributes only where they differ, so the page restyles as little as possible. */
   private updateOutlines(entries: PreloadEntry[]) {
     const byUrl = new Map(entries.map(entry => [entry.url, entry]));
-    const current = new Set<HTMLAnchorElement>();
+    const current = new Set<HTMLAnchorElement>(), gifs: HTMLAnchorElement[] = [];
     for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
       const entry = byUrl.get(anchor.href);
       if (!entry) continue;
       current.add(anchor);
+      if (entry.hasGif) gifs.push(anchor);
       if (anchor.dataset[STATE_ATTR] !== entry.state) anchor.dataset[STATE_ATTR] = entry.state;
       if (entry.priority === "normal") {
         if (PRIORITY_ATTR in anchor.dataset) delete anchor.dataset[PRIORITY_ATTR];
@@ -329,5 +350,6 @@ export class PreloadInspector {
       delete anchor.dataset[PRIORITY_ATTR];
     }
     this.outlined = current;
+    this.gifAnchors = gifs;
   }
 }

@@ -65,6 +65,18 @@ export function contentLinks(context: LinkContext): string[] {
   return children.length >= 2 ? children : context.links;
 }
 
+const GIF_FILE = /\.gif(?:$|[?#])/i;
+
+/** Whether a gallery has a GIF, judged by type or by any of its file names (some sites label GIFs as images). */
+export function hasGifMedia(items: readonly MediaItem[]) {
+  return items.some(item => item.type === "gif" || GIF_FILE.test(item.originalUrl) || GIF_FILE.test(item.previewUrl) || GIF_FILE.test(item.filename ?? ""));
+}
+
+/** Whether a link points straight at a GIF file. */
+export function isGifLink(url: string) {
+  return GIF_FILE.test(url);
+}
+
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif|avif)(?:$|[?#])/i;
 const VIDEO_FILE = /\.(?:mp4|webm|mov|m4v)(?:$|[?#])/i;
 const DOWNLOAD_FILE = /\.(?:zip|rar|7z|gz|tar|pdf|exe|msi|dmg|pkg|apk|iso|docx?|xlsx?|pptx?)(?:$|[?#])/i;

@@ -26,6 +26,7 @@ vi.mock("../../src/ui/viewer", () => ({
     cancelClose = vi.fn();
     containsPoint = vi.fn(() => false);
     showHoverRing = vi.fn();
+    toast = vi.fn();
     hideHoverRing = vi.fn();
     key = vi.fn(() => false);
     budget: () => unknown;
@@ -531,7 +532,7 @@ describe("keyboard", () => {
 
     viewer.close(true);
     controller.intent.setCurrent(a);
-    expect(controller.openAdjacentPrepared(1)).toBe(true);
+    expect(controller.openAdjacentPageLink(1)).toBe(true);
     await flush();
     expect(viewer.result!.url).toBe(b.href);
     expect(key("x").defaultPrevented).toBe(false);

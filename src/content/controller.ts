@@ -23,6 +23,9 @@ type NavigationTarget =
 
 const RESUME_MEMORY = 100;
 const BRIEF_CONTINUE_MS = 1000;
+/** Links one N press may scan over the network; the next press carries on from there. */
+const MAX_NAVIGATION_PROBES = 8;
+const NAVIGATION_NOTICE_MS = 300;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -83,7 +86,8 @@ export class PreviewController {
     this.prefetcher = new LinkPrefetcher({
       settingsFor: url => this.settingsForUrl(url),
       pointer: () => this.intent.pointer(),
-      budget: () => this.governor.budget()
+      budget: () => this.governor.budget(),
+      busy: () => Boolean(this.activeScan)
     }, this.warmer);
     this.inspector = new PreloadInspector({
       snapshot: () => this.prefetcher.snapshot(),
@@ -310,7 +314,7 @@ export class PreviewController {
     const settings = this.pageSettings();
     if (!settings.enabled || this.viewer.help || isTypingEvent(event)) return;
     const direction = matchesCombo(event, settings.shortcuts.nextLink) ? 1 : matchesCombo(event, settings.shortcuts.previousLink) ? -1 : 0;
-    if (!direction || !(this.openAdjacentLinked(direction) || this.openAdjacentPrepared(direction))) return;
+    if (!direction || !(this.openAdjacentLinked(direction) || this.openAdjacentPageLink(direction))) return;
     event.preventDefault();
     event.stopPropagation();
   }
@@ -390,17 +394,18 @@ export class PreviewController {
     chrome.runtime.sendMessage({type: "LINKPEEK_CANCEL_SCAN", url: probe.url, token: probe.token}).catch(() => undefined);
   }
 
-  /** Full interactive scan used only to decide whether N should land on a candidate. */
+  /** What a candidate holds: a prepared gallery at once, otherwise a full scan (answered from cache when it was checked before). */
   private async scanForNavigation(url: string, navigationId: number) {
     const prepared = this.prefetcher.cached(url);
-    if (prepared?.items.length) return prepared;
+    if (prepared) return prepared;
     const token = `nav-${Date.now()}-${navigationId}-${Math.random().toString(36).slice(2)}`;
     this.navigationProbe = {url, token};
     let result: ScanResult | undefined;
     try {
       const response = await chrome.runtime.sendMessage({type: "LINKPEEK_SCAN", url, kind: classifyLink(url), token} satisfies ScanRequest) as ScanResponse | undefined;
       if (navigationId === this.linkNavigationId && response && !("cancelled" in response) && !("error" in response)) {
-        if (response.items.length) this.prefetcher.remember(url, response);
+        // Empty answers are remembered too, so the next N skips this link without asking again.
+        this.prefetcher.remember(url, response);
         result = response;
       }
     } catch {
@@ -455,36 +460,53 @@ export class PreviewController {
   ) {
     const navigationId = ++this.linkNavigationId;
     this.cancelNavigationProbe();
-    this.requestId++;
-    if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
-    this.activeScan = undefined;
-    for (const candidate of candidates) {
-      this.linkNavigationCursor = candidate;
-      const result = await this.scanForNavigation(candidate, navigationId);
-      if (navigationId !== this.linkNavigationId) return;
-      if (!result?.items.length) continue;
-      const target = this.resolveNavigationTarget(candidate, result, excluded, direction);
-      if (!target) continue;
+    // The preview on screen keeps loading until a target is actually found.
+    let probes = 0, slow: number | undefined;
+    try {
+      for (const candidate of candidates) {
+        if (this.prefetcher.knownEmpty(candidate)) {
+          this.linkNavigationCursor = candidate;
+          continue;
+        }
+        if (!this.prefetcher.isPrepared(candidate)) {
+          if (probes === MAX_NAVIGATION_PROBES) return this.navigationNotice(`No media in the next ${MAX_NAVIGATION_PROBES} links. Press again to keep looking.`);
+          // Only a search that takes a moment says so; a quick hop shows nothing.
+          if (probes++ === 0) slow = window.setTimeout(() => this.navigationNotice("Looking for the next link with media…"), NAVIGATION_NOTICE_MS);
+        }
+        this.linkNavigationCursor = candidate;
+        const result = await this.scanForNavigation(candidate, navigationId);
+        if (navigationId !== this.linkNavigationId) return;
+        if (!result?.items.length) continue;
+        const target = this.resolveNavigationTarget(candidate, result, excluded, direction);
+        if (!target) continue;
+        this.linkNavigationCursor = undefined;
+        if (target.recursive) {
+          this.linkedSource = target.linkedSource;
+          this.linkedList = target.linkedList;
+          this.linkedExcluded = target.linkedExcluded;
+          this.openOffPage(target.url, true, target.result);
+          if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
+          return;
+        }
+        if (keepExistingList) {
+          this.openOffPage(candidate, true, target.result.complete ? target.result : undefined);
+          const links = this.linkedList!;
+          this.prefetcher.warmAround(links, links.indexOf(candidate));
+          return;
+        }
+        const anchor = pageAnchors!.get(this.normalizeUrl(candidate))!;
+        this.openPageLink(anchor, target.result.complete ? target.result : undefined);
+        return;
+      }
       this.linkNavigationCursor = undefined;
-      if (target.recursive) {
-        this.linkedSource = target.linkedSource;
-        this.linkedList = target.linkedList;
-        this.linkedExcluded = target.linkedExcluded;
-        this.openOffPage(target.url, true, target.result);
-        if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
-        return;
-      }
-      if (keepExistingList) {
-        this.openOffPage(candidate, true, target.result.complete ? target.result : undefined);
-        const links = this.linkedList!;
-        this.prefetcher.warmAround(links, links.indexOf(candidate));
-        return;
-      }
-      const anchor = pageAnchors!.get(this.normalizeUrl(candidate))!;
-      this.openPageLink(anchor, target.result.complete ? target.result : undefined);
-      return;
+      this.navigationNotice("No other links with media");
+    } finally {
+      clearTimeout(slow);
     }
-    this.linkNavigationCursor = undefined;
+  }
+
+  private navigationNotice(message: string) {
+    if (this.viewer.isOpen) this.viewer.toast(message);
   }
 
   /** Steps through a linked page's list, skipping empty/failing links. */
@@ -504,7 +526,7 @@ export class PreviewController {
   }
 
   /** Walks page links in document order and only lands on ones that resolve to media. */
-  openAdjacentPrepared(direction: 1 | -1) {
+  openAdjacentPageLink(direction: 1 | -1) {
     const anchors = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].filter(anchor => this.settingsFor(anchor));
     const byUrl = new Map<string, HTMLAnchorElement>(), urls: string[] = [];
     for (const anchor of anchors) {
@@ -600,6 +622,8 @@ export class PreviewController {
       if (id === this.requestId && this.activeScan?.token === token) this.viewer.error(error instanceof Error ? error.message : String(error));
     } finally {
       if (this.activeScan?.token === token) this.activeScan = undefined;
+      // Whole-page preparation waits while a preview loads; let it carry on.
+      this.prefetcher.schedule();
     }
   }
 }

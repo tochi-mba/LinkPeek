@@ -155,7 +155,7 @@ export const SECTIONS: SectionSpec[] = [
   {
     id: "performance", title: "Performance", summary: "How much LinkPeek prepares before you ask. Auto mode adapts these to your device on its own.",
     fields: [
-      {key: "prefetch", label: "Prepare links before hover", help: "Near the pointer prepares the few closest links; Whole screen prepares more of what you can see.", control: "segmented", options: {off: "Off", nearby: "Near the pointer", visible: "Whole screen"}},
+      {key: "prefetch", label: "Prepare links before hover", help: "Whole page prepares the links nearest the pointer first, then quietly checks the rest of the page whenever the browser is idle, pausing when it is busy. Near the pointer and Whole screen stop at what is close by.", control: "segmented", options: {off: "Off", nearby: "Near the pointer", visible: "Whole screen", page: "Whole page"}},
       {key: "meteredOff", label: "Pause on slow or Data Saver connections", help: "When the browser reports Data Saver or a 2G connection, nothing is prepared ahead."},
       {key: "preloadOriginals", label: "Load full-size originals ahead", help: "Previews use lighter images. Next also downloads the next item's original file.", control: "segmented", options: {never: "Never", next: "Next item"}},
       {key: "maxRequests", label: "Most requests at once", help: "A hard ceiling on simultaneous scans, whatever the mode.", advanced: true},
