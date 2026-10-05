@@ -224,6 +224,75 @@ describe("showing results", () => {
   });
 });
 
+describe("minimum media width runtime checks", () => {
+  it("covers rejection guards, missing items and index adjustment", () => {
+    open({minWidth: 50}).show(result(3));
+    const internal = viewer as unknown as {
+      renderVersion: number;
+      rejectIfTooNarrow: (item: MediaItem, width: number, version: number) => void;
+    };
+    const version = internal.renderVersion;
+    internal.rejectIfTooNarrow(item(0), 0, version);
+    internal.rejectIfTooNarrow(item(0), 50, version);
+    internal.rejectIfTooNarrow(item(0), 45, version - 1);
+    internal.rejectIfTooNarrow(item(9), 45, version);
+    viewer.index = 1;
+    internal.rejectIfTooNarrow(viewer.result!.items[0], 45, version);
+    expect(viewer.index).toBe(0);
+    viewer.close(true);
+    internal.rejectIfTooNarrow(item(1), 45, internal.renderVersion);
+  });
+
+  it("checks video metadata and both immediate and deferred image dimensions", () => {
+    open({minWidth: 50}).show({...result(1), items: [item(0, "video")]});
+    const internal = viewer as unknown as {renderVersion: number; watchActualWidth: (item: MediaItem, version: number) => void};
+    const video = q<HTMLVideoElement>(".lp-video")!;
+    Object.defineProperty(video, "videoWidth", {configurable: true, value: 45});
+    Object.defineProperty(video, "readyState", {configurable: true, value: 1});
+    internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
+    expect(viewer.result!.items).toHaveLength(0);
+
+    open({minWidth: 50}).show(result(1));
+    const image = q<HTMLImageElement>(".lp-image")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 60});
+    Object.defineProperty(image, "complete", {configurable: true, value: true});
+    internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
+    expect(viewer.result!.items).toHaveLength(1);
+
+    open({minWidth: 50}).show({...result(1), items: [item(0, "video")]});
+    const deferred = q<HTMLVideoElement>(".lp-video")!;
+    Object.defineProperty(deferred, "videoWidth", {configurable: true, value: 45});
+    deferred.dispatchEvent(new Event("loadedmetadata"));
+    expect(viewer.result!.items).toHaveLength(0);
+  });
+
+  it("checks GIF intrinsic width and skips runtime checks when disabled or no element exists", () => {
+    const probes: Array<{naturalWidth: number; load?: () => void}> = [];
+    class Probe {
+      naturalWidth = 45;
+      src = "";
+      addEventListener(type: string, callback: () => void) {
+        if (type === "load") this.load = callback;
+      }
+      constructor() {
+        probes.push(this);
+      }
+    }
+    vi.stubGlobal("Image", Probe);
+    open({minWidth: 50}).show({...result(1), items: [item(0, "gif")]});
+    probes.at(-1)!.load!();
+    expect(viewer.result!.items).toHaveLength(0);
+
+    open({minWidth: 0}).show(result(1));
+    const internal = viewer as unknown as {renderVersion: number; watchActualWidth: (item: MediaItem, version: number) => void};
+    internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
+    q(".lp-image")!.remove();
+    open({minWidth: 50});
+    internal.watchActualWidth(item(0), internal.renderVersion);
+    internal.watchActualWidth(item(0, "video"), internal.renderVersion);
+  });
+});
+
 describe("errors", () => {
   it("replace an empty panel, but only toast over a gallery already shown", () => {
     open();
