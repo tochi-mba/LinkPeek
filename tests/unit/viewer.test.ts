@@ -142,8 +142,8 @@ describe("showing results", () => {
     expect(q("[data-action=favorite]")!.textContent).toBe("★");
   });
 
-  it("removes media whose decoded width is below the configured minimum", () => {
-    open({minWidth: 50}).show(result(2));
+  it("removes media whose decoded original width is below the configured minimum", () => {
+    open({minWidth: 50}).show({...result(2), items: [item(0, "image", {previewUrl: "https://x.test/o0"}), item(1, "image", {previewUrl: "https://x.test/o1"})]});
     const image = q<HTMLImageElement>(".lp-image")!;
     Object.defineProperty(image, "naturalWidth", {configurable: true, value: 45});
     image.dispatchEvent(new Event("load"));
@@ -252,7 +252,7 @@ describe("minimum media width runtime checks", () => {
     internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
     expect(viewer.result!.items).toHaveLength(0);
 
-    open({minWidth: 50}).show(result(1));
+    open({minWidth: 50}).show({...result(1), items: [item(0, "image", {previewUrl: "https://x.test/o0"})]});
     const image = q<HTMLImageElement>(".lp-image")!;
     Object.defineProperty(image, "naturalWidth", {configurable: true, value: 60});
     Object.defineProperty(image, "complete", {configurable: true, value: true});
@@ -263,6 +263,38 @@ describe("minimum media width runtime checks", () => {
     const deferred = q<HTMLVideoElement>(".lp-video")!;
     Object.defineProperty(deferred, "videoWidth", {configurable: true, value: 45});
     deferred.dispatchEvent(new Event("loadedmetadata"));
+    expect(viewer.result!.items).toHaveLength(0);
+  });
+
+  it("never mistakes a small thumbnail for a small original", () => {
+    const probes: Array<{src: string; naturalWidth: number; load?: () => void}> = [];
+    class Probe {
+      naturalWidth = 800;
+      src = "";
+      load?: () => void;
+      addEventListener(type: string, callback: () => void) {
+        if (type === "load") this.load = callback;
+      }
+      constructor() {
+        probes.push(this);
+      }
+    }
+    vi.stubGlobal("Image", Probe);
+    open({minWidth: 200}).show({...result(1), items: [item(0, "image", {
+      originalUrl: "https://x.test/full.jpg", previewUrl: "https://x.test/thumb-45.jpg"
+    })]});
+    const visible = q<HTMLImageElement>(".lp-image")!;
+    Object.defineProperty(visible, "naturalWidth", {configurable: true, value: 45});
+    visible.dispatchEvent(new Event("load"));
+    expect(viewer.result!.items).toHaveLength(1);
+    expect(probes.at(-1)!.src).toBe("https://x.test/full.jpg");
+    probes.at(-1)!.load!();
+    expect(viewer.result!.items).toHaveLength(1);
+
+    probes.at(-1)!.naturalWidth = 45;
+    const internal = viewer as unknown as {renderVersion: number; watchActualWidth: (item: MediaItem, version: number) => void};
+    internal.watchActualWidth(viewer.result!.items[0], internal.renderVersion);
+    probes.at(-1)!.load!();
     expect(viewer.result!.items).toHaveLength(0);
   });
 
@@ -487,8 +519,8 @@ describe("moving through media", () => {
 });
 
 describe("the grid", () => {
-  it("removes undersized images discovered while viewing the grid", () => {
-    open({defaultView: "grid", minWidth: 50}).show(result(2));
+  it("removes undersized originals discovered while viewing the grid", () => {
+    open({defaultView: "grid", minWidth: 50}).show({...result(2), items: [item(0, "image", {previewUrl: "https://x.test/o0"}), item(1, "image", {previewUrl: "https://x.test/o1"})]});
     const image = q<HTMLImageElement>(".lp-thumb[data-i='0'] img")!;
     Object.defineProperty(image, "naturalWidth", {configurable: true, value: 45});
     image.dispatchEvent(new Event("load"));
