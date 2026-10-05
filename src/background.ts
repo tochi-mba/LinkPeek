@@ -8,6 +8,7 @@
 import {ByteCache} from "./background/byte-cache";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
+import {fetchWithRetry} from "./core/http";
 import type {LinkKind, ScanResult} from "./shared/media";
 import type {BackgroundRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
@@ -77,7 +78,7 @@ function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
     const parsed = new URL(url);
     if (!/^https?:$/.test(parsed.protocol)) throw new Error("Unsupported media URL");
     const maxBytes = Math.max(1, Math.min(100, maxMb)) * 1024 * 1024, tooLarge = "GIF is larger than the configured frame-control limit";
-    const response = await fetch(parsed.href, {credentials: "include", redirect: "follow"});
+    const response = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, "interactive");
     if (!response.ok) throw new Error(`HTTP ${response.status} for media`);
     if (Number(response.headers.get("content-length") || 0) > maxBytes) throw new Error(tooLarge);
     const buffer = await response.arrayBuffer();
@@ -155,7 +156,7 @@ async function prefetch(url: string, kind: LinkKind, settings: LinkPeekSettings,
       cacheScan(url, result, settings, seed);
       return result;
     })
-    : scanGeneric(url, settings, undefined, deep).then(result => {
+    : scanGeneric(url, settings, undefined, deep, "background").then(result => {
       // An empty shallow result is not final while a linked-page search could still find media.
       const final = deep || settings.recursiveSearch === "off" || (result.items.length > 0 && settings.recursiveTrigger !== "always");
       if (final) cacheScan(url, result, settings);
