@@ -13,6 +13,12 @@ function link(name: string) {
   document.body.append(a);
   return a;
 }
+function place(a: HTMLAnchorElement, left = 20, top = 20, width = 80, height = 20, clientRect = true) {
+  const rect = () => ({left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => ({})}) as DOMRect;
+  a.getBoundingClientRect = rect;
+  a.getClientRects = (() => clientRect ? [rect()] : []) as unknown as typeof a.getClientRects;
+  return a;
+}
 const panel = (inspector: PreloadInspector) => inspector.host.shadowRoot!;
 const q = <T extends Element = HTMLElement>(inspector: PreloadInspector, selector: string) => panel(inspector).querySelector<T>(selector);
 const notify = () => listeners.forEach(listener => listener());
@@ -58,40 +64,75 @@ describe("the preload inspector", () => {
     expect(q(inspector, '[data-group="loading"] .pi-state')!.textContent).toBe("loading · maximum");
   });
 
-  it("shows a play badge only for links known to contain GIFs", () => {
-    const gif = link("gif"), still = link("still");
-    entries = [entry("gif", "prepared", {hasGif: true}), entry("still", "prepared")];
+  it("shows shadow-root play badges only beside visible links known to contain GIFs", () => {
+    place(link("gif"));
+    place(link("fallback"), 120, 30, 60, 18, false);
+    place(link("still"), 220, 40);
+    entries = [
+      entry("gif", "prepared", {hasGif: true}),
+      entry("fallback", "prepared", {hasGif: true}),
+      entry("still", "prepared")
+    ];
     const inspector = new PreloadInspector(source);
     inspector.open();
-    expect(gif.dataset.linkpeekPreloadGif).toBe("true");
-    expect(still.dataset.linkpeekPreloadGif).toBeUndefined();
-    expect(panel(inspector).querySelectorAll(".pi-gif")).toHaveLength(1);
-    expect(q(inspector, ".pi-gif")!.getAttribute("title")).toBe("Contains GIF");
+    expect(panel(inspector).querySelectorAll(".pi-page-gif")).toHaveLength(2);
+    expect(panel(inspector).querySelectorAll(".pi-gif")).toHaveLength(2);
+    expect(q(inspector, ".pi-page-gif")!.getAttribute("title")).toBe("Contains GIF");
+    expect(q<HTMLElement>(inspector, ".pi-page-gif")!.style.left).toBe("108px");
     inspector.close();
-    expect(gif.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(inspector.isOpen).toBe(false);
   });
 
-  it("adds the GIF icon live even when the preload state itself did not change", () => {
-    const a = link("live");
+  it("adds and removes the GIF icon live even when the preload state itself did not change", () => {
+    place(link("live"));
     entries = [entry("live", "prepared")];
     const inspector = new PreloadInspector(source);
     inspector.open();
-    expect(a.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(q(inspector, ".pi-page-gif")).toBeNull();
     expect(q(inspector, ".pi-gif")).toBeNull();
 
     entries = [entry("live", "prepared", {hasGif: true})];
     notify();
     vi.advanceTimersByTime(200);
     frames.shift()!();
-    expect(a.dataset.linkpeekPreloadGif).toBe("true");
+    expect(q(inspector, ".pi-page-gif")).not.toBeNull();
     expect(q(inspector, ".pi-gif")).not.toBeNull();
 
     entries = [entry("live", "prepared")];
     notify();
     vi.advanceTimersByTime(200);
     frames.shift()!();
-    expect(a.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(q(inspector, ".pi-page-gif")).toBeNull();
     expect(q(inspector, ".pi-gif")).toBeNull();
+  });
+
+  it("repositions GIF badges on viewport changes and skips offscreen or zero-size links", () => {
+    let left = 10;
+    const moving = link("moving");
+    const movingRect = () => ({left, top: 20, right: left + 40, bottom: 40, width: 40, height: 20, x: left, y: 20, toJSON: () => ({})}) as DOMRect;
+    moving.getClientRects = (() => [movingRect()]) as unknown as typeof moving.getClientRects;
+    moving.getBoundingClientRect = movingRect;
+    place(link("zero"), 0, 0, 0, 0);
+    place(link("above"), 0, -40, 20, 10);
+    place(link("below"), 0, innerHeight + 10, 20, 10);
+    place(link("left"), -40, 0, 20, 10);
+    place(link("right"), innerWidth + 10, 0, 20, 10);
+    entries = ["moving", "zero", "above", "below", "left", "right"].map(name => entry(name, "prepared", {hasGif: true}));
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    expect(panel(inspector).querySelectorAll(".pi-page-gif")).toHaveLength(1);
+    expect(q<HTMLElement>(inspector, ".pi-page-gif")!.style.left).toBe("58px");
+
+    left = 100;
+    window.dispatchEvent(new Event("scroll"));
+    window.dispatchEvent(new Event("resize"));
+    expect(frames).toHaveLength(1);
+    frames.shift()!();
+    expect(q<HTMLElement>(inspector, ".pi-page-gif")!.style.left).toBe("148px");
+
+    inspector.close();
+    window.dispatchEvent(new Event("scroll"));
+    expect(frames).toHaveLength(0);
   });
 
   it("keeps closed accordion groups as counts only, caps long groups and shows empty ones", () => {
