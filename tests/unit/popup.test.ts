@@ -73,6 +73,25 @@ describe("the popup", () => {
     expect($("#inspector").hidden).toBe(true);
   });
 
+  it("starts the shuffle on the page and closes, when the shuffle is on and the page can run it", async () => {
+    await open();
+    const button = $<HTMLButtonElement>("#shuffle"), close = vi.spyOn(window, "close").mockImplementation(() => undefined);
+    expect(button.hidden).toBe(false);
+    harness.chrome.tabs.sendMessage.mockRejectedValueOnce(new Error("gone"));
+    button.click();
+    await settle();
+    expect(close).not.toHaveBeenCalled();
+    harness.chrome.tabs.sendMessage.mockResolvedValueOnce({started: true});
+    button.click();
+    await settle();
+    expect(harness.chrome.tabs.sendMessage).toHaveBeenLastCalledWith(7, {type: "LINKPEEK_START_SHUFFLE"});
+    expect(close).toHaveBeenCalled();
+    for (const options of [{settings: {shuffleSlideshow: false}}, {status: "unreachable" as const}, {status: status({enabled: false})}]) {
+      await open(options);
+      expect($("#shuffle").hidden).toBe(true);
+    }
+  });
+
   it("turns LinkPeek on and off", async () => {
     await open();
     const toggle = $<HTMLInputElement>("#enabled");

@@ -22,6 +22,8 @@ export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: 
 export type StatusRequest = {type: "LINKPEEK_STATUS"};
 /** Sent by the popup to show or hide the preload inspector on the active tab. */
 export type ToggleInspectorRequest = {type: "LINKPEEK_TOGGLE_INSPECTOR"};
+/** From the toolbar popup: start the shuffle slideshow on this page. */
+export type StartShuffleRequest = {type: "LINKPEEK_START_SHUFFLE"};
 
 export type ScanResponse = ScanResult | {error: string} | {cancelled: true};
 export type BinaryResponse = {base64: string; mime: string; bytes: number} | {error: string};
