@@ -85,7 +85,7 @@ async function oneAttempt(url: string, init: RequestInit, timeoutMs: number) {
 export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: RetryMode = "interactive", attemptTimeoutMs?: number) {
   const plan = PLANS[mode], started = Date.now(), timeout = Math.max(500, attemptTimeoutMs ?? plan.attemptTimeoutMs);
   let lastError: unknown;
-  for (let attempt = 0; attempt < plan.attempts; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     let response: Response | undefined;
     try {
       response = await oneAttempt(url, init, timeout);
@@ -93,11 +93,11 @@ export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: 
       if (init.signal?.aborted) throw aborted();
       lastError = error;
       // A per-attempt timeout is retryable; an explicit caller abort is not.
-      if (attempt === plan.attempts - 1) throw error;
+      if (attempt >= plan.attempts - 1) throw error;
     }
     if (response) {
       if (response.ok || !TRANSIENT.has(response.status)) return response;
-      if (attempt === plan.attempts - 1) return response;
+      if (attempt >= plan.attempts - 1) return response;
       void response.body?.cancel().catch(() => undefined);
     }
     const delay = retryDelayMs(response, attempt, mode);
@@ -107,6 +107,4 @@ export async function fetchWithRetry(url: string, init: RequestInit = {}, mode: 
     }
     await sleep(delay, init.signal);
   }
-  if (lastError) throw lastError;
-  throw new Error("Request retry window exhausted");
 }
