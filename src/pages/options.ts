@@ -2,7 +2,7 @@ import {DEFAULT_SETTINGS,PRESETS,loadSettings,saveSettings,type LinkPeekSettings
 type Primitive=string|number|boolean;
 const categories=[
   ["General",["enabled","activationMode","defaultView","preset","onboardingComplete","showLearningTips"]],
-  ["Hover & Activation",["hoverDelay","closeDelay","intentDetection","slowdownDetection","requirePointerStop","cancelMovePx","magneticBridge","magneticBridgeStrength"]],
+  ["Hover & Activation",["activationKeywords","hoverDelay","closeDelay","intentDetection","slowdownDetection","requirePointerStop","cancelMovePx","magneticBridge","magneticBridgeStrength"]],
   ["Panel",["panelSize","panelWidth","panelMaxVh","focusHeightVh","expandedWidthVw","expandedHeightVh","startExpanded","quickViewControls","draggablePanel","resizablePanel","rememberPanelGeometry","placement","pointerGap","autoExpand","panelOpacity","inactiveOpacity","animationMs"]],
   ["Gallery",["navAxis","snap","loopMode","showCounter","showPostCounter","showFilename","showAuthor","showDimensions","groupByPost","sort","startAt"]],
   ["Gestures",["verticalGesture","horizontalGesture","pinchZoom","doubleClick","navSensitivity","gestureThreshold","momentumFiltering","gestureCooldown","fastSwipeAcceleration","maxImagesPerSwipe","reverseVertical","reverseHorizontal","deliberateGesture","ignoreTinyMotion"]],
@@ -29,6 +29,7 @@ const choices:Record<string,string[]>={
 };
 const descriptions:Record<string,string>={
   hoverDelay:"Milliseconds before a hover becomes an intentional preview.",
+  activationKeywords:"Optional comma- or line-separated words/phrases. When set, LinkPeek only activates for destination URLs containing at least one entry (case-insensitive). Leave empty to allow every supported link.",
   prefetch:"Warm likely links before you hover them. Nearby is the recommended balance.",
   prefetchRadius:"How far around the current viewport LinkPeek considers links for prefetching.",
   idlePrefetch:"Only prefetch when the page/browser has spare time.",
@@ -89,6 +90,7 @@ function same(a:unknown,b:unknown){return JSON.stringify(a)===JSON.stringify(b)}
 function categoryModified(keys:readonly string[]){return keys.some(k=>!same((state as any)[k],(DEFAULT_SETTINGS as any)[k]))}
 function choiceLabel(key:string,value:string){return choiceLabels[key]?.[value]??title(value)}
 function control(key:string,value:any){
+  if(key==="activationKeywords")return `<textarea class="json" data-key="${key}" data-format="keywords" placeholder="gallery, photos, /media/">${escapeHtml((value as string[]).join("\n"))}</textarea>`;
   if(typeof value==="boolean")return `<label class="switch"><input type="checkbox" data-key="${key}" ${value?"checked":""}><span class="switch-track"><span class="switch-thumb"></span></span></label>`;
   if(choices[key]){
     if(segmentedKeys.has(key))return `<div class="segmented" role="radiogroup" aria-label="${title(key)}">${choices[key].map(x=>`<button type="button" class="segment ${x===value?"active":""}" data-choice-key="${key}" data-choice-value="${x}" aria-pressed="${x===value}">${choiceLabel(key,x)}</button>`).join("")}</div>`;
@@ -131,6 +133,7 @@ function bind(){
     if(el instanceof HTMLInputElement&&el.type==="checkbox")v=el.checked;
     else if(el instanceof HTMLInputElement&&el.type==="number")v=Number(el.value);
     else if(el instanceof HTMLInputElement&&el.type==="range")v=Number(el.value);
+    else if(el instanceof HTMLTextAreaElement&&el.dataset.format==="keywords")v=el.value.split(/[\n,]+/).map(x=>x.trim()).filter(Boolean);
     else if(el instanceof HTMLTextAreaElement){try{v=JSON.parse(el.value)}catch{el.style.borderColor="var(--live)";return}}
     else v=(el as HTMLInputElement|HTMLSelectElement).value;
     (state as any)[key]=v;if(key!=="preset")state.preset="custom";el.closest(".field")?.querySelector<HTMLElement>("[data-reset]")?.toggleAttribute("hidden",same(v,(DEFAULT_SETTINGS as any)[key]));await persist();

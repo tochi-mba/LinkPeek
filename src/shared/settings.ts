@@ -4,7 +4,7 @@ export type NavAxis="vertical"|"horizontal";
 export type ThemeMode="rex"|"system"|"custom";
 
 export interface LinkPeekSettings{
-  enabled:boolean; activationMode:ActivationMode; hoverDelay:number; closeDelay:number;
+  enabled:boolean; activationMode:ActivationMode; activationKeywords:string[]; hoverDelay:number; closeDelay:number;
   intentDetection:boolean; slowdownDetection:boolean; requirePointerStop:boolean; cancelMovePx:number;
   magneticBridge:boolean; magneticBridgeStrength:number; panelSize:"tiny"|"small"|"medium"|"large"|"custom";
   panelWidth:number; panelMaxVh:number; focusHeightVh:number; expandedWidthVw:number; expandedHeightVh:number; startExpanded:boolean; quickViewControls:boolean; draggablePanel:boolean; resizablePanel:boolean; rememberPanelGeometry:boolean; placement:"auto"|"right"|"left"|"above"|"below"; pointerGap:number;
@@ -46,7 +46,7 @@ export interface LinkPeekSettings{
   preset:"balanced"|"minimal"|"fast"|"touchpad"|"manual"|"custom";
 }
 export const DEFAULT_SETTINGS:LinkPeekSettings={
-  enabled:true,activationMode:"hover",hoverDelay:300,closeDelay:180,intentDetection:true,slowdownDetection:true,requirePointerStop:false,cancelMovePx:18,
+  enabled:true,activationMode:"hover",activationKeywords:[],hoverDelay:300,closeDelay:180,intentDetection:true,slowdownDetection:true,requirePointerStop:false,cancelMovePx:18,
   magneticBridge:true,magneticBridgeStrength:0.7,panelSize:"medium",panelWidth:480,panelMaxVh:70,focusHeightVh:54,expandedWidthVw:92,expandedHeightVh:92,startExpanded:false,quickViewControls:true,draggablePanel:true,resizablePanel:true,rememberPanelGeometry:true,placement:"auto",pointerGap:12,autoExpand:true,panelOpacity:1,inactiveOpacity:.9,animationMs:180,
   defaultView:"focus",navAxis:"vertical",snap:true,loopMode:"wrap",showCounter:true,showPostCounter:true,showFilename:false,showAuthor:true,showDimensions:false,groupByPost:true,sort:"thread",startAt:"linked",
   verticalGesture:"navigate",horizontalGesture:"scrub",pinchZoom:true,doubleClick:"zoom",navSensitivity:.55,gestureThreshold:62,momentumFiltering:true,gestureCooldown:140,fastSwipeAcceleration:true,maxImagesPerSwipe:3,
@@ -83,4 +83,9 @@ export function effectiveSettings(settings:LinkPeekSettings,url:string){
   const host=new URL(url).hostname;
   const override=settings.siteProfiles[host]??Object.entries(settings.siteProfiles).find(([k])=>k.startsWith("*.")&&host.endsWith(k.slice(1)))?.[1];
   return override?({...settings,...override} as LinkPeekSettings):settings;
+}
+export function linkMatchesKeywords(settings:Pick<LinkPeekSettings,"activationKeywords">,url:string){
+  const keywords=(Array.isArray(settings.activationKeywords)?settings.activationKeywords:[]).map(x=>String(x).trim().toLowerCase()).filter(Boolean);if(!keywords.length)return true;
+  let target=url.toLowerCase();try{target=decodeURIComponent(url).toLowerCase()}catch{}
+  return keywords.some(keyword=>target.includes(keyword));
 }

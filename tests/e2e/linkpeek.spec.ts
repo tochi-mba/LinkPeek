@@ -218,9 +218,10 @@ test("onboarding and settings render and persist GIF customization",async()=>{
     const batch=page.locator('[data-key="batchSize"]');await expect(batch).toHaveValue("50");await page.locator('[data-step-key="batchSize"][data-step-dir="1"]').click();await expect(batch).toHaveValue("60");
     await page.getByRole("button",{name:"Hover & Activation",exact:true}).click();
     const delay=page.locator('[data-key="hoverDelay"]');await delay.fill("75");await delay.press("Tab");
+    const keywords=page.locator('textarea[data-key="activationKeywords"]');await keywords.fill("gallery, /album/");await keywords.press("Tab");
     await page.getByRole("button",{name:"Media Types",exact:true}).click();
     const maxGif=page.locator('[data-key="gifDecodeMaxMb"]');await maxGif.fill("24");await maxGif.press("Tab");
-    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
+    await page.reload();await expect(page.locator('[data-key="hoverDelay"]')).toHaveValue("75");await expect(page.locator('textarea[data-key="activationKeywords"]')).toHaveValue("gallery\n/album/");await expect(page.locator('[data-key="gifDecodeMaxMb"]')).toHaveValue("24");await expect(page.locator('[data-key="batchSize"]')).toHaveValue("60");await expect(page.locator('[data-choice-key="prefetch"].active')).toHaveText("Off");
     await page.goto(`chrome-extension://${id}/popup.html`);await expect(page.getByText("LinkPeek",{exact:true})).toBeVisible();
   }finally{await closeExtension(context,profile)}
 });

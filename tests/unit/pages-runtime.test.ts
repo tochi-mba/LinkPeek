@@ -63,6 +63,7 @@ describe("page entrypoints",()=>{
     const zeroStep=document.querySelector<HTMLElement>('[data-step-key="maxZoom"][data-step-dir="1"]')!;zeroStep.dataset.stepDir="";zeroStep.click();await tick();
     const json=document.querySelector<HTMLTextAreaElement>('textarea[data-key="shortcuts"]')!;json.value="{";json.dispatchEvent(new Event("change"));expect(json.style.borderColor).not.toBe("");
     json.value='{"grid":["z"]}';json.dispatchEvent(new Event("change"));await tick();
+    const keywords=document.querySelector<HTMLTextAreaElement>('textarea[data-key="activationKeywords"]')!;expect(keywords.placeholder).toContain("gallery");keywords.value="gallery, photo album\n/media/";keywords.dispatchEvent(new Event("change"));await tick();expect(store.settings.activationKeywords).toEqual(["gallery","photo album","/media/"]);
     const text=document.querySelector<HTMLInputElement>('input[type="text"][data-key="customAccent"]')!;text.value="#fff";text.dispatchEvent(new Event("change"));await tick();
     document.querySelector<HTMLElement>('[data-reset="hoverDelay"]')!.click();await tick();
     document.querySelector<HTMLElement>('[data-reset-section="General"]')!.click();await tick();

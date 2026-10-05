@@ -18,8 +18,8 @@ vi.mock("../../src/ui/viewer",()=>({
 }));
 
 const scan=(url:string):ScanResult=>({url,kind:"generic",title:"x",items:[],complete:true,diagnostics:{adapter:"x",ignored:0,duplicates:0,warnings:[]}});
-const warmSources:string[]=[];
-class WarmImage{decoding="";fetchPriority="";private value="";private listeners:Record<string,Array<()=>void>>={};addEventListener(type:string,cb:()=>void){(this.listeners[type]??=[]).push(cb)}set src(v:string){this.value=v;warmSources.push(v);this.listeners.load?.forEach(cb=>cb())}get src(){return this.value}}
+const warmSources:string[]=[];let autoFinishWarm=true;
+class WarmImage{decoding="";fetchPriority="";private value="";private listeners:Record<string,Array<()=>void>>={};addEventListener(type:string,cb:()=>void){(this.listeners[type]??=[]).push(cb)}set src(v:string){this.value=v;warmSources.push(v);if(autoFinishWarm)this.listeners.load?.forEach(cb=>cb())}get src(){return this.value}}
 
 describe("content script runtime",()=>{
   let store:any,changed:Function[],runtimeListeners:Function[],mutationCallbacks:MutationCallback[],messages:any[],idleCb:Function|undefined,viewer:any,docListeners:Array<{type:string;listener:EventListenerOrEventListenerObject;options:any}>;
@@ -31,7 +31,7 @@ describe("content script runtime",()=>{
     Object.defineProperty(document,"hidden",{configurable:true,value:false});delete (navigator as Navigator&{connection?:unknown}).connection;
     store={settings:{...DEFAULT_SETTINGS,hoverDelay:20,closeDelay:10,prefetch:"nearby"},viewerState:{view:"grid",gridThumbSize:90,expanded:false}};
     settingsHarness.current=store.settings;
-    changed=[];runtimeListeners=[];mutationCallbacks=[];messages=[];warmSources.length=0;idleCb=undefined;docListeners=[];
+    changed=[];runtimeListeners=[];mutationCallbacks=[];messages=[];warmSources.length=0;autoFinishWarm=true;idleCb=undefined;docListeners=[];
     vi.stubGlobal("MutationObserver",class{constructor(cb:MutationCallback){mutationCallbacks.push(cb)}observe(){}disconnect(){}takeRecords(){return []}});
     const add=document.addEventListener.bind(document);
     vi.spyOn(document,"addEventListener").mockImplementation(((type:string,listener:EventListenerOrEventListenerObject,options?:boolean|AddEventListenerOptions)=>{
@@ -127,6 +127,20 @@ describe("content script runtime",()=>{
       const a=link(name,url);pointer("pointerover",a);vi.advanceTimersByTime(30);await tick();
     }
     const before=messages.filter(x=>x.type==="LINKPEEK_SCAN").length;await update({enabled:false});const x=link("disabled","https://x.test/disabled");pointer("pointerover",x);vi.advanceTimersByTime(30);await tick();expect(messages.filter(x=>x.type==="LINKPEEK_SCAN").length).toBe(before);
+  });
+
+  it("limits hover, click and visible prefetch to matching destination keywords",async()=>{
+    await update({enabled:true,activationKeywords:["gallery","photo album"],activationMode:"hover"});
+    const blocked=link("blocked-keyword","https://x.test/topic/1");pointer("pointerover",blocked);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.url===blocked.href)).toBe(false);
+    const allowed=link("allowed-keyword","https://x.test/GALLERY/1");pointer("pointerover",allowed);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===allowed.href)).toBe(true);
+    await update({activationKeywords:["different"]});pointer("pointermove",allowed);vi.advanceTimersByTime(30);await tick();
+
+    await update({activationKeywords:["gallery"]});const recycled=link("keyword-recycled","https://x.test/gallery/old");pointer("pointerover",recycled);recycled.href="https://x.test/topic/new";pointer("pointermove",recycled);vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.url===recycled.href)).toBe(false);
+
+    await update({activationMode:"click",activationKeywords:["gallery"]});const clickBlocked=link("click-blocked","https://x.test/topic/2");let preventedByExtension=true;clickBlocked.addEventListener("click",e=>{preventedByExtension=e.defaultPrevented;e.preventDefault()});const event=new MouseEvent("click",{bubbles:true,cancelable:true});clickBlocked.dispatchEvent(event);expect(preventedByExtension).toBe(false);
+    const before=messages.length;idleCb!({didTimeout:true,timeRemaining:()=>20});await tick();expect(messages.slice(before).some(x=>x.url===blocked.href)).toBe(false);
+
+    await update({activationMode:"hover",activationKeywords:["late-match"]});const late=link("late-match","https://x.test/late-match");pointer("pointerover",late);await update({activationKeywords:["now-excluded"]});vi.advanceTimersByTime(30);await tick();expect(messages.some(x=>x.type==="LINKPEEK_SCAN"&&x.url===late.href)).toBe(false);
   });
 
   it("handles progressive messages, cancelled/error/throwing scans and stale responses",async()=>{
@@ -303,6 +317,13 @@ describe("content script runtime",()=>{
     await update({recursiveSearch:"off"});sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?shallow(msg.url):{ok:true};pointer("pointerover",a);await tick();
     await update({recursiveSearch:"same-origin"});sendImpl=async msg=>{if(msg.type==="LINKPEEK_PREFETCH")throw new Error("deep failed");return {ok:true}};pointer("pointerover",a);vi.advanceTimersByTime(8);await tick();pointer("pointerover",a);vi.advanceTimersByTime(8);await tick();
     expect(messages.filter(x=>x.type==="LINKPEEK_PREFETCH"&&x.url===a.href&&x.deep)).toHaveLength(2);
+  });
+
+  it("caps queued speculative images while slow image requests are active",async()=>{
+    const media=(url:string):ScanResult=>({...scan(url),items:Array.from({length:140},(_,i)=>({id:`${url}-${i}`,type:"image",originalUrl:`${url}/${i}.jpg`,previewUrl:`${url}/${i}.jpg`,sourceUrl:url,score:1}))});
+    autoFinishWarm=false;sendImpl=async msg=>msg.type==="LINKPEEK_PREFETCH"?media(msg.url):{ok:true};
+    for(let i=0;i<3;i++){const a=link(`slow-warm-${i}`,`https://slow-warm-${i}.test/page`);pointer("pointerover",a);vi.advanceTimersByTime(8);await tick()}
+    expect(warmSources).toHaveLength(3);
   });
 });
 

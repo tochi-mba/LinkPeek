@@ -1,5 +1,5 @@
 import {classifyLink,type ScanResult} from "./shared/media";
-import {effectiveSettings,loadSettings,type LinkPeekSettings} from "./shared/settings";
+import {effectiveSettings,linkMatchesKeywords,loadSettings,type LinkPeekSettings} from "./shared/settings";
 import {Viewer} from "./ui/viewer";
 
 type ActiveScan={url:string;token:string;settings:LinkPeekSettings};
@@ -23,7 +23,7 @@ async function boot(){
   document.addEventListener("visibilitychange",()=>{if(!document.hidden){schedulePrefetch();scheduleIdleWarm()}},true);
   new MutationObserver(()=>{if(!settings.mutationObserver)return;schedulePrefetch();if(settings.activationMode==="click")return;const target=document.elementFromPoint?.(lastPointerX,lastPointerY),a=target?.closest?.("a[href]") as HTMLAnchorElement|null;if(a)considerAnchor(a,lastPointerX,lastPointerY,lastAltKey)}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["href"]});
   document.addEventListener("keydown",e=>{if(viewer.key(e)){e.preventDefault();e.stopPropagation()}},true);
-  document.addEventListener("click",e=>{if(settings.activationMode!=="click")return;const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a)return;e.preventDefault();activate(a,e.clientX,e.clientY)},true);
+  document.addEventListener("click",e=>{if(settings.activationMode!=="click")return;const a=(e.target as Element).closest?.("a[href]") as HTMLAnchorElement|null;if(!a)return;const eff=effectiveSettings(settings,a.href);if(!eff.enabled||!linkMatchesKeywords(eff,a.href))return;e.preventDefault();activate(a,e.clientX,e.clientY)},true);
   viewer.onDismiss=()=>{requestId++;if(activeScan)detachOrCancel(activeScan,"out");openAnchor=null;openAnchorUrl=null;currentAnchor=null;currentAnchorUrl=null;clear()};
   if(settings.prefetch!=="off")runPrefetch(1200);
 }
@@ -41,7 +41,7 @@ function detachOrCancel(scan:ActiveScan,reason:"switch"|"out"){
   cancelScan(scan);
 }
 function armHover(a:HTMLAnchorElement,x:number,y:number,delay?:number){
-  const url=a.href,eff=effectiveSettings(settings,url);if(!eff.enabled)return;const kind=classifyLink(url);if(["anchor","download","ignored"].includes(kind))return;
+  const url=a.href,eff=effectiveSettings(settings,url),kind=classifyLink(url);if(["anchor","download","ignored"].includes(kind))return;
   clear();startX=x;startY=y;hoverTimer=window.setTimeout(()=>{hoverTimer=undefined;if(currentAnchor===a&&currentAnchorUrl===url)activate(a,lastPointerX,lastPointerY)},delay??eff.hoverDelay);
 }
 function onOver(e:PointerEvent){
@@ -51,6 +51,7 @@ function onOver(e:PointerEvent){
   considerAnchor(a,e.clientX,e.clientY,e.altKey);
 }
 function considerAnchor(a:HTMLAnchorElement,x:number,y:number,altKey:boolean){
+  const eff=effectiveSettings(settings,a.href);if(!eff.enabled||!linkMatchesKeywords(eff,a.href)){if(currentAnchor===a){clear();currentAnchor=null;currentAnchorUrl=null}return}
   void prefetchAnchor(a);
   if(viewer.pinned&&viewer.isOpen)return;
   if(a===openAnchor&&a.href===openAnchorUrl)return;
@@ -91,7 +92,7 @@ function onOut(e:PointerEvent){
 function clear(){clearTimeout(hoverTimer);clearTimeout(hoverRearmTimer);clearTimeout(deepPrefetchTimer);hoverTimer=undefined;hoverRearmTimer=undefined;deepPrefetchTimer=undefined}
 async function activate(a:HTMLAnchorElement,x:number,y:number){
   clear();if(openAnchor===a&&a.href===openAnchorUrl)return;if(activeScan)detachOrCancel(activeScan,"switch");
-  const id=++requestId,eff=effectiveSettings(settings,a.href),kind=classifyLink(a.href),token=`${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
+  const eff=effectiveSettings(settings,a.href);if(!eff.enabled||!linkMatchesKeywords(eff,a.href))return;const id=++requestId,kind=classifyLink(a.href),token=`${Date.now()}-${id}-${Math.random().toString(36).slice(2)}`;
   const scan={url:a.href,token,settings:eff};activeScan=scan;openAnchor=a;openAnchorUrl=a.href;
   viewer.openLoading(x,y,eff,a.textContent?.trim().slice(0,80)||"Scanning link…");
   try{
@@ -111,6 +112,7 @@ function constrainedConnection(eff:LinkPeekSettings){
 }
 function addWarmTask(url:string,priority:number,target:WarmTask[]){
   if(!url||warmedPreviews.has(url))return;
+  if(target===warmIdleQueue&&target.length>=120){const dropped=target.shift()!;warmedPreviews.delete(dropped.url)}
   const img=new Image();warmedPreviews.set(url,img);target.push({url,img,priority});
 }
 function scheduleIdleWarm(){
@@ -156,7 +158,7 @@ async function withPrefetchSlot<T>(work:()=>Promise<T>){
 }
 async function prefetchAnchor(a:HTMLAnchorElement,deep=false){
   const eff=effectiveSettings(settings,a.href),level=deep&&eff.recursiveSearch!=="off"?"deep":"shallow",previous=prefetched.get(a.href);
-  if(!eff.enabled||eff.prefetch==="off"||document.hidden||constrainedConnection(eff)||previous==="deep"||(!deep&&previous))return;
+  if(!eff.enabled||!linkMatchesKeywords(eff,a.href)||eff.prefetch==="off"||document.hidden||constrainedConnection(eff)||previous==="deep"||(!deep&&previous))return;
   const kind=classifyLink(a.href);if(!["discourse","direct-image","generic"].includes(kind))return;
   prefetched.set(a.href,level);
   try{
@@ -167,7 +169,7 @@ async function prefetchAnchor(a:HTMLAnchorElement,deep=false){
 function prefetchVisible(){
   if(!settings.enabled||settings.prefetch==="off")return;
   const candidates=[...document.querySelectorAll<HTMLAnchorElement>("a[href]")].map(a=>{
-    const r=a.getBoundingClientRect(),kind=classifyLink(a.href),radius=Math.max(0,settings.prefetchRadius)*innerHeight;if(!["discourse","direct-image","generic"].includes(kind)||r.bottom < -radius||r.top>innerHeight+radius||r.right<0||r.left>innerWidth)return null;
+    const r=a.getBoundingClientRect(),kind=classifyLink(a.href),eff=effectiveSettings(settings,a.href),radius=Math.max(0,settings.prefetchRadius)*innerHeight;if(!eff.enabled||!linkMatchesKeywords(eff,a.href)||!["discourse","direct-image","generic"].includes(kind)||r.bottom < -radius||r.top>innerHeight+radius||r.right<0||r.left>innerWidth)return null;
     const x=Math.max(r.left,Math.min(lastPointerX,r.right)),y=Math.max(r.top,Math.min(lastPointerY,r.bottom));
     return {a,kind,score:Math.hypot(lastPointerX-x,lastPointerY-y)};
   }).filter((x):x is NonNullable<typeof x>=>!!x).sort((a,b)=>a.score-b.score);
