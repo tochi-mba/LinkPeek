@@ -10,6 +10,7 @@ import type {MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 import {dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
+import {fetchWithRetry} from "./http";
 
 type PageScan = {finalUrl: string; title?: string; items: MediaItem[]; html?: string; direct?: "direct-image" | "direct-video"};
 
@@ -61,7 +62,7 @@ async function fetchPage(url: string, settings: LinkPeekSettings | undefined, si
   const timer = setTimeout(abort, clamp(settings?.fetchTimeout, 8000, 500, 30000));
   try {
     const credentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
-    const response = await fetch(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal: controller.signal});
+    const response = await fetchWithRetry(url, {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal: controller.signal});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     if (type.startsWith("image/")) {
