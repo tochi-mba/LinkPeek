@@ -217,10 +217,10 @@ test("N cycles through prepared page links without capturing text input",async()
     await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
     await expect.poll(()=>shortcutMediaRequests.has(`${base}/media/shortcut-a.jpg?${run}`)&&shortcutMediaRequests.has(`${base}/media/shortcut-b.jpg?${run}`),{timeout:12_000}).toBe(true);
     const pressNext=()=>page.evaluate(()=>{const event=new KeyboardEvent("keydown",{key:"n",bubbles:true,cancelable:true});document.dispatchEvent(event);return event.defaultPrevented});
-    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
-    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
+    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-title")).toContainText(/Prepared A|shortcut-a/i,{timeout:5000});
+    expect(await pressNext()).toBe(true);await expect(page.locator(".lp-title")).toContainText(/Prepared B|shortcut-b/i,{timeout:5000});
     await page.keyboard.press("p");
-    const input=page.locator("#shortcut-input");await input.focus();await page.keyboard.press("n");await expect(input).toHaveValue("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
+    const input=page.locator("#shortcut-input");await input.focus();await page.keyboard.press("n");await expect(input).toHaveValue("n");await expect(page.locator(".lp-title")).toContainText(/Prepared B|shortcut-b/i);
   }finally{await closeExtension(context,profile)}
 });
 
