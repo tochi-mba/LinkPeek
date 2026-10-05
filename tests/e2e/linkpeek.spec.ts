@@ -140,6 +140,7 @@ test("GIF player supports playback, frame stepping, scrubbing, speed, looping an
     await page.locator(".lp-gif-speed").selectOption("2");await expect(page.locator(".lp-gif-speed")).toHaveValue("2");
     await page.locator(".lp-gif-loop").click();await expect(page.locator(".lp-gif-loop")).toHaveAttribute("aria-pressed","false");
     await page.keyboard.press("Space");await expect(page.locator(".lp-gif-toggle")).toHaveAttribute("aria-label","Pause GIF");await page.keyboard.press("Space");
+    await timeline.evaluate((el:HTMLInputElement)=>{el.value="0";el.dispatchEvent(new Event("input",{bubbles:true}))});await expect(timeline).toHaveValue("0");
     await page.keyboard.press(".");await expect(timeline).toHaveValue("1");
     await timeline.dispatchEvent("wheel",{deltaX:120,bubbles:true,cancelable:true});await expect(timeline).toHaveValue("2");
     await page.locator(".lp-gif-canvas").dblclick({position:{x:2,y:2}});
