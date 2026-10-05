@@ -209,10 +209,14 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
 test("N cycles through prepared page links without capturing text input",async()=>{
   const {context,profile}=await launchExtension();
   try{
-    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:1000,prefetch:"nearby"}})});
+    // Prefetch is off so nothing races in the background: a link becomes prepared only by opening it.
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:50,prefetch:"off"}})});
     const page=await context.newPage();await page.goto(base);
-    await page.locator("#shortcut-a").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
-    await page.locator("#shortcut-b").hover();await page.waitForTimeout(100);await page.mouse.move(1,1);
+    for(const id of ["a","b"]){
+      await page.locator(`#shortcut-${id}`).hover();await expect(page.locator(".lp-image")).toHaveAttribute("src",new RegExp(`shortcut-${id}\\.jpg`),{timeout:5000});
+      await page.keyboard.press("Escape");await expect(page.locator(".lp-panel")).toHaveCount(0);
+    }
+    await page.mouse.move(1,1);
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-a\.jpg/,{timeout:5000});
     await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/,{timeout:5000});
     await page.locator("#shortcut-input").focus();await page.keyboard.press("n");await expect(page.locator(".lp-image")).toHaveAttribute("src",/shortcut-b\.jpg/);
