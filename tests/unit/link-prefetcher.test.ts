@@ -209,6 +209,56 @@ describe("the link under the pointer", () => {
   });
 });
 
+describe("recursive child preloading", () => {
+  it("deep-prepares child-page links as bounded priority-2 idle work", async () => {
+    const p = prefetcher();
+    const root = scan("https://x.test/root");
+    root.linkContexts = [
+      {sourceUrl: "https://x.test/root", links: ["https://x.test/child"]},
+      {sourceUrl: "https://x.test/child", links: ["https://x.test/next-a", "https://x.test/next-b"]}
+    ];
+    p.remember(root.url, root);
+    expect(pending).toEqual([]);
+    expect(idle).toHaveLength(1);
+
+    runIdle();
+    await flush();
+    expect(pending.map(entry => entry.msg)).toEqual([
+      expect.objectContaining({url: "https://x.test/next-a", deep: true})
+    ]);
+
+    // The second child waits behind the normal link-concurrency budget.
+    runIdle();
+    await flush();
+    expect(pending).toHaveLength(1);
+    pending[0].resolve(scan("https://x.test/next-a"));
+    await flush();
+    expect(pending.map(entry => entry.msg.url)).toEqual(["https://x.test/next-a", "https://x.test/next-b"]);
+    pending[1].resolve(scan("https://x.test/next-b"));
+    await flush();
+    expect(p.isPrepared("https://x.test/next-a")).toBe(true);
+    expect(p.isPrepared("https://x.test/next-b")).toBe(true);
+  });
+
+  it("does no child work when speculative preparation is disabled, then resumes when headroom returns", async () => {
+    const p = prefetcher();
+    budget.speculative = false;
+    const root = scan("https://x.test/root");
+    root.linkContexts = [{sourceUrl: "https://x.test/child", links: ["https://x.test/later"]}];
+    p.remember(root.url, root);
+    expect(idle).toHaveLength(0);
+
+    budget.speculative = true;
+    p.schedule();
+    expect(idle).toHaveLength(1);
+    runIdle();
+    expect(idle).toHaveLength(1);
+    runIdle();
+    await flush();
+    expect(pending[0].msg).toMatchObject({url: "https://x.test/later", deep: true});
+  });
+});
+
 describe("prepared galleries", () => {
   it("remember full scans, keep the most recent, and list prepared links in document order", () => {
     const p = prefetcher();
