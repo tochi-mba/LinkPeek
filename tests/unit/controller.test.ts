@@ -598,7 +598,7 @@ describe("keyboard", () => {
     expect(viewer.result).toEqual(complete);
   });
 
-  it("handles malformed URLs and an absent linked context without throwing", async () => {
+  it("handles malformed URLs and missing linked-context metadata without throwing", async () => {
     await boot();
     const internal = controller as unknown as {
       normalizeUrl: (url: string) => string;
@@ -607,6 +607,31 @@ describe("keyboard", () => {
     expect(internal.normalizeUrl("http://[bad")).toBe("http://[bad");
     viewer.result = undefined;
     expect(internal.linkedContextForCurrent()).toBeUndefined();
+
+    const root = "https://dest.test/root", child = "https://dest.test/child";
+    viewer.result = scan(root, 1, {
+      items: [{id: "m", type: "image", originalUrl: child + "/m.jpg", previewUrl: child + "/m.jpg", sourceUrl: child, score: 1}],
+      linkContexts: undefined
+    });
+    viewer.index = 0;
+    expect(internal.linkedContextForCurrent()).toBeUndefined();
+  });
+
+  it("does not clear a newer navigation probe when an older probe finishes", async () => {
+    await boot();
+    let finish!: (value: ScanResult) => void;
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(resolve => finish = resolve) : scan(msg.url!);
+    const internal = controller as unknown as {
+      linkNavigationId: number;
+      navigationProbe?: {url: string; token: string};
+      scanForNavigation: (url: string, id: number) => Promise<ScanResult | undefined>;
+    };
+    const pending = internal.scanForNavigation("https://dest.test/slow", internal.linkNavigationId);
+    await flush();
+    internal.navigationProbe = {url: "https://dest.test/newer", token: "newer-token"};
+    finish(scan("https://dest.test/slow"));
+    await pending;
+    expect(internal.navigationProbe).toEqual({url: "https://dest.test/newer", token: "newer-token"});
   });
 
   it("opens an incomplete prepared result immediately but still finishes its full scan", async () => {
