@@ -21,6 +21,17 @@ export interface PrefetchHost {
 }
 
 type Level = "shallow" | "deep";
+export type PreloadPriority = "normal" | "high" | "maximum";
+export type PreloadState = "not-started" | "queued" | "loading" | "prepared" | "backoff" | "blocked";
+export interface PreloadEntry {
+  url: string;
+  label: string;
+  state: PreloadState;
+  priority: PreloadPriority;
+  source: "page" | "recursive";
+  retryAt?: number;
+  title?: string;
+}
 
 const RESULT_CACHE_SIZE = 80;
 const RETRY_AFTER_MS = 30_000;
@@ -41,8 +52,73 @@ export class LinkPrefetcher {
   private idleHandle: number | undefined;
   private childIdleHandle: number | undefined;
   private childQueue = new Set<string>();
+  private states = new Map<string, PreloadState>();
+  private priorities = new Map<string, PreloadPriority>();
+  private recursiveUrls = new Set<string>();
+  private listeners = new Set<() => void>();
 
   constructor(private host: PrefetchHost, private warmer: ImageWarmer) {}
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private changed() {
+    for (const listener of this.listeners) listener();
+  }
+
+  private priority(url: string): PreloadPriority {
+    return this.priorities.get(url) ?? "normal";
+  }
+
+  snapshot(): PreloadEntry[] {
+    const entries = new Map<string, PreloadEntry>();
+    for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      const url = anchor.href, allowed = Boolean(this.host.settingsFor(anchor));
+      entries.set(url, {
+        url, label: anchor.textContent?.trim() || new URL(url).pathname || new URL(url).hostname,
+        state: allowed ? this.stateFor(url) : "blocked", priority: this.priority(url), source: "page",
+        retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
+      });
+    }
+    for (const url of this.recursiveUrls) {
+      if (entries.has(url)) continue;
+      entries.set(url, {
+        url, label: new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname,
+        state: this.stateFor(url), priority: this.priority(url), source: "recursive",
+        retryAt: this.failedUntil.get(url), title: this.results.get(url)?.title
+      });
+    }
+    return [...entries.values()];
+  }
+
+  private stateFor(url: string): PreloadState {
+    if (this.results.has(url)) return "prepared";
+    if ((this.failedUntil.get(url) ?? 0) > Date.now()) return "backoff";
+    return this.states.get(url) ?? "not-started";
+  }
+
+  setPriority(urls: Iterable<string>, priority: PreloadPriority) {
+    const selected = [...new Set(urls)];
+    for (const url of selected) {
+      if (priority === "normal") this.priorities.delete(url);
+      else this.priorities.set(url, priority);
+    }
+    this.changed();
+    for (const url of selected) {
+      const anchor = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(candidate => candidate.href === url) ?? Object.assign(document.createElement("a"), {href: url});
+      const settings = this.host.settingsFor(anchor);
+      if (!settings || priority === "normal") continue;
+      if (priority === "maximum") void this.prepareUrl(url, settings, "deep", true, true);
+      else {
+        this.childQueue.delete(url);
+        this.childQueue = new Set([url, ...this.childQueue]);
+        this.states.set(url, "queued");
+        this.scheduleChildWork();
+      }
+    }
+  }
 
   /** Starts tracking every link already on the page. */
   start() {
@@ -80,6 +156,9 @@ export class LinkPrefetcher {
     this.results.clear();
     this.failedUntil.clear();
     this.childQueue.clear();
+    this.states.clear();
+    this.recursiveUrls.clear();
+    this.changed();
     this.schedule();
   }
 
@@ -126,6 +205,8 @@ export class LinkPrefetcher {
     this.results.delete(url);
     this.results.set(url, result);
     while (this.results.size > RESULT_CACHE_SIZE) this.results.delete(this.results.keys().next().value!);
+    this.states.set(url, "prepared");
+    this.changed();
     if (queueChildren) this.queueChildLinks(result);
   }
 
@@ -135,10 +216,15 @@ export class LinkPrefetcher {
     for (const context of contexts) {
       for (const url of context.links) {
         if (this.childQueue.size >= 32) break;
-        if (!this.results.has(url) && !this.requested.has(url)) this.childQueue.add(url);
+        this.recursiveUrls.add(url);
+        if (!this.results.has(url) && !this.requested.has(url)) {
+          this.childQueue.add(url);
+          this.states.set(url, "queued");
+        }
       }
       if (this.childQueue.size >= 32) break;
     }
+    this.changed();
     this.scheduleChildWork();
   }
 
@@ -151,7 +237,10 @@ export class LinkPrefetcher {
       const current = this.host.budget();
       if (!current.speculative || current.nearbyLinks <= 0) return;
       const count = Math.min(this.childQueue.size, Math.max(1, Math.min(current.nearbyLinks, current.linkConcurrency)));
-      const urls = [...this.childQueue].slice(0, count);
+      const urls = [...this.childQueue].sort((a, b) => {
+        const rank = (url: string) => this.priority(url) === "high" ? 0 : 1;
+        return rank(a) - rank(b);
+      }).slice(0, count);
       for (const url of urls) {
         this.childQueue.delete(url);
         const anchor = document.createElement("a");
@@ -221,8 +310,12 @@ export class LinkPrefetcher {
     if (document.hidden || previous === "deep" || (level === "shallow" && previous)) return;
     if ((this.failedUntil.get(url) ?? 0) > Date.now()) return;
     this.requested.set(url, level);
+    this.states.set(url, "queued");
+    this.changed();
     const request: PrefetchRequest = {type: "LINKPEEK_PREFETCH", url, kind: classifyLink(url), deep: level === "deep"};
     await this.slot(urgent);
+    this.states.set(url, "loading");
+    this.changed();
     try {
       const result = await chrome.runtime.sendMessage(request) as ScanResult | null | {error: string};
       if (!result || "error" in result) throw new Error(result?.error ?? "No result");
@@ -232,6 +325,8 @@ export class LinkPrefetcher {
       if (previous) this.requested.set(url, previous);
       else this.requested.delete(url);
       this.failedUntil.set(url, Date.now() + RETRY_AFTER_MS);
+      this.states.set(url, "backoff");
+      this.changed();
     } finally {
       this.release();
     }
