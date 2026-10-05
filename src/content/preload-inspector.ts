@@ -162,7 +162,6 @@ export class PreloadInspector {
       delete anchor.dataset[STATE_ATTR];
       delete anchor.dataset[PRIORITY_ATTR];
       delete anchor.dataset[GIF_ATTR];
-      delete anchor.dataset[GIF_ATTR];
     }
     this.outlined.clear();
     this.signature = "";
@@ -229,7 +228,7 @@ export class PreloadInspector {
     for (const url of this.selected) if (!urls.has(url)) this.selected.delete(url);
     this.updateOutlines(entries);
     // URLs cannot contain spaces or newlines, so these separators are unambiguous.
-    const signature = entries.map(entry => `${entry.url} ${entry.state} ${entry.priority}`).join("\n");
+    const signature = entries.map(entry => `${entry.url} ${entry.state} ${entry.priority} ${entry.hasGif ? "gif" : ""}`).join("\n");
     if (!force && signature === this.signature) return;
     this.signature = signature;
     const byState = new Map<PreloadState, PreloadEntry[]>(INSPECTOR_GROUPS.map(([state]) => [state, []]));
@@ -287,6 +286,7 @@ export class PreloadInspector {
       if (current.has(anchor)) continue;
       delete anchor.dataset[STATE_ATTR];
       delete anchor.dataset[PRIORITY_ATTR];
+      delete anchor.dataset[GIF_ATTR];
     }
     this.outlined = current;
   }
