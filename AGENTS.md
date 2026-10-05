@@ -6,6 +6,9 @@ LinkPeek is a REX Technologies product.
 
 - One-handed touchpad use is the default interaction model, not an optional mode.
 - Hover must never feel sticky or accidental. Keep intent delays, cancellation and the bridge between link and panel intact.
+- An open preview must not switch because the pointer crossed another link on its way into the panel; switching takes a deliberate rest.
+- Speculative work (preparing links, warming thumbnails) goes through the `ResourceGovernor` budget. Never add background requests that bypass it, and never request state-changing links.
+- Every action needs a one-handed path: a single key, a mouse button or a gesture.
 - The preview path must prefer cheap thumbnails; originals are for explicit open/download or zoom workflows.
 - Forum adapters should identify actual posted media. Do not regress to "collect every img".
 - Unknown sites must fail soft through the generic adapter.
@@ -33,7 +36,7 @@ Run:
 
 ```bash
 npm run typecheck
-npm test
+npm run test:coverage   # 100% statements, branches, functions and lines
 npm run build
 node scripts/check_site.mjs
 npm run test:e2e
