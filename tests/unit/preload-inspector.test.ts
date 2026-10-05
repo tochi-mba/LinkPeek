@@ -85,6 +85,13 @@ describe("the preload inspector", () => {
     frames.shift()!();
     expect(a.dataset.linkpeekPreloadGif).toBe("true");
     expect(q(inspector, ".pi-gif")).not.toBeNull();
+
+    entries = [entry("live", "prepared")];
+    notify();
+    vi.advanceTimersByTime(200);
+    frames.shift()!();
+    expect(a.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(q(inspector, ".pi-gif")).toBeNull();
   });
 
   it("keeps closed accordion groups as counts only, caps long groups and shows empty ones", () => {
