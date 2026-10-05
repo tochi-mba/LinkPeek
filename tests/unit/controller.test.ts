@@ -535,6 +535,21 @@ describe("keyboard", () => {
     expect(key("x").defaultPrevented).toBe(false);
   });
 
+  it("opens an incomplete prepared result immediately but still finishes its full scan", async () => {
+    await boot();
+    const a = link("partial");
+    const partial = scan(a.href, 1, {complete: false});
+    const complete = scan(a.href, 3);
+    controller.prefetcher.remember(a.href, partial);
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? complete : scan(msg.url!);
+
+    expect(key("n").defaultPrevented).toBe(true);
+    await flush();
+    expect(scans().map(msg => msg.url)).toEqual([a.href]);
+    expect(viewer.show).toHaveBeenCalledWith(partial);
+    expect(viewer.show).toHaveBeenLastCalledWith(complete);
+  });
+
   it("uses a recursive child with media only when it is new to the current page", async () => {
     await boot();
     const candidate = link("candidate"), existing = link("existing", "https://dest.test/existing"), fallback = link("fallback");
