@@ -129,6 +129,21 @@ describe("searching linked pages", () => {
     expect(calls.map(call => call.url)).toEqual([index, "https://a.test/album/1?a=1&b=2", "https://a.test/album/2"]);
   });
 
+  it("keeps link order for root and recursively fetched child pages", async () => {
+    html(index, `<a href="/child">child</a><a href="/root-next">root next</a>`);
+    html("https://a.test/child", `<img src="/photo.jpg"><a href="/child-a">A</a><a href="/child-b">B</a><a href="/logout">unsafe</a>`);
+    html("https://a.test/root-next", "");
+    html("https://a.test/child-a", "");
+    html("https://a.test/child-b", "");
+    const result = await scanGeneric(index, settings({recursiveMaxDepth: 1, recursiveMaxPages: 3}));
+    expect(result.items.map(item => item.sourceUrl)).toEqual(["https://a.test/child"]);
+    expect(result.linkContexts).toEqual([
+      {sourceUrl: index, links: ["https://a.test/child", "https://a.test/root-next"]},
+      {sourceUrl: "https://a.test/child", links: ["https://a.test/child-a", "https://a.test/child-b"]},
+      {sourceUrl: "https://a.test/root-next", links: []}
+    ]);
+  });
+
   it("goes deeper level by level, honouring the page limit and counting failures", async () => {
     html(index, `<a href="/l1">l1</a><a href="/broken">broken</a><a href="/away">away</a>`);
     html("https://a.test/l1", `<a href="/img.png">img</a><a href="/l2">l2</a><a href="/l2b">l2b</a>`);
