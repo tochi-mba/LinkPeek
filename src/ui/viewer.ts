@@ -447,7 +447,13 @@ export class Viewer {
     if (!result || !item || this.failure) return;
     this.preloader.reset(result.items, this.index, this.settings);
     if (this.view === "grid") {
-      this.grid = new VirtualGrid(this.panel.querySelector<HTMLElement>(".lp-grid")!, result.items, {cell: this.gridThumbSize, current: this.index, onPick: index => this.pick(index)});
+      this.grid = new VirtualGrid(this.panel.querySelector<HTMLElement>(".lp-grid")!, result.items, {
+        cell: this.gridThumbSize, current: this.index, onPick: index => this.pick(index),
+        onWidth: (index, width) => {
+          const candidate = this.result?.items[index];
+          if (candidate) this.rejectIfTooNarrow(candidate, width, this.renderVersion);
+        }
+      });
       return;
     }
     this.stage = this.panel.querySelector<HTMLElement>(".lp-stage")!;
