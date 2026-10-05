@@ -137,7 +137,7 @@ export function resizeHandles() {
 
 const HELP_GROUPS: Array<[string, Array<[ShortcutAction, string]>]> = [
   ["Browse", [["next", "Next media"], ["previous", "Previous media"], ["grid", "Grid / single media"], ["slideshow", "Slideshow"]]],
-  ["Links", [["nextLink", "Next prepared link (or next page in a linked list)"], ["previousLink", "Previous one"], ["openPage", "Open the linked page"]]],
+  ["Links", [["nextLink", "Next link with media (skip empty pages)"], ["previousLink", "Previous link with media"], ["openPage", "Open the linked page"]]],
   ["This media", [["open", "Open original"], ["download", "Download original"], ["downloadAll", "Download the whole gallery (press twice)"], ["copy", "Copy media link"], ["favorite", "Save this link"]]],
   ["Zoom", [["fill", "Fill the panel / fit"], ["rotate", "Rotate"], ["zoomIn", "Zoom in"], ["zoomOut", "Zoom out"], ["resetZoom", "Reset zoom"]]],
   ["Panel", [["expand", "Expand / restore"], ["pin", "Pin open"], ["help", "These controls"], ["close", "Close"]]]

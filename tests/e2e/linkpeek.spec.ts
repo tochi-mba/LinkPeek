@@ -57,6 +57,16 @@ test.beforeAll(async()=>{
       res.end(`<!doctype html><html><body style="font-family:sans-serif"><a id="topic" href="/t/demo/123">Demo thread</a> · <a id="fallback" href="/t/fallback/456">Fallback thread</a> · <a id="recursive" href="/empty-index">Empty index</a> · <a id="large" href="/t/large/789">Large thread</a> · <a id="slow" href="/t/slow/790">Slow thread</a> · <a id="shared" href="/t/shared/791">Shared thread</a> · <a id="shortcut-a" href="/media/shortcut-a.jpg">Prepared A</a> · <a id="shortcut-b" href="/media/shortcut-b.jpg">Prepared B</a> · <input id="shortcut-input" aria-label="Typing field"> · <a id="video" href="/media/clip.mp4">Clip</a> · <a id="logout" href="/logout">Log out</a></body></html>`);return;
     }
     if(path==="/logout"){logoutRequests++;res.end("signed out");return}
+    if(path==="/nav-links"){
+      res.setHeader("content-type","text/html");res.end('<a href="/nav-empty">Empty one</a><br><a href="/nav-gallery-one">Gallery one</a><br><a href="/nav-empty-two">Empty two</a><br><a href="/nav-gallery-two">Gallery two</a>');return;
+    }
+    if(path==="/nav-empty"||path==="/nav-empty-two"){
+      res.setHeader("content-type","text/html");res.end('<title>Empty destination</title><p>No media</p>');return;
+    }
+    if(path==="/nav-gallery-one"||path==="/nav-gallery-two"){
+      const title=path.endsWith("one")?"Gallery one":"Gallery two";
+      res.setHeader("content-type","text/html");res.end(`<title>${title}</title><img src="/media/${path.slice(1)}.jpg" width="690" height="388">`);return;
+    }
     if(path==="/width-check"){
       res.setHeader("content-type","text/html");res.end('<a id="tiny" href="/media/tiny.jpg">Tiny original</a><br><a id="gallery" href="/width-gallery">Gallery</a>');return;
     }
@@ -121,6 +131,26 @@ test("default hover filters tiny originals without rejecting or fetching a light
     await expect(page.getByRole("dialog",{name:"LinkPeek preload inspector"})).toHaveCount(0);
     await page.keyboard.press("Control+x");await page.keyboard.press("x");
     await expect(page.getByRole("dialog",{name:"LinkPeek preload inspector"})).toBeVisible();
+  }finally{await closeExtension(context,profile)}
+});
+
+test("N and Shift+N skip empty unprepared links in both directions",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];
+    await sw.evaluate(async()=>{await chrome.storage.local.set({settings:{prefetch:"off",recursiveSearch:"off"}})});
+    const page=await context.newPage();await page.goto(base+"/nav-links");
+    // Start on neutral page space so no hover preview decides the initial link.
+    await page.mouse.move(1000,500);
+    await page.keyboard.press("n");
+    await expect(page.locator(".lp-title")).toHaveText("Gallery one");
+    await page.keyboard.press("n");
+    await expect(page.locator(".lp-title")).toHaveText("Gallery two");
+    await page.keyboard.press("Shift+n");
+    await expect(page.locator(".lp-title")).toHaveText("Gallery one");
+    await page.keyboard.press("Shift+n");
+    await expect(page.locator(".lp-title")).toHaveText("Gallery two");
+    await expect(page.locator(".lp-count")).toHaveText("1 / 1");
   }finally{await closeExtension(context,profile)}
 });
 
@@ -243,11 +273,12 @@ test("same-URL scans are shared and nearby prefetch stays shallow",async()=>{
   }finally{await closeExtension(second.context,second.profile)}
 });
 
-test("N cycles through prepared page links without capturing text input",async()=>{
+test("N reuses cached galleries without capturing text input",async()=>{
   const {context,profile}=await launchExtension();
   try{
-    // Prefetch is off so nothing races in the background: a link becomes prepared only by opening it.
-    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:50,prefetch:"off"}})});
+    // Restrict this cache/input case to its two gallery links. Other page links
+    // are now eligible for N too, and the media-only traversal case covers them.
+    const sw=context.serviceWorkers()[0];await sw.evaluate(async()=>{const stored=await chrome.storage.local.get("settings");await chrome.storage.local.set({settings:{...(stored.settings??{}),hoverDelay:50,prefetch:"off",activationKeywords:["shortcut-"]}})});
     const page=await context.newPage();await page.goto(base);
     for(const id of ["a","b"]){
       await page.locator(`#shortcut-${id}`).hover();await expect(page.locator(".lp-image")).toHaveAttribute("src",new RegExp(`shortcut-${id}\\.jpg`),{timeout:5000});

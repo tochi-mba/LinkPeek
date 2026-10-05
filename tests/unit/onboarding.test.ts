@@ -63,7 +63,7 @@ describe("the first-run guide", () => {
     await open({shortcuts: {slideshow: [], nextLink: ["Shift+j"]}});
     const sheet = $("#cheat").textContent!;
     expect(sheet).toContain("Shift+J");
-    expect(sheet).toContain("Next prepared link");
+    expect(sheet).toContain("Next link with media");
     expect(sheet).not.toContain("Slideshow");
   });
 
