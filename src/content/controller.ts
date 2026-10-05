@@ -17,6 +17,9 @@ import {PreloadInspector} from "./preload-inspector";
 import {ResourceGovernor, TIER_NAMES} from "./resource-governor";
 
 type ActiveScan = {url: string; token: string; settings: LinkPeekSettings};
+type NavigationTarget =
+  | {recursive: false; url: string; result: ScanResult}
+  | {recursive: true; url: string; result: ScanResult; linkedSource: string; linkedList?: string[]; linkedExcluded: Set<string>};
 
 const RESUME_MEMORY = 100;
 const BRIEF_CONTINUE_MS = 1000;
@@ -411,16 +414,10 @@ export class PreviewController {
    * that happens, choose a media-bearing child that is genuinely new to the
    * current navigation context instead of bouncing back to one of its links.
    */
-  private resolveNavigationTarget(candidate: string, result: ScanResult, excluded: Set<string>, direction: 1 | -1) {
-    if (!result.items.length) return undefined;
+  private resolveNavigationTarget(candidate: string, result: ScanResult, excluded: Set<string>, direction: 1 | -1): NavigationTarget | undefined {
     const rootSources = new Set([candidate, result.url, result.linkContexts?.[0]?.sourceUrl].filter(Boolean).map(url => this.normalizeUrl(url!)));
     const rootItems = result.items.filter(item => rootSources.has(this.normalizeUrl(item.sourceUrl)));
-    if (result.kind !== "generic" || rootItems.length) return {
-      url: candidate, result,
-      linkedSource: undefined as string | undefined,
-      linkedList: undefined as string[] | undefined,
-      linkedExcluded: undefined as Set<string> | undefined
-    };
+    if (result.kind !== "generic" || rootItems.length) return {recursive: false, url: candidate, result};
 
     const mediaSources = new Set(result.items.map(item => this.normalizeUrl(item.sourceUrl)));
     const contextOrder = (result.linkContexts ?? []).map(context => context.sourceUrl);
@@ -434,12 +431,12 @@ export class PreviewController {
     const child = ordered[0];
     if (!child) return undefined;
     const childItems = result.items.filter(item => this.normalizeUrl(item.sourceUrl) === this.normalizeUrl(child));
-    if (!childItems.length) return undefined;
     const context = result.linkContexts?.find(entry => this.normalizeUrl(entry.sourceUrl) === this.normalizeUrl(child));
     const linkedList = context ? contentLinks(context).filter(url => this.settingsForUrl(url)) : undefined;
     const linkedExcluded = context ? new Set(context.links.map(url => this.normalizeUrl(url))) : new Set<string>();
     linkedExcluded.add(this.normalizeUrl(child));
     return {
+      recursive: true,
       url: child,
       result: {...result, url: child, title: undefined, items: childItems},
       linkedSource: child,
@@ -461,7 +458,6 @@ export class PreviewController {
     if (this.activeScan) this.detachOrCancel(this.activeScan, "switch");
     this.activeScan = undefined;
     for (const candidate of candidates) {
-      if (navigationId !== this.linkNavigationId) return;
       this.linkNavigationCursor = candidate;
       const result = await this.scanForNavigation(candidate, navigationId);
       if (navigationId !== this.linkNavigationId) return;
@@ -469,33 +465,31 @@ export class PreviewController {
       const target = this.resolveNavigationTarget(candidate, result, excluded, direction);
       if (!target) continue;
       this.linkNavigationCursor = undefined;
-      if (target.url !== candidate) {
+      if (target.recursive) {
         this.linkedSource = target.linkedSource;
         this.linkedList = target.linkedList;
         this.linkedExcluded = target.linkedExcluded;
-        this.openOffPage(target.url, true, target.result.complete ? target.result : undefined);
+        this.openOffPage(target.url, true, target.result);
         if (target.linkedList?.length) this.prefetcher.warmAround(target.linkedList, -1);
         return;
       }
       if (keepExistingList) {
         this.openOffPage(candidate, true, target.result.complete ? target.result : undefined);
-        const at = this.linkedList?.indexOf(candidate) ?? -1;
-        if (this.linkedList?.length) this.prefetcher.warmAround(this.linkedList, at);
+        const links = this.linkedList!;
+        this.prefetcher.warmAround(links, links.indexOf(candidate));
         return;
       }
-      const anchor = pageAnchors?.get(this.normalizeUrl(candidate));
-      if (anchor) {
-        this.openPageLink(anchor, target.result.complete ? target.result : undefined);
-        return;
-      }
+      const anchor = pageAnchors!.get(this.normalizeUrl(candidate))!;
+      this.openPageLink(anchor, target.result.complete ? target.result : undefined);
+      return;
     }
-    if (navigationId === this.linkNavigationId) this.linkNavigationCursor = undefined;
+    this.linkNavigationCursor = undefined;
   }
 
   /** Steps through a linked page's list, skipping empty/failing links. */
   private openAdjacentLinked(direction: 1 | -1) {
     const context = this.linkedList?.length && this.linkedSource
-      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded ?? new Set([this.normalizeUrl(this.linkedSource), ...this.linkedList.map(url => this.normalizeUrl(url))])}
+      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded!}
       : this.linkedContextForCurrent();
     if (!context) return false;
     this.linkedList = context.links;
@@ -528,7 +522,7 @@ export class PreviewController {
   /** When a gallery built from linked pages appears, prepare the first links of its list so N is instant. */
   private warmLinkedList() {
     const context = this.linkedList?.length && this.linkedSource
-      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded ?? new Set([this.normalizeUrl(this.linkedSource), ...this.linkedList.map(url => this.normalizeUrl(url))])}
+      ? {source: this.linkedSource, links: this.linkedList, excluded: this.linkedExcluded!}
       : this.linkedContextForCurrent();
     if (!context) return;
     this.linkedList = context.links;
