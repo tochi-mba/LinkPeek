@@ -71,6 +71,22 @@ describe("the preload inspector", () => {
     expect(gif.dataset.linkpeekPreloadGif).toBeUndefined();
   });
 
+  it("adds the GIF icon live even when the preload state itself did not change", () => {
+    const a = link("live");
+    entries = [entry("live", "prepared")];
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    expect(a.dataset.linkpeekPreloadGif).toBeUndefined();
+    expect(q(inspector, ".pi-gif")).toBeNull();
+
+    entries = [entry("live", "prepared", {hasGif: true})];
+    notify();
+    vi.advanceTimersByTime(200);
+    frames.shift()!();
+    expect(a.dataset.linkpeekPreloadGif).toBe("true");
+    expect(q(inspector, ".pi-gif")).not.toBeNull();
+  });
+
   it("keeps closed accordion groups as counts only, caps long groups and shows empty ones", () => {
     entries = Array.from({length: 160}, (_, i) => entry(`p${i}`, "prepared"));
     const inspector = new PreloadInspector(source);
