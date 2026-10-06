@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {SEEN_KEYS, SEEN_LIMIT, SEEN_PREFIX, SeenMedia, forgetSeenMedia, mediaKey} from "../../src/shared/seen-media";
+import {PRINT_PREFIX, SEEN_KEYS, SEEN_LIMIT, SEEN_PREFIX, SeenMedia, fingerprintsFor, forgetSeenMedia, mediaKey, recordSeen} from "../../src/shared/seen-media";
 
 type Listener = (changes: Record<string, {newValue?: unknown}>, area: string) => void;
 let store: Record<string, unknown>, listeners: Listener[];
@@ -110,5 +110,59 @@ describe("what has been seen", () => {
     seen.add(media("a.jpg"));
     await seen.flush();
     expect(seen.has(media("a.jpg"))).toBe(true);
+  });
+});
+
+describe("pictures seen", () => {
+  it("are recognised again at a few bits' difference, saved, and followed across tabs", async () => {
+    const seen = new SeenMedia();
+    await seen.load();
+    seen.addPicture("00000000000000ff");
+    seen.addPicture("00000000000000ff");
+    seen.addPicture("not a fingerprint");
+    expect([seen.hasPicture("000000000000003f"), seen.hasPicture("ffffffff00000000"), seen.pictures]).toEqual([true, false, 1]);
+    await seen.flush();
+    expect(store[PRINT_PREFIX + "0"]).toEqual(["00000000000000ff"]);
+    for (const listener of listeners) listener({[PRINT_PREFIX + "f"]: {newValue: ["ffffffffffffffff", "bad"]}}, "local");
+    expect([seen.hasPicture("fffffffffffffff0"), seen.pictures]).toEqual([true, 2]);
+    const fresh = new SeenMedia();
+    await fresh.load();
+    expect(fresh.hasPicture("00000000000000ff")).toBe(true);
+  });
+});
+
+describe("recording what was shown", () => {
+  const item = (n: number) => ({id: `i${n}`, type: "image" as const, originalUrl: `https://cdn.test/${n}.jpg`, previewUrl: `https://cdn.test/${n}-s.jpg`, sourceUrl: "https://a.test", score: 1});
+
+  it("remembers the address and the picture, and logs first sightings to the history", async () => {
+    const sendMessage = vi.fn(async (msg: {type: string}) => msg.type === "LINKPEEK_FINGERPRINT" ? {prints: ["00000000000000ff"]} : {ok: true});
+    (chrome as unknown as {runtime: unknown}).runtime = {sendMessage};
+    const seen = new SeenMedia();
+    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true});
+    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendMessage.mock.calls.filter(([msg]) => msg.type === "LINKPEEK_HISTORY_ADD")).toHaveLength(1);
+    expect([seen.has(item(1)), seen.hasPicture("00000000000000ff")]).toEqual([true, true]);
+    recordSeen(seen, item(2), {skipSeenMedia: false, keepHistory: false});
+    expect(seen.has(item(2))).toBe(false);
+    recordSeen(seen, item(3), {skipSeenMedia: true, keepHistory: false});
+    expect(sendMessage.mock.calls.filter(([msg]) => msg.type === "LINKPEEK_HISTORY_ADD")).toHaveLength(1);
+  });
+
+  it("gets fingerprints for items, posters for videos, and gives up waiting when asked to be quick", async () => {
+    let answer!: (value: unknown) => void;
+    const sendMessage = vi.fn(() => new Promise(resolve => answer = resolve));
+    (chrome as unknown as {runtime: unknown}).runtime = {sendMessage};
+    expect(await fingerprintsFor([])).toEqual([]);
+    const video = {...item(4), type: "video" as const, posterUrl: "https://cdn.test/poster.jpg"};
+    const quick = fingerprintsFor([item(1), video, {...video, posterUrl: undefined}], 50);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await quick).toEqual([undefined, undefined, undefined]);
+    expect(sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_FINGERPRINT", urls: ["https://cdn.test/1-s.jpg", "https://cdn.test/poster.jpg", ""]});
+    const patient = fingerprintsFor([item(1), item(2)]);
+    answer({prints: ["0000000000000000", null]});
+    expect(await patient).toEqual(["0000000000000000", undefined]);
+    sendMessage.mockRejectedValueOnce(new Error("gone"));
+    expect(await fingerprintsFor([item(1)])).toEqual([undefined]);
   });
 });

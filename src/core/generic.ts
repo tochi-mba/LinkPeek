@@ -9,7 +9,7 @@
 import type {LinkContext, MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
-import {dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
+import {decodeEntities, dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
 import {fetchWithRetry, readTextCapped, type RetryMode} from "./http";
 
 type PageScan = {finalUrl: string; title?: string; items: MediaItem[]; html?: string; direct?: "direct-image" | "direct-video"};
@@ -43,8 +43,9 @@ async function readPage(response: Response, requested: string, settings: LinkPee
     return {finalUrl: response.url, items: []};
   }
   const html = await readTextCapped(response);
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
-  return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, {}, settings), html};
+  const raw = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  const title = raw ? decodeEntities(raw).replace(/\s+/g, " ").trim() || undefined : undefined;
+  return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, title ? {sourceTitle: title} : {}, settings), html};
 }
 
 function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive") {

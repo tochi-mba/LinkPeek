@@ -1022,17 +1022,25 @@ describe("searching for the next link with media", () => {
 describe("the shuffle", () => {
   const sources = () => (viewer.result as ScanResult).items.map(item => item.sourceUrl);
   const prefetches = () => messages.filter(msg => msg.type === "LINKPEEK_PREFETCH").map(msg => msg.url);
+  /** Topping the shuffle up checks fingerprints first, so it takes a few turns of the event loop. */
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) await flush();
+  };
 
   it("starts from S anywhere on the page, mixing every link's media with no link twice in a row", async () => {
     await boot();
     const [a, b, c] = ["a", "b", "c"].map(id => link(id));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => release = resolve);
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? gate.then(() => scan(msg.url!, 2)) : {ok: true};
     const event = key("s");
     expect(event.defaultPrevented).toBe(true);
     expect(viewer.openLoading).toHaveBeenLastCalledWith(innerWidth / 2, innerHeight / 3, expect.anything(), "Shuffle");
+    await flush();
     // Whole-page preparation steps aside while the shuffle reads links.
     expect((controller.prefetcher as unknown as {host: {busy: () => boolean}}).host.busy()).toBe(true);
-    await flush();
-    await flush();
+    release();
+    await settle();
     expect(prefetches().sort()).toEqual([a.href, b.href, c.href]);
     expect(viewer.result).toMatchObject({url: "linkpeek:shuffle", title: "Shuffle", mixed: true, complete: false});
     // A link follows itself only at the very end, once it is the only one with media left.
@@ -1051,6 +1059,7 @@ describe("the shuffle", () => {
     respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 0) : scan(msg.url!);
     expect(viewer.onSlideshowStart()).toBe(true);
     expect(viewer.openLoading).toHaveBeenLastCalledWith(30, 40, expect.anything(), "Shuffle");
+    await settle();
     expect(new Set(sources())).toEqual(new Set([a.href, b.href]));
     const opened = scans().length;
     pointer("pointerover", other, 300, 300);
@@ -1070,7 +1079,7 @@ describe("the shuffle", () => {
       : msg.url === a.href ? scan(a.href, 1, {linkContexts: [{sourceUrl: a.href, links: [child, "https://dest.test/logout"]}]}) : scan(msg.url!, 1);
     const pause = vi.spyOn(controller.prefetcher, "pausedFor").mockReturnValueOnce(0).mockReturnValueOnce(4000);
     key("s");
-    await flush();
+    await settle();
     expect(sources()).toEqual([a.href]);
     expect(prefetches()).toEqual([a.href]);
     // The site asked for room: nothing is read until the pause is over.
@@ -1078,11 +1087,12 @@ describe("the shuffle", () => {
     expect(prefetches()).toEqual([a.href]);
     pause.mockReturnValue(0);
     await vi.advanceTimersByTimeAsync(1);
-    await flush();
+    await settle();
     expect(prefetches()).toEqual([a.href, child]);
     expect(sources()).toEqual([a.href, child]);
     viewer.index = 1;
     viewer.onPosition("linkpeek:shuffle", 1);
+    await settle();
     expect(viewer.result).toMatchObject({complete: true});
     expect(viewer.toast).toHaveBeenLastCalledWith("That is everything new from here");
     viewer.onNeedMore();
@@ -1105,7 +1115,7 @@ describe("the shuffle", () => {
   });
 
   it("follows only the page's own links when following links is off, and remembers nothing when skipping is off", async () => {
-    await boot({shuffleFollowLinks: false, skipSeenMedia: false});
+    await boot({shuffleFollowLinks: false, skipSeenMedia: false, keepHistory: false});
     const a = link("a");
     respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 1, {linkContexts: [{sourceUrl: msg.url!, links: ["https://dest.test/deeper"]}]}) : {ok: true};
     key("s");
@@ -1135,6 +1145,7 @@ describe("the shuffle", () => {
     const send = vi.fn();
     runtimeListeners[0]({type: "LINKPEEK_START_SHUFFLE"}, {}, send);
     expect(send).toHaveBeenCalledWith({started: true});
+    await settle();
     runtimeListeners[0]({type: "LINKPEEK_START_SHUFFLE"}, {}, send);
     expect(send).toHaveBeenLastCalledWith({started: false});
   });
@@ -1145,5 +1156,134 @@ describe("the shuffle", () => {
     expect(key("s").defaultPrevented).toBe(false);
     await controller.activate(link("b"), 0, 0);
     expect(viewer.onSlideshowStart()).toBe(false);
+  });
+});
+
+describe("media that all turns out too small", () => {
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) await flush();
+  };
+  const linkedScans = () => messages.filter(msg => msg.type === "LINKPEEK_SCAN" && (msg as {linked?: boolean}).linked).map(msg => msg.url);
+
+  it("searches the link's linked pages once, then remembers it as empty and lets N carry on", async () => {
+    await boot();
+    const a = link("a"), b = link("b");
+    respond = msg => msg.type !== "LINKPEEK_SCAN" ? {ok: true} : (msg as {linked?: boolean}).linked ? scan(msg.url!, 0) : scan(msg.url!, 1);
+    key("n");
+    await settle();
+    expect(scans().at(-1)!.url).toBe(a.href);
+    viewer.onEmptied(a.href);
+    await settle();
+    expect(linkedScans()).toEqual([a.href]);
+    expect(viewer.toast).toHaveBeenCalledWith("Too small here · looking on its linked pages…");
+    await settle();
+    expect(controller.prefetcher.knownEmpty(a.href)).toBe(true);
+    expect(scans().at(-1)!.url).toBe(b.href);
+    expect(viewer.openLoading).toHaveBeenLastCalledWith(expect.any(Number), expect.any(Number), expect.anything(), "b", undefined);
+  });
+
+  it("shows what the linked pages hold, and otherwise stays put when N did not bring it there", async () => {
+    await boot();
+    const a = link("a");
+    await controller.activate(a, 0, 0);
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!, 3) : {ok: true};
+    viewer.onEmptied(a.href);
+    await settle();
+    expect(viewer.result.items).toHaveLength(3);
+    // A second emptying (the linked media too small as well): empty, and nowhere to go.
+    const opened = scans().length;
+    viewer.onEmptied(a.href);
+    await settle();
+    expect([controller.prefetcher.knownEmpty(a.href), scans().length]).toEqual([true, opened]);
+    viewer.onEmptied("https://dest.test/elsewhere");
+  });
+
+  it("says so when N has nowhere else to go", async () => {
+    await boot({recursiveSearch: "off"});
+    const a = link("a");
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!, 1) : {ok: true};
+    key("n");
+    await settle();
+    expect(scans().at(-1)!.url).toBe(a.href);
+    viewer.onEmptied(a.href);
+    await settle();
+    expect(viewer.toast).toHaveBeenLastCalledWith("No other links with media");
+  });
+
+  it("does not search when linked-page search is off or the link is not a page, and survives a failed search", async () => {
+    await boot({recursiveSearch: "off"});
+    const a = link("a");
+    await controller.activate(a, 0, 0);
+    viewer.onEmptied(a.href);
+    expect(linkedScans()).toEqual([]);
+    expect(controller.prefetcher.knownEmpty(a.href)).toBe(true);
+    await setSettings({});
+    const image = link("img", "https://dest.test/photo.jpg");
+    await controller.activate(image, 0, 0);
+    viewer.onEmptied(image.href);
+    expect(linkedScans()).toEqual([]);
+    const page = link("page");
+    await controller.activate(page, 0, 0);
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? Promise.reject(new Error("offline")) : {ok: true};
+    viewer.onEmptied(page.href);
+    await settle();
+    respond = msg => msg.type === "LINKPEEK_SCAN" ? {cancelled: true} : {ok: true};
+    const other = link("other");
+    await controller.activate(other, 0, 0);
+    viewer.onEmptied(other.href);
+    await settle();
+    expect(linkedScans()).toEqual([page.href, other.href]);
+  });
+});
+
+describe("the shuffle and pictures already seen", () => {
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) await flush();
+  };
+
+  it("skips pictures seen before and copies of a picture it already showed through another link", async () => {
+    await boot();
+    const [a, b, c] = ["a", "b", "c"].map(id => link(id));
+    const prints: Record<string, string> = {[`${a.href}/0.jpg`]: "00000000000000ff", [`${b.href}/0.jpg`]: "f000000000000000", [`${c.href}/0.jpg`]: "f000000000000001"};
+    controller.seen.addPicture("00000000000000ff");
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 1)
+      : msg.type === "LINKPEEK_FINGERPRINT" ? {prints: (msg as unknown as {urls: string[]}).urls.map(url => prints[url.replace("/p0.jpg", "/0.jpg")] ?? null)} : {ok: true};
+    key("s");
+    await settle();
+    const shown = (viewer.result as ScanResult).items.map(item => item.sourceUrl);
+    expect(shown).toHaveLength(1);
+    expect([b.href, c.href]).toContain(shown[0]);
+  });
+
+  it("drops a top-up that lands after the shuffle closed, and explores in plain order when GIFs are not favoured", async () => {
+    await boot({shuffleFavorGifs: false});
+    link("a");
+    let answer!: (value: unknown) => void;
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2)
+      : msg.type === "LINKPEEK_FINGERPRINT" ? new Promise(resolve => answer = resolve) : {ok: true};
+    key("s");
+    while (!answer) await flush();
+    viewer.close(true);
+    answer({prints: []});
+    await settle();
+    expect(viewer.show).not.toHaveBeenCalled();
+  });
+
+  it("tops up once more after a top-up that something interrupted", async () => {
+    await boot();
+    link("a");
+    let answer!: (value: unknown) => void;
+    const fingerprintCalls = () => messages.filter(msg => msg.type === "LINKPEEK_FINGERPRINT").length;
+    respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 20)
+      : msg.type === "LINKPEEK_FINGERPRINT" ? new Promise(resolve => answer = resolve) : {ok: true};
+    key("s");
+    while (!answer) await flush();
+    const before = fingerprintCalls();
+    viewer.onNeedMore();
+    // By the time the first top-up lands, the viewer has reached its end: the follow-up must fetch more.
+    viewer.index = 99;
+    answer({prints: []});
+    await settle();
+    expect(fingerprintCalls()).toBeGreaterThan(before);
   });
 });

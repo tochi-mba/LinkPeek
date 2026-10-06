@@ -18,7 +18,8 @@ await build({
     popup: "src/pages/popup.ts",
     options: "src/pages/options.ts",
     onboarding: "src/pages/onboarding.ts",
-    mirror: "src/pages/mirror.ts"
+    mirror: "src/pages/mirror.ts",
+    history: "src/pages/history.ts"
   },
   bundle: true,
   outdir: out,

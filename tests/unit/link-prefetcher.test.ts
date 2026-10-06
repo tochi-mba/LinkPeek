@@ -66,6 +66,15 @@ function prefetcher() {
   return instance;
 }
 
+describe("what checks found", () => {
+  it("remembers which links hold a GIF", () => {
+    const p = prefetcher();
+    p.remember("https://x.test/gif", scan("https://x.test/gif", [{type: "gif"}]));
+    p.remember("https://x.test/still", scan("https://x.test/still"));
+    expect([p.knownGif("https://x.test/gif"), p.knownGif("https://x.test/still"), p.knownGif("https://x.test/new")]).toEqual([true, false, false]);
+  });
+});
+
 describe("preparing nearby links", () => {
   it("discards scans and failures from before a reset", async () => {
     const p = prefetcher(), a = link("https://x.test/a"), b = link("https://x.test/b");

@@ -166,6 +166,38 @@ describe("the settings page", () => {
   });
 });
 
+describe("saved galleries", () => {
+  const button = () => field("rememberGalleries").querySelector<HTMLButtonElement>("[data-forget-galleries]")!;
+  async function openWith(answer: (msg: {type: string}) => Promise<unknown>) {
+    vi.resetModules();
+    loadPage("options.html");
+    harness = stubExtension({});
+    harness.chrome.runtime.sendMessage.mockImplementation(answer);
+    await import("../../src/pages/options");
+    await settle();
+  }
+
+  it("shows how many are kept and their size, and forgets them all on request", async () => {
+    await openWith(async msg => msg.type === "LINKPEEK_GALLERY_STATS" ? {count: 3, bytes: 3 * 1024 * 1024} : {ok: true});
+    expect(button().textContent).toBe("Forget saved galleries (3 · 3.0 MB)");
+    await click(button());
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenLastCalledWith({type: "LINKPEEK_FORGET_GALLERIES"});
+    expect([button().textContent, button().disabled]).toEqual(["No galleries saved yet", true]);
+  });
+
+  it("shows small sizes in kilobytes", async () => {
+    await openWith(async () => ({count: 1, bytes: 2048}));
+    expect(button().textContent).toBe("Forget saved galleries (1 · 2 KB)");
+  });
+
+  it("shows none when the service worker does not answer or fails", async () => {
+    await openWith(async () => undefined);
+    expect(button().textContent).toBe("No galleries saved yet");
+    await openWith(async () => Promise.reject(new Error("gone")));
+    expect(button().textContent).toBe("No galleries saved yet");
+  });
+});
+
 describe("what has been seen", () => {
   it("shows how much is remembered and forgets it all on request", async () => {
     const button = () => field("skipSeenMedia").querySelector<HTMLButtonElement>("[data-forget-seen]")!;

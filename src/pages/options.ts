@@ -21,6 +21,8 @@ let recording: ShortcutAction | null = null;
 let savedTimer: number | undefined;
 /** Media remembered as seen, shown on the button that forgets them. */
 let seenCount = 0;
+/** Galleries saved on the device, shown on the button that forgets them. */
+let galleryStats = {count: 0, bytes: 0};
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -117,6 +119,17 @@ function seenMarkup() {
   return `<button type="button" class="button ghost" data-forget-seen${seenCount ? "" : " disabled"}>${label}</button>`;
 }
 
+function galleriesMarkup() {
+  const {count, bytes} = galleryStats, size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+  const label = count ? `Forget saved galleries (${count.toLocaleString()} · ${size})` : "No galleries saved yet";
+  return `<button type="button" class="button ghost" data-forget-galleries${count ? "" : " disabled"}>${label}</button>`;
+}
+
+async function loadGalleryStats() {
+  const stats = await chrome.runtime.sendMessage({type: "LINKPEEK_GALLERY_STATS"}) as {count?: number; bytes?: number} | undefined;
+  return {count: stats?.count ?? 0, bytes: stats?.bytes ?? 0};
+}
+
 async function countSeen() {
   const stored = await chrome.storage.local.get(SEEN_KEYS);
   return SEEN_KEYS.reduce((total, key) => total + (Array.isArray(stored[key]) ? (stored[key] as unknown[]).length : 0), 0);
@@ -151,6 +164,7 @@ function controlMarkup(field: FieldSpec) {
     case "shortcuts": return shortcutsMarkup();
     case "sites": return sitesMarkup();
     case "seen": return toggleMarkup(field) + seenMarkup();
+    case "galleries": return toggleMarkup(field) + galleriesMarkup();
     default: return selectMarkup(field);
   }
 }
@@ -235,6 +249,12 @@ async function onClick(event: MouseEvent) {
     const input = document.querySelector<HTMLInputElement>(`input[data-key="${key}"]`)!;
     input.value = String(next);
     return update(key, next as never);
+  }
+  if (data.forgetGalleries !== undefined) {
+    await chrome.runtime.sendMessage({type: "LINKPEEK_FORGET_GALLERIES"});
+    galleryStats = {count: 0, bytes: 0};
+    flashSaved("Forgot every saved gallery");
+    return rerender();
   }
   if (data.forgetSeen !== undefined) {
     await forgetSeenMedia();
@@ -361,7 +381,7 @@ async function resetEverything() {
 
 async function start() {
   showAdvanced = readAdvancedPreference();
-  [state, seenCount] = await Promise.all([loadSettings(), countSeen().catch(() => 0)]);
+  [state, seenCount, galleryStats] = await Promise.all([loadSettings(), countSeen().catch(() => 0), loadGalleryStats().catch(() => ({count: 0, bytes: 0}))]);
   render();
   const sections = $("sections");
   sections.addEventListener("click", event => void onClick(event));

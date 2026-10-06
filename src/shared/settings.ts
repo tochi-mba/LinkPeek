@@ -67,12 +67,18 @@ export interface LinkPeekSettings {
   slideshowPlayThrough: boolean;
   /** S starts an endless slideshow mixing media from every link on the page. */
   shuffleSlideshow: boolean;
+  /** The shuffle shows GIFs first, still pictures only while no GIF is available. */
+  shuffleFavorGifs: boolean;
   /** The shuffle skips media LinkPeek has already shown. */
   skipSeenMedia: boolean;
+  /** Everything LinkPeek shows is listed on the History page. */
+  keepHistory: boolean;
   /** When the page runs out, the shuffle follows links to further pages. */
   shuffleFollowLinks: boolean;
   /** While the mirror window is open, previews show only there (the page panel keeps working, unseen). */
   mirrorOnly: boolean;
+  /** Each item shows the page or post it came from, when that is not already the gallery's own title. */
+  showSourceTitle: boolean;
   thumbnailSize: number;
   verticalGesture: "navigate" | "off";
   horizontalGesture: "scrub" | "navigate" | "off";
@@ -140,6 +146,9 @@ export interface LinkPeekSettings {
   preloadOriginals: "never" | "next";
   maxCacheMb: number;
   cacheMinutes: number;
+  /** Keep galleries on this device, so links opened or prepared before show at once. */
+  rememberGalleries: boolean;
+  rememberGalleriesDays: number;
 
   // Keyboard and sites
   shortcuts: Shortcuts;
@@ -222,9 +231,12 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   slideshowSeconds: 3,
   slideshowPlayThrough: true,
   shuffleSlideshow: true,
+  shuffleFavorGifs: true,
   skipSeenMedia: true,
+  keepHistory: true,
   shuffleFollowLinks: true,
   mirrorOnly: true,
+  showSourceTitle: true,
   thumbnailSize: 120,
   verticalGesture: "navigate",
   horizontalGesture: "scrub",
@@ -262,8 +274,8 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   quotedDuplicates: "hide",
   recursiveSearch: "same-origin",
   recursiveTrigger: "empty",
-  recursiveMaxDepth: 1,
-  recursiveMaxPages: 6,
+  recursiveMaxDepth: 3,
+  recursiveMaxPages: 50,
   maxMediaItems: 400,
   scanScope: "whole",
   maxPosts: 2000,
@@ -288,6 +300,8 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   preloadOriginals: "never",
   maxCacheMb: 64,
   cacheMinutes: 60,
+  rememberGalleries: true,
+  rememberGalleriesDays: 30,
 
   shortcuts: DEFAULT_SHORTCUTS,
   siteProfiles: {},
@@ -365,6 +379,7 @@ export const SETTING_RANGES: Partial<Record<keyof LinkPeekSettings, NumberRange>
   preloadMemoryMb: {min: 32, max: 1024, step: 16},
   maxCacheMb: {min: 16, max: 1024, step: 16},
   cacheMinutes: {min: 1, max: 1440, step: 5},
+  rememberGalleriesDays: {min: 1, max: 365, step: 1},
   fetchTimeout: {min: 1000, max: 30000, step: 500}
 };
 

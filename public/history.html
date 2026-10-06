@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>LinkPeek History</title>
+  <link rel="stylesheet" href="base.css">
+</head>
+<body class="history">
+  <header class="history-head">
+    <div class="mark">LP</div>
+    <div><div class="rex">REX TECHNOLOGIES</div><h1>What you have seen</h1></div>
+    <span class="spacer"></span>
+    <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
+    <button id="clear" class="button ghost" type="button">Clear history</button>
+  </header>
+  <p id="summary" class="history-summary muted" role="status"></p>
+  <main id="days"></main>
+  <div id="more" class="history-more" aria-hidden="true"></div>
+  <script src="history.js"></script>
+</body>
+</html>

@@ -8,6 +8,8 @@ export interface MediaItem {
   /** Still frame shown for a video before it plays. */
   posterUrl?: string;
   sourceUrl: string;
+  /** Title of the page or thread the item was posted on, when known. */
+  sourceTitle?: string;
   filename?: string;
   width?: number;
   height?: number;

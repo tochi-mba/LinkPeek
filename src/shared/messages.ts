@@ -1,8 +1,10 @@
 /** Messages exchanged between the content script, the service worker and the popup. */
 import type {LinkKind, ScanResult} from "./media";
+import type {HistoryEntry} from "./history";
 import type {PerformanceMode} from "./settings";
 
-export type ScanRequest = {type: "LINKPEEK_SCAN"; url: string; kind: LinkKind; token: string};
+/** `linked`: also search the pages it links to, because the page's own media all turned out too small. */
+export type ScanRequest = {type: "LINKPEEK_SCAN"; url: string; kind: LinkKind; token: string; linked?: boolean};
 export type PrefetchRequest = {type: "LINKPEEK_PREFETCH"; url: string; kind: LinkKind; deep: boolean};
 export type CancelScanRequest = {type: "LINKPEEK_CANCEL_SCAN"; url: string; token: string};
 export type FetchBinaryRequest = {type: "LINKPEEK_FETCH_BINARY"; url: string; maxMb: number};
@@ -12,9 +14,18 @@ export type DownloadAllRequest = {type: "LINKPEEK_DOWNLOAD_ALL"; folder: string;
 /** Opens a URL in a new tab next to the current one, in the background unless `active`. */
 export type OpenTabRequest = {type: "LINKPEEK_OPEN_TAB"; url: string; active?: boolean};
 export type ClearCacheRequest = {type: "LINKPEEK_CLEAR_CACHE"};
+/** Settings page: how many galleries are saved on the device, or forget them all. */
+export type GalleryStatsRequest = {type: "LINKPEEK_GALLERY_STATS"};
+/** A page saw an item for the first time: add it to the history. */
+export type HistoryAddRequest = {type: "LINKPEEK_HISTORY_ADD"; entry: HistoryEntry};
+export type HistoryClearRequest = {type: "LINKPEEK_HISTORY_CLEAR"};
+/** Picture fingerprints for these addresses (null where a picture could not be read). */
+export type FingerprintRequest = {type: "LINKPEEK_FINGERPRINT"; urls: string[]};
+export type ForgetGalleriesRequest = {type: "LINKPEEK_FORGET_GALLERIES"};
 
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
-  | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest;
+  | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
+  | HistoryAddRequest | HistoryClearRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};
