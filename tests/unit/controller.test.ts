@@ -937,6 +937,13 @@ describe("the preload inspector", () => {
     expect(scans()).toHaveLength(2);
   });
 
+  it("opens the library on preloaded media from the inspector", async () => {
+    await boot();
+    controller.inspector.open();
+    controller.inspector.host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="preloaded"]')!.click();
+    expect(messages).toContainEqual({type: "LINKPEEK_OPEN_LIBRARY", view: "saved", filter: "unseen"});
+  });
+
   it("raises priorities and opens links from the inspector's rows", async () => {
     await boot();
     const a = link("a");

@@ -151,6 +151,8 @@ export interface LinkPeekSettings {
   rememberGalleriesDays: number;
   /** Every picture, GIF and video shown is saved on the device, for offline viewing on the History page. */
   saveMediaOffline: boolean;
+  /** Media of prepared links is saved too, not only what is shown. */
+  savePreparedMedia: boolean;
   savedMediaBudgetMb: number;
 
   // Keyboard and sites
@@ -306,6 +308,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   rememberGalleries: true,
   rememberGalleriesDays: 30,
   saveMediaOffline: true,
+  savePreparedMedia: true,
   savedMediaBudgetMb: 2048,
 
   shortcuts: DEFAULT_SHORTCUTS,

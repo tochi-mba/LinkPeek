@@ -14,6 +14,8 @@ export interface PreloadInspectorHost {
   snapshot(): PreloadEntry[];
   setPriority(urls: Iterable<string>, priority: PreloadPriority): void;
   openUrl(url: string): void;
+  /** Opens the library on the media saved from prepared links that has not been seen yet. */
+  openPreloaded(): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -153,7 +155,8 @@ export class PreloadInspector {
     this.unsubscribe = this.source.subscribe(() => this.requestDraw());
     window.addEventListener("scroll", this.onViewport, true);
     window.addEventListener("resize", this.onViewport);
-    this.draw();
+    // Always draw on opening: a page with no links has the same (empty) signature as a closed inspector.
+    this.draw(true);
   }
 
   close() {
@@ -231,6 +234,7 @@ export class PreloadInspector {
     if (!element) return;
     const action = element.dataset.action;
     if (action === "close") return this.close();
+    if (action === "preloaded") return this.source.openPreloaded();
     if (action === "minimize") {
       this.minimized = !this.minimized;
       return this.draw(true);
@@ -268,6 +272,7 @@ export class PreloadInspector {
       + `</div>`;
     this.shadow.innerHTML = `<style>${PANEL_CSS}</style><section class="pi${this.minimized ? " min" : ""}" role="dialog" aria-label="LinkPeek preload inspector">`
       + `<header class="pi-head"><span class="pi-brand">Preload</span><span class="pi-sum">${summary}</span>`
+      + `<button type="button" class="pi-btn" data-action="preloaded" title="Media saved from prepared links that you have not seen yet">Preloaded media</button>`
       + `<button type="button" class="pi-btn" data-action="minimize" aria-label="${this.minimized ? "Expand" : "Collapse"} inspector">${this.minimized ? "▴" : "▾"}</button>`
       + `<button type="button" class="pi-btn" data-action="close" aria-label="Close preload inspector">×</button></header>`
       + (this.minimized ? "" : `${tools}<div class="pi-list">${groups}</div>`)

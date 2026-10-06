@@ -22,13 +22,15 @@ export type HistoryClearRequest = {type: "LINKPEEK_HISTORY_CLEAR"};
 /** Settings page: how much saved media there is, or delete it all. */
 export type LibraryStatsRequest = {type: "LINKPEEK_LIBRARY_STATS"};
 export type LibraryClearRequest = {type: "LINKPEEK_LIBRARY_CLEAR"};
+/** From a page (which cannot open extension pages itself): open the library, on a view. */
+export type OpenLibraryRequest = {type: "LINKPEEK_OPEN_LIBRARY"; view?: "seen" | "saved"; filter?: "all" | "unseen" | "seen"};
 /** Picture fingerprints for these addresses (null where a picture could not be read). */
 export type FingerprintRequest = {type: "LINKPEEK_FINGERPRINT"; urls: string[]};
 export type ForgetGalleriesRequest = {type: "LINKPEEK_FORGET_GALLERIES"};
 
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
-  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest;
+  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | OpenLibraryRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};

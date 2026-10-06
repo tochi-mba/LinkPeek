@@ -10,6 +10,38 @@ import type {MediaItem} from "./media";
 export const HISTORY_META = "historyMeta";
 /** The Cache Storage holding saved media files (written by the service worker, read by the history page). */
 export const LIBRARY_CACHE = "linkpeek-media";
+/** The index of saved media files, oldest first. */
+export const LIBRARY_INDEX = "mediaIndex";
+
+/** One saved file. Older entries carry only bytes and at, and count as seen (only seen media was saved then). */
+export interface LibraryEntry {
+  bytes: number;
+  /** Saved at (ms since epoch). */
+  at: number;
+  /** Shown in LinkPeek; false for media saved because its link was prepared. */
+  seen?: boolean;
+  type?: MediaItem["type"];
+  /** Page or post it came from, and its title. */
+  source?: string;
+  title?: string;
+  /** A still to show in a grid (a GIF's or video's own file is too heavy for a tile). */
+  preview?: string;
+  /** The original, for opening on the web. */
+  original?: string;
+}
+
+/** The file the viewer shows for an item, which is what the library saves: a picture's preview, or the original GIF or video. */
+export function savedUrlOfItem(item: Pick<MediaItem, "type" | "originalUrl" | "previewUrl">) {
+  return item.type === "image" ? item.previewUrl : item.originalUrl;
+}
+
+/** Every saved file, newest first. */
+export async function readLibrary(): Promise<Array<[string, LibraryEntry]>> {
+  const raw = (await chrome.storage.local.get(LIBRARY_INDEX))[LIBRARY_INDEX];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((pair): pair is [string, LibraryEntry] => Array.isArray(pair) && typeof pair[0] === "string" && typeof pair[1]?.bytes === "number" && typeof pair[1]?.at === "number")
+    .sort((a, b) => b[1].at - a[1].at);
+}
 export const HISTORY_PREFIX = "history:";
 export const HISTORY_CHUNK = 500;
 /** Most entries kept; the oldest chunk goes first. */

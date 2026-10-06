@@ -3,13 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width">
-  <title>LinkPeek History</title>
+  <title>LinkPeek Library</title>
   <link rel="stylesheet" href="base.css">
 </head>
 <body class="history">
   <header class="history-head">
     <div class="mark">LP</div>
-    <div><div class="rex">REX TECHNOLOGIES</div><h1>What you have seen</h1></div>
+    <div><div class="rex">REX TECHNOLOGIES</div><h1>Library</h1></div>
+    <div class="h-views" role="group" aria-label="Show">
+      <button type="button" class="h-chip" data-show="seen" aria-pressed="true">Seen</button>
+      <button type="button" class="h-chip" data-show="saved" aria-pressed="false">Saved on this device</button>
+    </div>
+    <div id="filters" class="h-views" role="group" aria-label="Which saved media" hidden>
+      <button type="button" class="h-chip" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" class="h-chip" data-filter="unseen" aria-pressed="false">Not seen yet</button>
+      <button type="button" class="h-chip" data-filter="seen" aria-pressed="false">Seen</button>
+    </div>
     <span class="spacer"></span>
     <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
     <button id="saveAll" class="button ghost" type="button" title="Save every file kept on this device into Downloads / LinkPeek Library">Save all to Downloads</button>
