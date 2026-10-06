@@ -233,13 +233,33 @@ async function downloadAll(msg: DownloadAllRequest) {
   return {started: msg.items.length - failed, failed};
 }
 
-let mirrorWindowId: number | undefined;
-/** Whether a mirror window is listening; pages ask at load, so late tabs mirror too. */
-let mirrorReady = false;
+const MIRROR_URL = chrome.runtime.getURL("mirror.html");
+const MIRROR_WINDOW_KEY = "mirrorWindowId";
+
+async function rememberMirror(id?: number) {
+  if (id === undefined) await chrome.storage.session.remove(MIRROR_WINDOW_KEY);
+  else await chrome.storage.session.set({[MIRROR_WINDOW_KEY]: id});
+}
+
+/**
+ * Finds the mirror from browser state instead of trusting service-worker memory.
+ * Chromium may suspend this worker while the mirror remains open.
+ */
+async function locateMirror() {
+  const stored = await chrome.storage.session.get(MIRROR_WINDOW_KEY);
+  const id = stored[MIRROR_WINDOW_KEY];
+  if (typeof id !== "number") return undefined;
+  try {
+    await chrome.windows.get(id);
+    return id;
+  } catch {
+    await rememberMirror();
+    return undefined;
+  }
+}
 
 /** Tells every tab whether a mirror window is listening, so pages only send previews while one is. */
 async function broadcastMirror(open: boolean) {
-  mirrorReady = open;
   const tabs = await chrome.tabs.query({});
   await Promise.allSettled(tabs.map(tab => tab.id === undefined ? Promise.resolve() : chrome.tabs.sendMessage(tab.id, {type: "LINKPEEK_MIRROR_OPEN", open})));
   return {open};
@@ -247,21 +267,25 @@ async function broadcastMirror(open: boolean) {
 
 /** Opens the mirror window — a second screen for previews — or closes the one that is open. */
 async function toggleMirror() {
-  if (mirrorWindowId !== undefined) {
-    const id = mirrorWindowId;
-    mirrorWindowId = undefined;
-    await chrome.windows.remove(id).catch(() => undefined);
+  const existing = await locateMirror();
+  if (existing !== undefined) {
+    await rememberMirror();
+    await chrome.windows.remove(existing).catch(() => undefined);
     return broadcastMirror(false);
   }
-  const created = await chrome.windows.create({url: chrome.runtime.getURL("mirror.html"), type: "popup", width: 1100, height: 760});
-  mirrorWindowId = created?.id;
+  const created = await chrome.windows.create({url: MIRROR_URL, type: "popup", width: 1100, height: 760});
+  await rememberMirror(created?.id);
   return {open: true};
 }
 
 chrome.windows.onRemoved.addListener(id => {
-  if (id !== mirrorWindowId) return;
-  mirrorWindowId = undefined;
-  void broadcastMirror(false);
+  // Session storage survives service-worker suspension, so a close event can
+  // still identify the mirror after this module has been restarted.
+  void chrome.storage.session.get(MIRROR_WINDOW_KEY).then(async stored => {
+    if (stored[MIRROR_WINDOW_KEY] !== id) return;
+    await rememberMirror();
+    await broadcastMirror(false);
+  });
 });
 
 function respond(work: Promise<unknown>, sendResponse: (response: unknown) => void, onError: (error: Error) => unknown = error => ({error: error.message})) {
@@ -303,11 +327,12 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "LINKPEEK_TOGGLE_MIRROR":
       return respond(toggleMirror(), sendResponse);
     case "LINKPEEK_MIRROR_READY":
-      mirrorReady = true;
-      return respond(broadcastMirror(true), sendResponse);
+      return respond((async () => {
+        if (sender.tab?.windowId !== undefined) await rememberMirror(sender.tab.windowId);
+        return broadcastMirror(true);
+      })(), sendResponse);
     case "LINKPEEK_MIRROR_QUERY":
-      sendResponse({open: mirrorReady});
-      return false;
+      return respond(locateMirror().then(id => ({open: id !== undefined})), sendResponse);
     case "LINKPEEK_CLEAR_CACHE":
       scans.clear();
       binaries.clear();

@@ -90,6 +90,7 @@ beforeEach(() => {
   viewer = new Viewer({budget, loadGifPlayer: async () => gifModule});
 });
 afterEach(() => {
+  delete (window as Window & {documentPictureInPicture?: unknown}).documentPictureInPicture;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -131,7 +132,132 @@ describe("opening", () => {
   });
 });
 
+describe("window modes", () => {
+  function pictureInPictureWindow() {
+    const target = new EventTarget() as Window;
+    const pipDocument = document.implementation.createHTMLDocument("LinkPeek");
+    let closed = false;
+    const close = vi.fn(() => {
+      closed = true;
+    });
+    Object.defineProperties(target, {
+      document: {value: pipDocument},
+      closed: {get: () => closed},
+      close: {value: close}
+    });
+    return {pip: target, pipDocument, close};
+  }
+
+  function installPictureInPicture(requestWindow: () => Promise<Window>) {
+    Object.defineProperty(window, "documentPictureInPicture", {configurable: true, value: {requestWindow: vi.fn(requestWindow)}});
+    return (window as unknown as {documentPictureInPicture: {requestWindow: ReturnType<typeof vi.fn>}}).documentPictureInPicture.requestWindow;
+  }
+
+  it("can conceal a page panel, fill a dedicated window and follow an index", () => {
+    open().show(result(3));
+    viewer.conceal(true);
+    expect(viewer.host.style.visibility).toBe("hidden");
+    viewer.conceal(false);
+    expect(viewer.host.style.visibility).toBe("");
+    viewer.fillWindow();
+    expect(viewer.panel.classList.contains("lp-popped")).toBe(true);
+    open();
+    expect(viewer.panel.classList.contains("lp-popped")).toBe(true);
+    viewer.show(result(3));
+
+    viewer.jumpTo(99);
+    expect(viewer.index).toBe(2);
+    viewer.jumpTo(-1);
+    expect(viewer.index).toBe(0);
+    viewer.jumpTo(0);
+    press("g");
+    viewer.jumpTo(2);
+    expect(viewer.index).toBe(2);
+    viewer.close(true);
+    viewer.jumpTo(1);
+  });
+
+  it("does not persist layout from a dedicated mirror viewer", () => {
+    const mirror = new Viewer({budget, loadGifPlayer: async () => gifModule, persist: false});
+    mirror.openLoading(10, 10, resolveSettings({}), "Mirror", undefined);
+    mirror.show(result(2));
+    mirror.key(new KeyboardEvent("keydown", {key: "g"}));
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+    mirror.close(true);
+    mirror.host.remove();
+  });
+
+  it("floats above other apps, handles keys there and returns to the page", async () => {
+    const {pip, pipDocument, close} = pictureInPictureWindow();
+    const request = installPictureInPicture(async () => pip);
+    open().show(result(2));
+    viewer.conceal(true);
+    expect(press("e")).toBe(true);
+    await flush();
+
+    expect(request).toHaveBeenCalledWith({width: 520, height: 420});
+    expect(pipDocument.body.contains(viewer.host)).toBe(true);
+    expect(viewer.pinned).toBe(true);
+    expect(q("[data-action=popOut]")!.getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.host.style.visibility).toBe("");
+    open().show(result(2));
+    expect(viewer.panel.classList.contains("lp-popped")).toBe(true);
+    viewer.showHoverRing(10, 10, 100, false);
+
+    const ignored = new KeyboardEvent("keydown", {key: "x", bubbles: true, cancelable: true});
+    pipDocument.dispatchEvent(ignored);
+    expect(ignored.defaultPrevented).toBe(false);
+    const handled = new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true, cancelable: true});
+    pipDocument.dispatchEvent(handled);
+    await flush();
+    expect(handled.defaultPrevented).toBe(true);
+    expect(viewer.index).toBe(1);
+
+    expect(press("e")).toBe(true);
+    await flush();
+    expect(document.documentElement.contains(viewer.host)).toBe(true);
+    expect(viewer.host.style.visibility).toBe("hidden");
+    expect(close).toHaveBeenCalledOnce();
+    expect(q("[data-action=popOut]")!.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("returns automatically when the floating window closes", async () => {
+    const {pip, close} = pictureInPictureWindow();
+    installPictureInPicture(async () => pip);
+    open().show(result(1));
+    await viewer.popOut();
+    pip.dispatchEvent(new Event("pagehide"));
+    expect(document.documentElement.contains(viewer.host)).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("explains unsupported and refused floating windows", async () => {
+    open().show(result(1));
+    await viewer.popOut();
+    expect(toast()).toBe("Floating needs a Chromium 116+ browser");
+
+    const request = installPictureInPicture(async () => {
+      throw new Error("denied");
+    });
+    await viewer.popOut();
+    expect(request).toHaveBeenCalledOnce();
+    expect(toast()).toBe("Couldn’t open the floating window");
+
+    viewer.close(true);
+    await viewer.popOut();
+    expect(request).toHaveBeenCalledOnce();
+  });
+});
+
 describe("showing results", () => {
+  it("reports both the first frame and progressive updates to its host", () => {
+    const shown = vi.fn();
+    viewer.onShown = shown;
+    open().show(result(1, {complete: false}));
+    viewer.show(result(2, {complete: true}));
+    expect(shown).toHaveBeenCalledTimes(2);
+  });
+
   it("renders the first result and checks whether the link is saved", async () => {
     mocks.isFavorite.mockResolvedValue(true);
     open().show(result(3, {title: undefined, url: "https://forum.test/t/a/1"}));

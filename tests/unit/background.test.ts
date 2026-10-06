@@ -16,7 +16,8 @@ const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 type Listener = (msg: unknown, sender: unknown, send: (value: unknown) => void) => boolean | undefined;
 let onMessage: Listener, onInstalled: (details: {reason: string}) => Promise<void>, onStorage: (changes: Record<string, unknown>, area: string) => void;
-let store: Record<string, unknown>, sent: unknown[][], created: unknown[];
+let onWindowRemoved: (id: number) => void;
+let store: Record<string, unknown>, sessionStore: Record<string, unknown>, sent: unknown[][], created: unknown[], mirrorWindow: number | undefined;
 
 /** Sends a message to the worker and resolves with what it answered (and whether it answered asynchronously). */
 function send(msg: unknown, sender: unknown = {tab: {id: 3}, frameId: 2}) {
@@ -36,13 +37,20 @@ beforeEach(async () => {
   vi.resetModules();
   for (const mock of Object.values(core)) mock.mockReset();
   store = {settings: {}, settingsVersion: SETTINGS_VERSION};
+  sessionStore = {};
   sent = [];
   created = [];
+  mirrorWindow = undefined;
   vi.stubGlobal("chrome", {
     storage: {
       local: {
         get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.map(key => [key, store[key]]))),
         set: vi.fn(async (values: Record<string, unknown>) => Object.assign(store, values))
+      },
+      session: {
+        get: vi.fn(async (key: string) => ({[key]: sessionStore[key]})),
+        set: vi.fn(async (values: Record<string, unknown>) => Object.assign(sessionStore, values)),
+        remove: vi.fn(async (key: string) => { delete sessionStore[key]; })
       },
       onChanged: {addListener: vi.fn(listener => onStorage = listener)}
     },
@@ -53,7 +61,19 @@ beforeEach(async () => {
     },
     tabs: {
       create: vi.fn(async (value: unknown) => created.push(value)),
+      query: vi.fn(async () => [{id: 3}, {}]),
       sendMessage: vi.fn(async (...args: unknown[]) => sent.push(args))
+    },
+    windows: {
+      create: vi.fn(async () => ({id: mirrorWindow = 42})),
+      get: vi.fn(async (id: number) => {
+        if (id !== mirrorWindow) throw new Error("No window");
+        return {id};
+      }),
+      remove: vi.fn(async (id: number) => {
+        if (id === mirrorWindow) mirrorWindow = undefined;
+      }),
+      onRemoved: {addListener: vi.fn(listener => onWindowRemoved = listener)}
     },
     downloads: {download: vi.fn(async () => 7)}
   });
@@ -81,6 +101,54 @@ describe("installation", () => {
     expect(store).toEqual({settings: {hoverDelay: 450, wrapAround: false}, settingsVersion: SETTINGS_VERSION});
     await onInstalled({reason: "chrome_update"});
     expect(created).toEqual([]);
+  });
+});
+
+describe("the mirror window", () => {
+  it("opens, announces, discovers and closes the mirror", async () => {
+    expect(await send({type: "LINKPEEK_TOGGLE_MIRROR"})).toMatchObject({async: true, value: {open: true}});
+    expect(chrome.windows.create).toHaveBeenCalledWith({url: "chrome-extension://id/mirror.html", type: "popup", width: 1100, height: 760});
+
+    sent = [];
+    expect(await send({type: "LINKPEEK_MIRROR_READY"})).toMatchObject({async: true, value: {open: true}});
+    expect(sent).toEqual([[3, {type: "LINKPEEK_MIRROR_OPEN", open: true}]]);
+    expect(await send({type: "LINKPEEK_MIRROR_QUERY"})).toMatchObject({async: true, value: {open: true}});
+
+    sent = [];
+    expect(await send({type: "LINKPEEK_TOGGLE_MIRROR"})).toMatchObject({value: {open: false}});
+    expect(chrome.windows.remove).toHaveBeenCalledWith(42);
+    expect(sent).toEqual([[3, {type: "LINKPEEK_MIRROR_OPEN", open: false}]]);
+  });
+
+  it("recovers after worker suspension and notices the mirror closing", async () => {
+    mirrorWindow = 77;
+    sessionStore.mirrorWindowId = 77;
+    expect(await send({type: "LINKPEEK_MIRROR_QUERY"})).toMatchObject({value: {open: true}});
+    onWindowRemoved(1);
+    await tick();
+    expect(sent).toEqual([]);
+
+    mirrorWindow = undefined;
+    onWindowRemoved(77);
+    await tick();
+    expect(sent).toEqual([[3, {type: "LINKPEEK_MIRROR_OPEN", open: false}]]);
+    expect(sessionStore).toEqual({});
+  });
+
+  it("tolerates a window disappearing while it is being toggled", async () => {
+    mirrorWindow = 51;
+    sessionStore.mirrorWindowId = 51;
+    vi.mocked(chrome.windows.remove).mockRejectedValueOnce(new Error("already closed"));
+    expect(await send({type: "LINKPEEK_TOGGLE_MIRROR"})).toMatchObject({value: {open: false}});
+  });
+
+  it("forgets a stale saved window and records a mirror that announces itself", async () => {
+    sessionStore.mirrorWindowId = 88;
+    expect(await send({type: "LINKPEEK_MIRROR_QUERY"})).toMatchObject({value: {open: false}});
+    expect(sessionStore).toEqual({});
+
+    await send({type: "LINKPEEK_MIRROR_READY"}, {tab: {id: 9, windowId: 63}});
+    expect(sessionStore).toEqual({mirrorWindowId: 63});
   });
 });
 

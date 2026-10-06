@@ -92,6 +92,20 @@ describe("the popup", () => {
     }
   });
 
+  it("opens the second-screen mirror and closes the toolbar popup", async () => {
+    await open();
+    const close = vi.spyOn(window, "close").mockImplementation(() => undefined);
+    $("#mirror").click();
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_TOGGLE_MIRROR"});
+    expect(close).toHaveBeenCalledOnce();
+
+    harness.chrome.runtime.sendMessage.mockRejectedValueOnce(new Error("worker stopped"));
+    $("#mirror").click();
+    await settle();
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
   it("turns LinkPeek on and off", async () => {
     await open();
     const toggle = $<HTMLInputElement>("#enabled");
