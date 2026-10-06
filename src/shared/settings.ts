@@ -149,6 +149,9 @@ export interface LinkPeekSettings {
   /** Keep galleries on this device, so links opened or prepared before show at once. */
   rememberGalleries: boolean;
   rememberGalleriesDays: number;
+  /** Every picture, GIF and video shown is saved on the device, for offline viewing on the History page. */
+  saveMediaOffline: boolean;
+  savedMediaBudgetMb: number;
 
   // Keyboard and sites
   shortcuts: Shortcuts;
@@ -302,6 +305,8 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   cacheMinutes: 60,
   rememberGalleries: true,
   rememberGalleriesDays: 30,
+  saveMediaOffline: true,
+  savedMediaBudgetMb: 2048,
 
   shortcuts: DEFAULT_SHORTCUTS,
   siteProfiles: {},
@@ -380,6 +385,7 @@ export const SETTING_RANGES: Partial<Record<keyof LinkPeekSettings, NumberRange>
   maxCacheMb: {min: 16, max: 1024, step: 16},
   cacheMinutes: {min: 1, max: 1440, step: 5},
   rememberGalleriesDays: {min: 1, max: 365, step: 1},
+  savedMediaBudgetMb: {min: 256, max: 51200, step: 256},
   fetchTimeout: {min: 1000, max: 30000, step: 500}
 };
 

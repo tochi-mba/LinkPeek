@@ -12,11 +12,25 @@
     <div><div class="rex">REX TECHNOLOGIES</div><h1>What you have seen</h1></div>
     <span class="spacer"></span>
     <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
+    <button id="saveAll" class="button ghost" type="button" title="Save every file kept on this device into Downloads / LinkPeek Library">Save all to Downloads</button>
     <button id="clear" class="button ghost" type="button">Clear history</button>
   </header>
   <p id="summary" class="history-summary muted" role="status"></p>
   <main id="days"></main>
   <div id="more" class="history-more" aria-hidden="true"></div>
+  <div id="view" class="h-view" role="dialog" aria-modal="true" aria-label="Saved media" hidden>
+    <div class="h-view-bar">
+      <a id="viewTitle" class="h-view-title" target="_blank" rel="noopener"></a>
+      <span id="viewMeta" class="h-view-meta"></span>
+      <span class="spacer"></span>
+      <a id="viewOriginal" class="button ghost" target="_blank" rel="noopener">Open original</a>
+      <button id="viewSave" class="button ghost" type="button">Save file</button>
+      <button class="button ghost" type="button" data-view="close" aria-label="Close">×</button>
+    </div>
+    <button class="h-view-nav prev" type="button" data-view="prev" aria-label="Previous">‹</button>
+    <div id="viewStage" class="h-view-stage"></div>
+    <button class="h-view-nav next" type="button" data-view="next" aria-label="Next">›</button>
+  </div>
   <script src="history.js"></script>
 </body>
 </html>

@@ -198,6 +198,23 @@ describe("saved galleries", () => {
   });
 });
 
+describe("saved media", () => {
+  it("shows how much is kept and deletes it all on request", async () => {
+    vi.resetModules();
+    loadPage("options.html");
+    harness = stubExtension({});
+    harness.chrome.runtime.sendMessage.mockImplementation(async (msg: {type: string}) => msg.type === "LINKPEEK_LIBRARY_STATS" ? {count: 1200, bytes: 1.5 * 1024 ** 3} : {ok: true});
+    await import("../../src/pages/options");
+    await settle();
+    const button = () => field("saveMediaOffline").querySelector<HTMLButtonElement>("[data-clear-library]")!;
+    expect(button().textContent).toBe(`Delete saved media (${(1200).toLocaleString()} · 1.50 GB)`);
+    await click(button());
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenLastCalledWith({type: "LINKPEEK_LIBRARY_CLEAR"});
+    expect([button().textContent, button().disabled]).toEqual(["Nothing saved yet", true]);
+    expect(document.querySelector("#saved")!.textContent).toBe("Deleted all saved media");
+  });
+});
+
 describe("what has been seen", () => {
   it("shows how much is remembered and forgets it all on request", async () => {
     const button = () => field("skipSeenMedia").querySelector<HTMLButtonElement>("[data-forget-seen]")!;

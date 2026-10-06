@@ -186,9 +186,10 @@ export async function fingerprintsFor(items: readonly MediaItem[], waitMs?: numb
  * it is fingerprinted) and adds first sightings to the history, as the
  * settings allow. Pages and the mirror window both record through this.
  */
-export function recordSeen(seen: SeenMedia, item: MediaItem, settings: Pick<LinkPeekSettings, "skipSeenMedia" | "keepHistory">) {
-  if (!settings.skipSeenMedia && !settings.keepHistory) return;
-  if (settings.keepHistory && !seen.has(item)) {
+export function recordSeen(seen: SeenMedia, item: MediaItem, settings: Pick<LinkPeekSettings, "skipSeenMedia" | "keepHistory" | "saveMediaOffline">) {
+  if (!settings.skipSeenMedia && !settings.keepHistory && !settings.saveMediaOffline) return;
+  // First sightings go to the service worker, which logs them and saves the file, as each is on.
+  if ((settings.keepHistory || settings.saveMediaOffline) && !seen.has(item)) {
     chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_ADD", entry: historyEntry(item)} satisfies HistoryAddRequest).catch(() => undefined);
   }
   seen.add(item);

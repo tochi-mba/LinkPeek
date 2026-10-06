@@ -8,6 +8,8 @@
 import type {MediaItem} from "./media";
 
 export const HISTORY_META = "historyMeta";
+/** The Cache Storage holding saved media files (written by the service worker, read by the history page). */
+export const LIBRARY_CACHE = "linkpeek-media";
 export const HISTORY_PREFIX = "history:";
 export const HISTORY_CHUNK = 500;
 /** Most entries kept; the oldest chunk goes first. */
@@ -28,6 +30,11 @@ export interface HistoryEntry {
 }
 
 export type HistoryMeta = {first: number; last: number};
+
+/** The file the viewer showed for an entry, which is what the media library saves: a picture's preview, or the original GIF or video. */
+export function savedUrlOf(entry: Pick<HistoryEntry, "o" | "p" | "t">) {
+  return entry.t === "image" && entry.p ? entry.p : entry.o;
+}
 
 export function historyEntry(item: MediaItem, at = Date.now()): HistoryEntry {
   const entry: HistoryEntry = {a: at, o: item.originalUrl, p: item.type === "video" ? item.posterUrl ?? "" : item.previewUrl, t: item.type, s: item.sourceUrl};

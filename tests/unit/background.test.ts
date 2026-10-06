@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import {fakeCaches} from "./fake-caches";
 import type {ScanResult} from "../../src/shared/media";
 import {SETTINGS_VERSION} from "../../src/shared/settings";
 
@@ -521,6 +522,22 @@ describe("galleries kept on the device", () => {
 });
 
 describe("history and fingerprints", () => {
+  it("save a first sighting's file for offline viewing, as settings allow, and report or delete the library", async () => {
+    const api = fakeCaches();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(4), {headers: {"content-type": "image/jpeg"}})));
+    await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 1, o: "https://cdn.test/1.jpg", p: "https://cdn.test/1-s.jpg", t: "image", s: "https://x.test"}});
+    await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 2, o: "https://cdn.test/2.gif", p: "https://cdn.test/2-s.gif", t: "gif", s: "https://x.test"}});
+    for (let i = 0; i < 10; i++) await tick();
+    expect([...api.stores.get("linkpeek-media")!.keys()].sort()).toEqual(["https://cdn.test/1-s.jpg", "https://cdn.test/2.gif"]);
+    expect((await send({type: "LINKPEEK_LIBRARY_STATS"})).value).toEqual({count: 2, bytes: 8});
+    expect((await send({type: "LINKPEEK_LIBRARY_CLEAR"})).value).toEqual({ok: true});
+    store.settings = {saveMediaOffline: false, keepHistory: false};
+    onStorage({settings: {newValue: store.settings}}, "local");
+    await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 3, o: "https://cdn.test/3.jpg", p: "", t: "image", s: "https://x.test"}});
+    for (let i = 0; i < 10; i++) await tick();
+    expect(api.stores.get("linkpeek-media")?.size ?? 0).toBe(0);
+  });
+
   it("append to the history and clear it", async () => {
     vi.useFakeTimers();
     expect((await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 1, o: "https://cdn.test/1.jpg", p: "", t: "image", s: "https://x.test"}})).value).toEqual({ok: true});

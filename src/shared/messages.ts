@@ -16,16 +16,19 @@ export type OpenTabRequest = {type: "LINKPEEK_OPEN_TAB"; url: string; active?: b
 export type ClearCacheRequest = {type: "LINKPEEK_CLEAR_CACHE"};
 /** Settings page: how many galleries are saved on the device, or forget them all. */
 export type GalleryStatsRequest = {type: "LINKPEEK_GALLERY_STATS"};
-/** A page saw an item for the first time: add it to the history. */
+/** A page saw an item for the first time: add it to the history and the saved media, as each is on. */
 export type HistoryAddRequest = {type: "LINKPEEK_HISTORY_ADD"; entry: HistoryEntry};
 export type HistoryClearRequest = {type: "LINKPEEK_HISTORY_CLEAR"};
+/** Settings page: how much saved media there is, or delete it all. */
+export type LibraryStatsRequest = {type: "LINKPEEK_LIBRARY_STATS"};
+export type LibraryClearRequest = {type: "LINKPEEK_LIBRARY_CLEAR"};
 /** Picture fingerprints for these addresses (null where a picture could not be read). */
 export type FingerprintRequest = {type: "LINKPEEK_FINGERPRINT"; urls: string[]};
 export type ForgetGalleriesRequest = {type: "LINKPEEK_FORGET_GALLERIES"};
 
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
-  | HistoryAddRequest | HistoryClearRequest;
+  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};

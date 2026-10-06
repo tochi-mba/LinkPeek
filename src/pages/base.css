@@ -238,3 +238,16 @@ input[type="range"] { accent-color: var(--signal); }
 .h-tile time { color: var(--muted, #858D83); font: 600 11px ui-monospace, monospace; }
 .history-more { height: 1px; }
 @media (max-width: 640px) { .history-head { flex-wrap: wrap; } .history-search { width: 100%; order: 5; } }
+
+/* The full-size viewer on the history page. */
+.h-media img[data-src] { visibility: hidden; }
+.h-view { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 64px 1fr 64px; grid-template-rows: auto 1fr; background: rgba(5, 6, 5, .96); }
+.h-view[hidden] { display: none; }
+.h-view-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line, #29302A); }
+.h-view-title { font-weight: 700; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+.h-view-title:hover { color: var(--signal, #D7FF3F); }
+.h-view-meta { color: var(--muted, #858D83); font: 600 12px ui-monospace, monospace; }
+.h-view-stage { display: grid; place-items: center; min-height: 0; overflow: hidden; }
+.h-view-stage img, .h-view-stage video { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
+.h-view-nav { border: 0; background: transparent; color: var(--muted, #858D83); font-size: 44px; cursor: pointer; }
+.h-view-nav:hover { color: var(--signal, #D7FF3F); }

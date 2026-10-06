@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {HISTORY_META, HISTORY_PREFIX, type HistoryEntry} from "../../src/shared/history";
+import {HISTORY_META, HISTORY_PREFIX, LIBRARY_CACHE, type HistoryEntry} from "../../src/shared/history";
+import {fakeCaches} from "./fake-caches";
 import {loadPage, stubExtension, type PageHarness} from "./page-harness";
 
 /** Timers are fake here (the clear button waits three seconds), so settling advances them instead of waiting. */
@@ -105,5 +106,117 @@ describe("the history page", () => {
     await import("../../src/pages/history");
     await settle();
     expect($("#summary").textContent).toMatch(/Nothing here yet/);
+  });
+});
+
+describe("saved media on the history page", () => {
+  const view = () => document.getElementById("view")!;
+  const stageMedia = () => document.querySelector<HTMLImageElement | HTMLVideoElement>("#viewStage img, #viewStage video");
+  let downloads: ReturnType<typeof vi.fn>;
+
+  async function openSaved(entries: HistoryEntry[], savedUrls: string[]) {
+    const api = fakeCaches();
+    const cache = await api.open(LIBRARY_CACHE);
+    for (const url of savedUrls) await cache.put(url, new Response("bytes"));
+    let blobs = 0;
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => `blob:saved-${++blobs}`)}));
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[HISTORY_META] = {first: 0, last: 0};
+    harness.store[`${HISTORY_PREFIX}0`] = entries;
+    downloads = vi.fn(async () => 1);
+    harness.chrome.downloads = {download: downloads};
+    harness.chrome.runtime.sendMessage.mockImplementation(async (msg: {type: string}) => msg.type === "LINKPEEK_LIBRARY_STATS" ? {count: savedUrls.length, bytes: 5 * 1024 * 1024} : {ok: true});
+    await import("../../src/pages/history");
+    await settle();
+  }
+
+  it("shows thumbnails from the saved copies, and from the web where there are none", async () => {
+    const now = Date.now();
+    await openSaved([entry(2, now - 1000), entry(1, now, {t: "gif"})], ["https://cdn.test/2-s.jpg"]);
+    const images = [...document.querySelectorAll<HTMLImageElement>(".h-tile img")];
+    expect(images.map(image => image.getAttribute("src"))).toEqual(["https://cdn.test/1-s.jpg", "blob:saved-1"]);
+    expect($("#saveAll").title).toMatch(/^1 files kept on this device \(5 MB\)/);
+  });
+
+  it("opens an item full size, steps through by keys, scroll and mouse buttons, saves it, and closes", async () => {
+    const now = Date.now();
+    await openSaved([entry(3, now - 2000, {t: "video", p: "", n: undefined}), entry(2, now - 1000), entry(1, now)], ["https://cdn.test/2-s.jpg"]);
+    document.querySelector<HTMLElement>('[data-index="0"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
+    expect(view().hidden).toBe(false);
+    expect(stageMedia()!.getAttribute("src")).toBe("https://cdn.test/1.jpg");
+    expect($("#viewMeta").textContent).toMatch(/^1 of 3 · /);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
+    await settle();
+    expect(stageMedia()!.getAttribute("src")).toBe("blob:saved-1");
+    expect($("#viewMeta").textContent).toMatch(/saved on this device$/);
+    view().dispatchEvent(new WheelEvent("wheel", {deltaY: 100, cancelable: true}));
+    await settle();
+    expect(stageMedia()!.tagName).toBe("VIDEO");
+    expect($("#viewTitle").textContent).toBe("3");
+    vi.advanceTimersByTime(300);
+    view().dispatchEvent(new WheelEvent("wheel", {deltaY: -100, cancelable: true}));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/^2 of 3/);
+    view().dispatchEvent(new MouseEvent("mouseup", {button: 4, bubbles: true}));
+    await settle();
+    expect(stageMedia()!.tagName).toBe("VIDEO");
+    downloads.mockRejectedValueOnce(new Error("blocked"));
+    $("#viewSave").click();
+    await settle();
+    expect(downloads).toHaveBeenLastCalledWith(expect.objectContaining({url: "https://cdn.test/3.jpg"}));
+    view().dispatchEvent(new WheelEvent("wheel", {deltaY: 100, cancelable: true}));
+    view().dispatchEvent(new WheelEvent("wheel", {deltaY: 0, cancelable: true}));
+    view().dispatchEvent(new MouseEvent("mouseup", {button: 3, bubbles: true}));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/^2 of 3/);
+    view().dispatchEvent(new MouseEvent("mouseup", {button: 0, bubbles: true}));
+    document.querySelector<HTMLButtonElement>('[data-view="next"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-view="prev"]')!.click();
+    await settle();
+    $("#viewSave").click();
+    await settle();
+    expect(downloads).toHaveBeenLastCalledWith(expect.objectContaining({url: "blob:saved-1", filename: expect.stringMatching(/^LinkPeek Library\/\d{4}-\d\d-\d\d\/\d\d\.\d\d\.\d\d 2-s\.jpg$/)}));
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "x"}));
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    expect(view().hidden).toBe(true);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
+    view().dispatchEvent(new WheelEvent("wheel", {deltaY: 100}));
+    document.querySelector<HTMLElement>('[data-index="1"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, ctrlKey: true}));
+    expect(view().hidden).toBe(true);
+    document.querySelector<HTMLElement>('[data-index="1"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true}));
+    await settle();
+    view().dispatchEvent(new MouseEvent("click", {bubbles: true}));
+    expect(view().hidden).toBe(true);
+    document.querySelector<HTMLElement>('[data-index="1"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true}));
+    await settle();
+    document.querySelector<HTMLButtonElement>('[data-view="close"]')!.click();
+    expect(view().hidden).toBe(true);
+    $("#days").dispatchEvent(new MouseEvent("click", {bubbles: true}));
+  });
+
+  it("saves every kept file into Downloads after a second press, and says when nothing is kept", async () => {
+    const now = Date.now();
+    await openSaved([entry(2, now - 1000), entry(1, now)], ["https://cdn.test/2-s.jpg", "https://cdn.test/1-s.jpg"]);
+    $("#saveAll").click();
+    await settle();
+    expect($("#saveAll").textContent).toBe("Press again to save 2 files");
+    vi.advanceTimersByTime(3001);
+    expect($("#saveAll").textContent).toBe("Save all to Downloads");
+    $("#saveAll").click();
+    await settle();
+    vi.advanceTimersByTime(1000);
+    $("#saveAll").click();
+    await settle();
+    expect(downloads).toHaveBeenCalledTimes(2);
+    // The first press's timer finds the button already used, and leaves it alone.
+    vi.advanceTimersByTime(3000);
+    expect($("#summary").textContent).toBe("Saved 2 files to Downloads / LinkPeek Library");
+    await openSaved([entry(1, now)], []);
+    $("#saveAll").click();
+    await settle();
+    expect($("#summary").textContent).toMatch(/^Nothing is saved on this device yet/);
   });
 });
