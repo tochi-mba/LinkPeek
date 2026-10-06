@@ -165,6 +165,24 @@ describe("live pressure", () => {
     expect(disconnects).toEqual(["longtask", "pressure"]);
   });
 
+  it("leaves alone the signals a site's permissions policy switches off", async () => {
+    const constructed = vi.fn(), getBattery = vi.fn();
+    vi.stubGlobal("PressureObserver", class {
+      constructor() {
+        constructed();
+      }
+    });
+    navigatorStub.getBattery = getBattery;
+    Object.defineProperty(document, "featurePolicy", {configurable: true, value: {allowsFeature: () => false, features: () => ["compute-pressure", "battery"]}});
+    try {
+      governor().start();
+      await Promise.resolve();
+      expect([constructed.mock.calls.length, getBattery.mock.calls.length]).toEqual([0, 0]);
+    } finally {
+      delete (document as {featurePolicy?: unknown}).featurePolicy;
+    }
+  });
+
   it("works when none of the signals are available", async () => {
     vi.stubGlobal("PerformanceObserver", Object.assign(class {}, {supportedEntryTypes: ["paint"]}));
     vi.stubGlobal("PressureObserver", class {

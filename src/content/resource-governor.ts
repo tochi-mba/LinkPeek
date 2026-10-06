@@ -8,6 +8,7 @@
  * and scales the budget down at once, then recovers gradually when the
  * pressure goes away (multiplicative decrease, additive increase).
  */
+import {policyAllows} from "../shared/dom";
 import type {LinkPeekSettings, PerformanceMode, PrefetchMode} from "../shared/settings";
 
 export interface Budget {
@@ -206,13 +207,13 @@ export class ResourceGovernor {
 
   private watchCpuPressure() {
     const Observer = (globalThis as {PressureObserver?: PressureObserverCtor}).PressureObserver;
-    if (!Observer) return;
+    // Sites may switch compute pressure off; LinkPeek works without it.
+    if (!Observer || !policyAllows("compute-pressure")) return;
     try {
       const observer = new Observer(records => {
         const latest = records.at(-1);
         if (latest) this.cpuLimit = PRESSURE_LIMITS[latest.state];
       });
-      // A permissions policy can block this in some frames; LinkPeek works without it.
       observer.observe("cpu").catch(() => undefined);
       this.cleanup.push(() => observer.disconnect());
     } catch {
@@ -222,7 +223,7 @@ export class ResourceGovernor {
 
   private async watchBattery() {
     const getBattery = (navigator as DeviceNavigator).getBattery;
-    if (!getBattery) return;
+    if (!getBattery || !policyAllows("battery")) return;
     try {
       const battery = await getBattery.call(navigator);
       const update = () => {

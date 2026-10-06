@@ -7,7 +7,7 @@
  * handler keyed by data-action, shared with the keyboard shortcuts.
  */
 import type {Budget} from "../content/resource-governor";
-import {escapeHtml} from "../shared/dom";
+import {escapeHtml, policyAllows} from "../shared/dom";
 import {isFavorite, toggleFavorite} from "../shared/favorites";
 import {linkLabel, safeDownloadName, safeFolderName, uniqueMediaItems, type MediaItem, type ScanResult} from "../shared/media";
 import {DEFAULT_SETTINGS, type LinkPeekSettings, type ShortcutAction} from "../shared/settings";
@@ -996,12 +996,10 @@ export class Viewer {
   }
 
   private async copyLink(item: MediaItem) {
-    try {
-      await navigator.clipboard.writeText(item.originalUrl);
-      this.toast("Media link copied");
-    } catch {
-      this.toast("Couldn’t copy the link");
-    }
+    // A site can block clipboard writes, and plain-http pages have no clipboard.
+    if (!policyAllows("clipboard-write")) return this.toast("This site doesn’t allow copying");
+    const copied = await navigator.clipboard?.writeText(item.originalUrl).then(() => true, () => false);
+    this.toast(copied ? "Media link copied" : "Couldn’t copy the link");
   }
 
   private resetZoom() {
@@ -1090,7 +1088,9 @@ export class Viewer {
       this.navigateFromGesture(1);
     } else if (mode === "fullscreen") {
       if (document.fullscreenElement) void document.exitFullscreen();
-      else void this.panel.requestFullscreen?.();
+      // Where the site blocks full screen, the panel expands to fill the tab instead.
+      else if (this.panel.requestFullscreen && policyAllows("fullscreen")) void this.panel.requestFullscreen().catch(() => this.perform("expand"));
+      else this.perform("expand");
     } else if (this.zoom > 1 && this.settings.secondDoubleClick === "fit") {
       this.resetZoom();
       this.paintTransform();

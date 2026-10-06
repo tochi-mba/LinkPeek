@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {escapeHtml} from "../../src/shared/dom";
+import {escapeHtml, policyAllows} from "../../src/shared/dom";
 import {favoriteKey, isFavorite, loadFavorites, removeFavorite, toggleFavorite} from "../../src/shared/favorites";
 import {REX, rexCss} from "../../src/shared/theme";
 
@@ -50,6 +50,20 @@ describe("saved links", () => {
 describe("helpers", () => {
   it("escape HTML for text and attributes", () => {
     expect(escapeHtml(`<a href="x">Tom & Jerry's</a>`)).toBe("&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;");
+  });
+
+  it("ask the page's permissions policy before using a feature it can switch off", () => {
+    const page = (policy: object) => Object.assign(document.implementation.createHTMLDocument(""), policy);
+    const allowed = new Set(["fullscreen"]);
+    const policy = {allowsFeature: (feature: string) => allowed.has(feature), features: () => ["fullscreen", "compute-pressure"]};
+    expect(policyAllows("fullscreen", page({featurePolicy: policy}))).toBe(true);
+    expect(policyAllows("compute-pressure", page({featurePolicy: policy}))).toBe(false);
+    // A feature the browser's policy does not know about is not restricted by it.
+    expect(policyAllows("battery", page({featurePolicy: policy}))).toBe(true);
+    // The newer name wins, and a policy that cannot list its features is taken at its word.
+    expect(policyAllows("battery", page({permissionsPolicy: {allowsFeature: () => false}, featurePolicy: policy}))).toBe(false);
+    expect(policyAllows("fullscreen", page({}))).toBe(true);
+    expect(policyAllows("fullscreen")).toBe(true);
   });
 
   it("expose the REX palette and isolate the shadow root", () => {
