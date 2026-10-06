@@ -53,6 +53,21 @@ describe("the history", () => {
     expect(all.length).toBeLessThanOrEqual(HISTORY_LIMIT);
   }, 60_000);
 
+  it("strikes picked entries from their chunks, leaving the rest untouched", async () => {
+    const writer = new HistoryWriter(0);
+    for (let i = 0; i < 3; i++) writer.add({a: i, o: `https://cdn.test/${i}.jpg`, p: "", t: "image", s: "https://x.test"});
+    await writer.flush();
+    const sets = (chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+    // A fresh writer reads the meta anew; a chunk the meta promises but storage lost is simply skipped.
+    (store[HISTORY_META] as {last: number}).last = 1;
+    const remover = new HistoryWriter(0);
+    await remover.remove([{a: 1, o: "https://cdn.test/1.jpg"}, {a: 9, o: "https://cdn.test/none.jpg"}]);
+    expect((await readHistory()).map(entry => entry.o)).toEqual(["https://cdn.test/2.jpg", "https://cdn.test/0.jpg"]);
+    // Nothing matched: nothing is written.
+    await remover.remove([{a: 9, o: "https://cdn.test/none.jpg"}]);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(sets + 1);
+  });
+
   it("carries on from what an earlier session stored, ignores broken data, and clears", async () => {
     store[HISTORY_META] = {first: 3, last: 3};
     store[HISTORY_PREFIX + "3"] = [historyEntry(item(1), 1), {broken: true}];

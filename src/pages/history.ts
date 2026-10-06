@@ -12,9 +12,11 @@
  * Escape closes). "Save all to Downloads" writes the saved files of the current
  * view into a LinkPeek Library folder, named by when they were seen or saved.
  */
+import DragSelect from "dragselect";
 import {escapeHtml} from "../shared/dom";
 import {LIBRARY_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
 import {linkLabel, type MediaItem} from "../shared/media";
+import type {AuditTickMessage} from "../shared/messages";
 import {SeenMedia, recordSeen} from "../shared/seen-media";
 import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {mineTags, titleHasTag, type TitleTag} from "../shared/title-tags";
@@ -121,7 +123,8 @@ function tile(row: Row, index: number) {
   const title = displayTitle(row);
   const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "");
   const picture = row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">${row.type === "video" ? "Video" : "No preview"}</span>`;
-  return `<figure class="h-tile"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${picture}${badges}</a>`
+  return `<figure class="h-tile${chosen.has(row) ? " h-selected" : ""}" data-row="${index}"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${picture}${badges}</a>`
+    + `<button type="button" class="h-pick" data-pick aria-pressed="${String(chosen.has(row))}" aria-label="Select">✓</button>`
     + `<figcaption><a href="${escapeHtml(row.source)}" target="_blank" rel="noopener" title="${escapeHtml(row.source)}">${escapeHtml(title)}</a>`
     + `<time datetime="${new Date(row.at).toISOString()}">${new Date(row.at).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}</time></figcaption></figure>`;
 }
@@ -170,6 +173,7 @@ function renderMore() {
   });
   if (pieces.length) grid!.insertAdjacentHTML("beforeend", pieces.join(""));
   rendered += next.length;
+  refreshSelectables();
   return fillThumbnails();
 }
 
@@ -233,6 +237,100 @@ function paintControls() {
   $("clear").textContent = view === "seen" ? "Clear history" : "Delete saved media";
 }
 
+// ---- Selecting many at once ----
+
+let selecting = false;
+/** The rows picked, by identity, so they survive re-sorts and paging. */
+const chosen = new Set<Row>();
+/** The rubber band, alive only while selecting. */
+let band: DragSelect<HTMLElement> | undefined;
+let deleteStep: TwoStep | undefined;
+
+function tilesNow() {
+  return [...document.querySelectorAll<HTMLElement>(".h-tile")];
+}
+
+function refreshSelectables() {
+  band?.setSettings({selectables: tilesNow()});
+}
+
+/** Paints every tile's picked state and the bar's count. */
+function paintSelection() {
+  for (const el of tilesNow()) {
+    const picked = chosen.has(shown[Number(el.dataset.row)]);
+    el.classList.toggle("h-selected", picked);
+    el.querySelector("[data-pick]")!.setAttribute("aria-pressed", String(picked));
+  }
+  $("selbar").hidden = !selecting;
+  $("selCount").textContent = `${chosen.size.toLocaleString()} selected`;
+}
+
+function enterSelecting() {
+  if (selecting) return;
+  selecting = true;
+  document.body.classList.add("h-selecting");
+  $("select").setAttribute("aria-pressed", "true");
+  $("selDelete").textContent = deleteLabel();
+  deleteStep = new TwoStep($("selDelete"), deleteLabel);
+  band = new DragSelect<HTMLElement>({area: $("days"), draggability: false, selectables: tilesNow(), selectedClass: "h-banded"});
+  // A drag of the band settles the whole selection; click toggles go through toggleRow below.
+  band.subscribe("DS:end", ({items}) => {
+    chosen.clear();
+    for (const el of items) chosen.add(shown[Number(el.dataset.row)]);
+    paintSelection();
+  });
+  paintSelection();
+}
+
+function exitSelecting() {
+  if (!selecting) return;
+  selecting = false;
+  document.body.classList.remove("h-selecting");
+  $("select").setAttribute("aria-pressed", "false");
+  band?.stop();
+  band = undefined;
+  chosen.clear();
+  paintSelection();
+}
+
+function deleteLabel() {
+  return view === "seen" ? "Remove from history" : "Delete files";
+}
+
+function toggleRow(el: HTMLElement) {
+  const row = shown[Number(el.dataset.row)];
+  if (chosen.has(row)) {
+    chosen.delete(row);
+    band?.removeSelection(el);
+  } else {
+    chosen.add(row);
+    band?.addSelection(el);
+  }
+  paintSelection();
+}
+
+/** Deletes the picked rows: saved files leave with their Downloads copies, seen rows leave the history. */
+async function deleteChosen() {
+  const rows = [...chosen];
+  if (!rows.length) return;
+  const noun = view === "seen" ? "entries" : "files";
+  if (!deleteStep!.confirm(`Press again to remove ${rows.length.toLocaleString()} ${noun}`)) return;
+  if (view === "seen") {
+    await chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_REMOVE", entries: rows.map(row => ({a: row.at, o: row.open}))}).catch(() => undefined);
+    seenRows = seenRows.filter(row => !chosen.has(row));
+  } else {
+    await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_REMOVE", urls: rows.map(row => row.saved)}).catch(() => undefined);
+    savedRows = savedRows.filter(row => !chosen.has(row));
+  }
+  const message = view === "seen"
+    ? `Removed ${rows.length.toLocaleString()} from the history`
+    : `Deleted ${rows.length.toLocaleString()} files, Downloads copies included`;
+  exitSelecting();
+  computeTags();
+  await apply();
+  $("summary").textContent = message;
+}
+
 function searchWords() {
   return ($("search") as HTMLInputElement).value.trim().toLowerCase().split(/\s+/).filter(Boolean);
 }
@@ -249,7 +347,7 @@ const ORDERS: Record<Sort, (a: Row, b: Row) => number> = {
   largest: (a, b) => b.bytes! - a.bytes! || b.at - a.at
 };
 
-function apply() {
+async function apply() {
   const words = searchWords();
   const base = current();
   shown = (words.length ? base.filter(row => matchesSearch(row, words)) : base).slice().sort(ORDERS[sort]);
@@ -257,7 +355,13 @@ function apply() {
   paintControls();
   $("days").replaceChildren();
   $("summary").textContent = summary();
-  return renderMore();
+  await renderMore();
+  // Rows no longer shown cannot stay picked, or Delete would act on what cannot be seen.
+  const visible = new Set(shown);
+  for (const row of [...chosen]) {
+    if (!visible.has(row)) chosen.delete(row);
+  }
+  paintSelection();
 }
 
 /** A button that asks for a second press within a few seconds; only the second one acts. */
@@ -318,6 +422,19 @@ async function auditSaved() {
   $("summary").textContent = result
     ? `Checked every saved file: removed ${result.removed.toLocaleString()} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
     : "Couldn’t check the saved files.";
+}
+
+/** The file's own name, for the one-line progress of the saved-files check. */
+function shortName(url: string) {
+  const tail = url.split("/").pop()!.split("?")[0];
+  return tail || url;
+}
+
+/** One line, updated live while the worker checks the saved files. */
+function onAuditTick(tick: AuditTickMessage) {
+  $("summary").textContent = `Checking saved files · ${tick.checked.toLocaleString()} of ${tick.total.toLocaleString()}`
+    + ` · ${tick.removed.toLocaleString()} removed · ${tick.mirrored.toLocaleString()} added to Downloads · ${shortName(tick.url)}`
+    + (tick.resting ? " · easing off to spare the browser" : "");
 }
 
 /** The ids of Downloads copies whose file is still on disk. */
@@ -505,7 +622,13 @@ async function saveViewed() {
 }
 
 function onKey(event: KeyboardEvent) {
-  if (viewing < 0) return;
+  if (viewing < 0) {
+    if (event.key === "Escape" && selecting) {
+      exitSelecting();
+      event.preventDefault();
+    }
+    return;
+  }
   const moves: Record<string, number> = {ArrowRight: 1, ArrowDown: 1, " ": 1, ArrowLeft: -1, ArrowUp: -1};
   if (event.key === " " && playing) togglePause();
   else if (event.key === "Escape") closeViewer();
@@ -565,6 +688,17 @@ async function start() {
   $("saveAll").addEventListener("click", () => void saveAll());
   $("audit").addEventListener("click", () => void auditSaved());
   $("play").addEventListener("click", startSlideshow);
+  $("select").addEventListener("click", () => selecting ? exitSelecting() : enterSelecting());
+  $("selAll").addEventListener("click", () => {
+    for (const row of shown) chosen.add(row);
+    paintSelection();
+  });
+  $("selCancel").addEventListener("click", exitSelecting);
+  $("selDelete").addEventListener("click", () => void deleteChosen());
+  chrome.runtime.onMessage.addListener((msg: {type?: string}) => {
+    if (msg?.type === "LINKPEEK_AUDIT_TICK") onAuditTick(msg as AuditTickMessage);
+    return false;
+  });
   $("viewPause").addEventListener("click", togglePause);
   $("sort").addEventListener("change", () => {
     sort = ($("sort") as HTMLSelectElement).value as Sort;
@@ -583,16 +717,32 @@ async function start() {
     if (!button) return;
     if (button.dataset.show) {
       view = button.dataset.show as View;
-      // The seen view cannot order by size.
+      // The seen view cannot order by size, and a selection made in one view means nothing in the other.
       if (view === "seen" && sort === "largest") sort = "newest";
+      exitSelecting();
     } else if (button.dataset.kind) kind = button.dataset.kind as Kind;
     else filter = button.dataset.filter as Filter;
     writeAddress();
     void apply();
   });
   $("days").addEventListener("click", event => {
-    const media = (event.target as Element).closest<HTMLElement>("[data-index]");
-    if (!media || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target as Element;
+    const pick = target.closest<HTMLElement>("[data-pick]");
+    if (pick) {
+      enterSelecting();
+      toggleRow(pick.closest<HTMLElement>(".h-tile")!);
+      return;
+    }
+    const media = target.closest<HTMLElement>("[data-index]");
+    if (!media) return;
+    // A held Ctrl or Cmd starts selecting right from the grid.
+    if (selecting || event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      enterSelecting();
+      toggleRow(media.closest<HTMLElement>(".h-tile")!);
+      return;
+    }
+    if (event.button !== 0 || event.shiftKey) return;
     event.preventDefault();
     openViewer(Number(media.dataset.index));
   });

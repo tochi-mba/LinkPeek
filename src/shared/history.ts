@@ -149,6 +149,23 @@ export class HistoryWriter {
     if (dropped.length) await chrome.storage.local.remove(dropped);
   }
 
+  /** Strikes entries (matched by time and address) from the chunks that hold them. */
+  async remove(gone: ReadonlyArray<{a: number; o: string}>) {
+    await this.flush();
+    const meta = await this.loadMeta();
+    const wanted = new Set(gone.map(entry => `${entry.a}\u0000${entry.o}`));
+    const keys = Array.from({length: meta.last - meta.first + 1}, (_, i) => HISTORY_PREFIX + (meta.first + i));
+    const stored = await chrome.storage.local.get(keys);
+    const update: Record<string, unknown> = {};
+    for (const key of keys) {
+      const chunk = stored[key];
+      if (!Array.isArray(chunk)) continue;
+      const kept = (chunk as HistoryEntry[]).filter(entry => !wanted.has(`${entry.a}\u0000${entry.o}`));
+      if (kept.length !== chunk.length) update[key] = kept;
+    }
+    if (Object.keys(update).length) await chrome.storage.local.set(update);
+  }
+
   /** Forgets the whole history. */
   async clear() {
     clearTimeout(this.timer);

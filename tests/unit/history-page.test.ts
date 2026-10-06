@@ -1,4 +1,20 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+
+/** A stand-in rubber band: it records the calls and hands the test its callbacks. */
+const bands = vi.hoisted(() => ({all: [] as any[]}));
+vi.mock("dragselect", () => ({default: class {
+  callbacks = new Map<string, (data: {items: HTMLElement[]}) => void>();
+  addSelection = vi.fn();
+  removeSelection = vi.fn();
+  setSettings = vi.fn();
+  stop = vi.fn();
+  constructor(public options: unknown) {
+    bands.all.push(this);
+  }
+  subscribe(name: string, callback: (data: {items: HTMLElement[]}) => void) {
+    this.callbacks.set(name, callback);
+  }
+}}));
 import {HISTORY_META, HISTORY_PREFIX, LIBRARY_CACHE, type HistoryEntry} from "../../src/shared/history";
 import {fakeCaches} from "./fake-caches";
 import {loadPage, stubExtension, type PageHarness} from "./page-harness";
@@ -373,6 +389,151 @@ describe("the saved view", () => {
     await settle();
     expect($("#summary").textContent).toBe("Everything shown is already in Downloads / LinkPeek Library.");
     expect(harness.chrome.downloads.download).not.toHaveBeenCalled();
+  });
+});
+
+describe("selecting many at once, and the live check line", () => {
+  const LIB = "mediaIndex";
+  const chip = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
+
+  async function openLibrary(index: unknown, search = "") {
+    bands.all.length = 0;
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", `/history.html${search}`);
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[LIB] = index;
+    await import("../../src/pages/history");
+    await settle();
+  }
+
+  const rows = () => {
+    const now = Date.now();
+    return [
+      ["https://cdn.test/a.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "First one"}],
+      ["https://cdn.test/b.jpg", {bytes: 1, at: now - 2, seen: true, type: "image", title: "Second one"}],
+      ["https://cdn.test/c.gif", {bytes: 1, at: now - 3, seen: true, type: "gif", title: "Third one"}]
+    ];
+  };
+  const pick = (at: number) => document.querySelectorAll<HTMLButtonElement>("[data-pick]")[at];
+  const tile = (at: number) => document.querySelectorAll<HTMLElement>(".h-tile")[at];
+
+  it("selects by checkmark, drag or ctrl-click, counts in the bar, and leaves on Escape or Cancel", async () => {
+    await openLibrary(rows(), "?view=saved");
+    expect($("#selbar").hidden).toBe(true);
+    pick(0).click();
+    await settle();
+    expect([$("#selbar").hidden, $("#selCount").textContent]).toEqual([false, "1 selected"]);
+    expect(tile(0).classList.contains("h-selected")).toBe(true);
+    expect(document.body.classList.contains("h-selecting")).toBe(true);
+    const band = bands.all[0];
+    expect(band.addSelection).toHaveBeenCalledWith(tile(0));
+    // The same checkmark unpicks.
+    pick(0).click();
+    await settle();
+    expect([$("#selCount").textContent, tile(0).classList.contains("h-selected")]).toEqual(["0 selected", false]);
+    expect(band.removeSelection).toHaveBeenCalledWith(tile(0));
+    // A drag of the band settles the whole selection.
+    band.callbacks.get("DS:end")!({items: [tile(1), tile(2)]});
+    expect($("#selCount").textContent).toBe("2 selected");
+    // Select all, then Escape leaves the mode entirely.
+    $("#selAll").click();
+    expect($("#selCount").textContent).toBe("3 selected");
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    expect([$("#selbar").hidden, band.stop.mock.calls.length, document.body.classList.contains("h-selecting")]).toEqual([true, 1, false]);
+    // Ctrl-click on a tile starts selecting instead of opening.
+    tile(1).querySelector<HTMLElement>("[data-index]")!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, ctrlKey: true}));
+    await settle();
+    expect([$("#view").hidden, $("#selCount").textContent]).toEqual([true, "1 selected"]);
+    // In the mode, a plain click on a tile toggles it too.
+    tile(2).querySelector<HTMLElement>("[data-index]")!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
+    expect($("#selCount").textContent).toBe("2 selected");
+    $("#selCancel").click();
+    expect($("#selbar").hidden).toBe(true);
+  });
+
+  it("deletes picked files after a second press, Downloads copies included", async () => {
+    await openLibrary(rows(), "?view=saved");
+    // A middle-click neither opens nor picks.
+    tile(0).querySelector<HTMLElement>("[data-index]")!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 1}));
+    expect($("#view").hidden).toBe(true);
+    pick(0).click();
+    pick(1).click();
+    await settle();
+    // Refiltering re-renders the surviving picks as already selected.
+    chip('[data-kind="image"]').click();
+    await settle();
+    expect([$("#selCount").textContent, tile(0).classList.contains("h-selected")]).toEqual(["2 selected", true]);
+    $("#selDelete").click();
+    await settle();
+    expect($("#selDelete").textContent).toBe("Press again to remove 2 files");
+    $("#selDelete").click();
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_LIBRARY_REMOVE", urls: ["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]});
+    // Both pictures are gone; the GIF survives behind the picture filter.
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
+    expect([$("#summary").textContent, $("#selbar").hidden]).toEqual(["Deleted 2 files, Downloads copies included", true]);
+    chip('[data-kind="all"]').click();
+    await settle();
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(1);
+    // With nothing picked, Delete does nothing.
+    $("#select").click();
+    $("#selDelete").click();
+    await settle();
+    expect(harness.messages.filter((msg: any) => msg.type === "LINKPEEK_LIBRARY_REMOVE")).toHaveLength(1);
+    $("#select").click();
+    expect($("#selbar").hidden).toBe(true);
+  });
+
+  it("removes picked entries from the history in the seen view, and forgets picks that filters hide", async () => {
+    const now = Date.now();
+    vi.resetModules();
+    bands.all.length = 0;
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", "/history.html");
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[HISTORY_META] = {first: 0, last: 0};
+    harness.store[`${HISTORY_PREFIX}0`] = [entry(1, now - 1), entry(2, now - 2, {t: "gif"})];
+    await import("../../src/pages/history");
+    await settle();
+    pick(0).click();
+    await settle();
+    expect($("#selDelete").textContent).toBe("Remove from history");
+    // A filter that hides the picked row also unpicks it.
+    chip('[data-kind="gif"]').click();
+    await settle();
+    expect([$("#selCount").textContent, $("#selbar").hidden]).toEqual(["0 selected", false]);
+    pick(0).click();
+    await settle();
+    $("#selDelete").click();
+    await settle();
+    $("#selDelete").click();
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_HISTORY_REMOVE", entries: [{a: now - 2, o: "https://cdn.test/2.jpg"}]});
+    expect($("#summary").textContent).toBe("Removed 1 from the history");
+    // Switching views leaves selection mode.
+    pick(0)?.click();
+    chip('[data-show="saved"]').click();
+    await settle();
+    expect($("#selbar").hidden).toBe(true);
+  });
+
+  it("narrates the saved-files check on one line as the worker reports it", async () => {
+    await openLibrary(rows(), "?view=saved");
+    const tick = (patch: Record<string, unknown>) => {
+      for (const listener of harness.runtimeListeners) listener({type: "LINKPEEK_AUDIT_TICK", checked: 142, total: 384, removed: 3, mirrored: 12, url: "https://cdn.test/folder/beach.jpg?x=1", resting: 0, ...patch});
+    };
+    tick({});
+    expect($("#summary").textContent).toBe("Checking saved files · 142 of 384 · 3 removed · 12 added to Downloads · beach.jpg");
+    // Under load it says it is easing off; an address with no file name shows whole.
+    tick({resting: 800, url: "https://cdn.test/"});
+    expect($("#summary").textContent).toBe("Checking saved files · 142 of 384 · 3 removed · 12 added to Downloads · https://cdn.test/ · easing off to spare the browser");
+    for (const listener of harness.runtimeListeners) listener({type: "OTHER"});
   });
 });
 
