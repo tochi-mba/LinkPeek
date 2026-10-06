@@ -33,6 +33,8 @@ export interface HeaderState {
   slideshowPaused: boolean;
   /** The preview floats in its own always-on-top window. */
   popped: boolean;
+  /** The panel is the whole window (the mirror): expand means full screen, and float and pin do not apply. */
+  fills?: boolean;
   help: boolean;
   settings: LinkPeekSettings;
 }
@@ -53,7 +55,11 @@ export function headerMarkup(state: HeaderState) {
   const grid = view === "grid"
     ? button("grid", "▣", "Back to single media", withKey("Single media", keys, "grid"), true, "lp-gridbtn")
     : button("grid", "▦", "Show all media as a grid", withKey("Grid", keys, "grid"), false, "lp-gridbtn");
-  const expand = quick ? button("expand", state.expanded ? "↙" : "⛶", state.expanded ? "Restore size" : "Expand", withKey(state.expanded ? "Restore size" : "Expand", keys, "expand"), state.expanded, "lp-expandbtn") : "";
+  const expand = state.fills
+    ? button("expand", "⛶", "Full screen", withKey("Full screen (F11)", keys, "expand"), false, "lp-expandbtn")
+    : quick ? button("expand", state.expanded ? "↙" : "⛶", state.expanded ? "Restore size" : "Expand", withKey(state.expanded ? "Restore size" : "Expand", keys, "expand"), state.expanded, "lp-expandbtn") : "";
+  const windowed = state.fills ? "" : button("popOut", state.popped ? "⇲" : "⇱", state.popped ? "Back into the page" : "Float above every window", withKey(state.popped ? "Back into the page" : "Float above every window", keys, "popOut"), state.popped, "lp-popout")
+    + button("pin", "⌖", state.pinned ? "Unpin preview" : "Pin preview", withKey(state.pinned ? "Unpin preview" : "Pin preview", keys, "pin"), state.pinned, "lp-pin");
   return `<header class="lp-head">`
     + `<span class="lp-title" title="Drag to move · double-click to reset the layout">${escapeHtml(state.title)}</span>`
     + `<span class="lp-meta">${state.count ?? ""}</span>`
@@ -61,8 +67,7 @@ export function headerMarkup(state: HeaderState) {
     + slideshowButton(state)
     + button("favorite", state.favorite ? "★" : "☆", state.favorite ? "Remove saved link" : "Save link", withKey(state.favorite ? "Remove saved link" : "Save link", keys, "favorite"), state.favorite, "lp-favorite")
     + button("help", "?", "Show controls", withKey("Controls", keys, "help"), undefined, "lp-helpbtn", ` aria-expanded="${state.help}"`)
-    + button("popOut", state.popped ? "⇲" : "⇱", state.popped ? "Back into the page" : "Float above every window", withKey(state.popped ? "Back into the page" : "Float above every window", keys, "popOut"), state.popped, "lp-popout")
-    + button("pin", "⌖", state.pinned ? "Unpin preview" : "Pin preview", withKey(state.pinned ? "Unpin preview" : "Pin preview", keys, "pin"), state.pinned, "lp-pin")
+    + windowed
     + button("close", "×", "Close", withKey("Close", keys, "close"), undefined, "lp-close")
     + `</header>`;
 }

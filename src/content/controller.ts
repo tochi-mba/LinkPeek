@@ -79,6 +79,8 @@ export class PreviewController {
   private widenedFor?: string;
   /** A mirror window is open; previews shown here are sent to it. */
   private mirrorOpen = false;
+  /** What the mirror last received in full, so moves within a gallery send only the position. */
+  private mirrorSent?: {url: string; count: number; complete: boolean};
   readonly seen = new SeenMedia();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
@@ -252,6 +254,8 @@ export class PreviewController {
     }
     if (msg?.type === "LINKPEEK_MIRROR_OPEN") {
       this.mirrorOpen = Boolean(msg.open);
+      // A mirror that just opened has nothing yet: the next state goes in full.
+      this.mirrorSent = undefined;
       this.concealForMirror();
       if (this.mirrorOpen) this.sendMirror();
       sendResponse({ok: true});
@@ -738,7 +742,13 @@ export class PreviewController {
   private sendMirror() {
     const result = this.viewer.result;
     if (!this.mirrorOpen || !result) return;
-    chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_STATE", result, index: this.viewer.index} satisfies MirrorStateMessage).catch(() => undefined);
+    const sent = this.mirrorSent, same = sent?.url === result.url && sent.count === result.items.length && sent.complete === result.complete;
+    const message: MirrorStateMessage = {type: "LINKPEEK_MIRROR_STATE", url: result.url, index: this.viewer.index};
+    if (!same) {
+      message.result = result;
+      this.mirrorSent = {url: result.url, count: result.items.length, complete: result.complete};
+    }
+    chrome.runtime.sendMessage(message).catch(() => undefined);
   }
 
   private navigationNotice(message: string) {

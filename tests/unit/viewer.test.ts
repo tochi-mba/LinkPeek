@@ -1555,3 +1555,18 @@ describe("where each item came from", () => {
     expect(emptied).toHaveBeenCalledWith("https://forum.test/t/a/1");
   });
 });
+
+describe("filling a window", () => {
+  it("hands expand to the host when it wants it, and shows full screen in the header", () => {
+    open().show(result(1));
+    viewer.fillWindow();
+    expect(q("[data-action=expand]")!.getAttribute("aria-label")).toBe("Full screen");
+    const expand = vi.fn(() => true);
+    viewer.onExpand = expand;
+    click("expand");
+    expect([expand.mock.calls.length, viewer.panel.classList.contains("lp-expanded")]).toEqual([1, false]);
+    viewer.onExpand = () => false;
+    click("expand");
+    expect(viewer.panel.classList.contains("lp-expanded")).toBe(true);
+  });
+});

@@ -48,6 +48,12 @@ describe("the header", () => {
     expect(el.querySelector("[data-action=help]")!.getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("offers full screen instead of expand, float and pin when the panel is the whole window", () => {
+    const el = header({fills: true});
+    expect(el.querySelector("[data-action=expand]")!.getAttribute("aria-label")).toBe("Full screen");
+    expect([el.querySelector("[data-action=popOut]"), el.querySelector("[data-action=pin]")]).toEqual([null, null]);
+  });
+
   it("leaves out quick view controls when they are turned off, and keys that are unbound", () => {
     const el = header({view: "grid", settings: resolveSettings({quickViewControls: false, shortcuts: {...DEFAULT_SHORTCUTS, close: []}})});
     expect(el.querySelector("[data-action=expand]")).toBeNull();

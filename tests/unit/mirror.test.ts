@@ -13,6 +13,7 @@ vi.mock("../../src/ui/viewer", () => ({
     key = vi.fn(() => false);
     onDismiss?: () => void;
     onPosition?: () => void;
+    onExpand?: () => boolean;
     onSeen?: (item: unknown) => void;
     constructor(public options: unknown) {
       viewers.push(this);
@@ -76,7 +77,8 @@ describe("the mirror window", () => {
 
     const first = gallery();
     expect(listener({type: "unrelated"})).toBe(false);
-    expect(listener({type: "LINKPEEK_MIRROR_STATE", result: first, index: 1})).toBe(false);
+    expect(listener({type: "LINKPEEK_MIRROR_STATE", url: first.url, result: first, index: 1})).toBe(false);
+    expect(document.title).toBe("Gallery · LinkPeek Mirror");
     expect(document.getElementById("hint")!.hidden).toBe(true);
     expect(viewer.openLoading).toHaveBeenCalledWith(600, 400, expect.any(Object), "Gallery", 1);
     expect(viewer.fillWindow).toHaveBeenCalledOnce();
@@ -84,17 +86,21 @@ describe("the mirror window", () => {
     expect(viewer.jumpTo).toHaveBeenLastCalledWith(1);
 
     viewer.onPosition();
-    listener({type: "LINKPEEK_MIRROR_STATE", result: first, index: 0});
+    listener({type: "LINKPEEK_MIRROR_STATE", url: first.url, index: 0});
     expect(viewer.jumpTo).toHaveBeenCalledTimes(1);
 
     const second = {...gallery("https://forum.test/t/two"), title: undefined};
-    listener({type: "LINKPEEK_MIRROR_STATE", result: second, index: 0});
+    // A move within a gallery this window does not hold yet is ignored until the gallery itself arrives.
+    listener({type: "LINKPEEK_MIRROR_STATE", url: second.url, index: 0});
+    expect(viewer.openLoading).toHaveBeenCalledTimes(1);
+    listener({type: "LINKPEEK_MIRROR_STATE", url: second.url, result: second, index: 0});
     expect(viewer.openLoading).toHaveBeenCalledTimes(2);
     expect(viewer.openLoading).toHaveBeenLastCalledWith(600, 400, expect.any(Object), second.url, 0);
     expect(viewer.jumpTo).toHaveBeenLastCalledWith(0);
 
     viewer.onDismiss();
     expect(document.getElementById("hint")!.hidden).toBe(false);
+    expect(document.title).toBe("LinkPeek Mirror");
     // What is browsed here counts as seen too.
     viewer.onSeen({id: "x", type: "image", originalUrl: "https://forum.test/x.jpg", previewUrl: "https://forum.test/x.jpg", sourceUrl: "https://forum.test", score: 1});
     await settle();
@@ -121,5 +127,21 @@ describe("the mirror window", () => {
     const handled = new KeyboardEvent("keydown", {key: "g", bubbles: true, cancelable: true});
     document.dispatchEvent(handled);
     expect(handled.defaultPrevented).toBe(true);
+    // The full-screen button in the header does the same as F11.
+    harness.chrome.windows.update.mockClear();
+    expect(viewer.onExpand()).toBe(true);
+    await settle();
+    expect(harness.chrome.windows.update).toHaveBeenCalled();
+  });
+
+  it("follows settings changed elsewhere", async () => {
+    await open();
+    harness.store.settings = {slideshowSeconds: 9};
+    for (const listener of harness.storageListeners) listener({settings: {newValue: harness.store.settings}}, "local");
+    for (const listener of harness.storageListeners) listener({other: {newValue: 1}}, "sync");
+    await settle();
+    const viewer = viewers[0];
+    listener({type: "LINKPEEK_MIRROR_STATE", url: "https://forum.test/t/x", result: gallery("https://forum.test/t/x"), index: 0});
+    expect(viewer.openLoading.mock.calls.at(-1)[2]).toMatchObject({slideshowSeconds: 9});
   });
 });
