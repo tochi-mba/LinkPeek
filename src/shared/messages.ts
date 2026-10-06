@@ -66,4 +66,9 @@ export type MirrorQueryRequest = {type: "LINKPEEK_MIRROR_QUERY"};
 /** Background -> tabs: whether a mirror window is listening, so pages only send previews while one is. */
 export type MirrorOpenMessage = {type: "LINKPEEK_MIRROR_OPEN"; open: boolean};
 /** Content -> the mirror window: the gallery and position on screen right now. */
-export type MirrorStateMessage = {type: "LINKPEEK_MIRROR_STATE"; result: ScanResult; index: number};
+/**
+ * Content -> the mirror window: the gallery and position on screen. `result`
+ * is sent only when the gallery changed (new, grown or finished); a move
+ * within it sends the position alone.
+ */
+export type MirrorStateMessage = {type: "LINKPEEK_MIRROR_STATE"; url: string; index: number; result?: ScanResult};

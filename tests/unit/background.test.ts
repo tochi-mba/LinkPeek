@@ -17,7 +17,7 @@ const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 type Listener = (msg: unknown, sender: unknown, send: (value: unknown) => void) => boolean | undefined;
 let onMessage: Listener, onInstalled: (details: {reason: string}) => Promise<void>, onStorage: (changes: Record<string, unknown>, area: string) => void;
-let onWindowRemoved: (id: number) => void;
+let onWindowRemoved: (id: number) => void, onWindowBounds: (window: chrome.windows.Window) => void;
 let store: Record<string, unknown>, sessionStore: Record<string, unknown>, sent: unknown[][], created: unknown[], mirrorWindow: number | undefined;
 
 /** Sends a message to the worker and resolves with what it answered (and whether it answered asynchronously). */
@@ -76,7 +76,9 @@ beforeEach(async () => {
       remove: vi.fn(async (id: number) => {
         if (id === mirrorWindow) mirrorWindow = undefined;
       }),
-      onRemoved: {addListener: vi.fn(listener => onWindowRemoved = listener)}
+      onRemoved: {addListener: vi.fn(listener => onWindowRemoved = listener)},
+      onBoundsChanged: {addListener: vi.fn(listener => onWindowBounds = listener)},
+      update: vi.fn(async () => undefined)
     },
     downloads: {download: vi.fn(async () => 7)}
   });
@@ -110,7 +112,7 @@ describe("installation", () => {
 describe("the mirror window", () => {
   it("opens, announces, discovers and closes the mirror", async () => {
     expect(await send({type: "LINKPEEK_TOGGLE_MIRROR"})).toMatchObject({async: true, value: {open: true}});
-    expect(chrome.windows.create).toHaveBeenCalledWith({url: "chrome-extension://id/mirror.html", type: "popup", width: 1100, height: 760});
+    expect(chrome.windows.create).toHaveBeenCalledWith({url: "chrome-extension://id/mirror.html", type: "popup", left: undefined, top: undefined, width: 1100, height: 760});
 
     sent = [];
     expect(await send({type: "LINKPEEK_MIRROR_READY"})).toMatchObject({async: true, value: {open: true}});
@@ -121,6 +123,36 @@ describe("the mirror window", () => {
     expect(await send({type: "LINKPEEK_TOGGLE_MIRROR"})).toMatchObject({value: {open: false}});
     expect(chrome.windows.remove).toHaveBeenCalledWith(42);
     expect(sent).toEqual([[3, {type: "LINKPEEK_MIRROR_OPEN", open: false}]]);
+  });
+
+  it("reopens where it was last left: same place, size and full-screen state", async () => {
+    await send({type: "LINKPEEK_TOGGLE_MIRROR"});
+    onWindowBounds({id: 5} as chrome.windows.Window);
+    await tick();
+    expect(store.mirrorBounds).toBeUndefined();
+    onWindowBounds({id: 42, left: 1920, top: 40, width: 1280, height: 900, state: "normal"} as chrome.windows.Window);
+    await tick();
+    await tick();
+    expect(store.mirrorBounds).toEqual({left: 1920, top: 40, width: 1280, height: 900, state: "normal"});
+    onWindowBounds({id: 42, left: 1920, top: 0, width: 2560, height: 1440, state: "fullscreen"} as chrome.windows.Window);
+    await tick();
+    await tick();
+    expect(store.mirrorBounds).toEqual({left: 1920, top: 0, width: 1280, height: 900, state: "fullscreen"});
+    await send({type: "LINKPEEK_TOGGLE_MIRROR"});
+    (chrome.windows.update as ReturnType<typeof vi.fn>).mockClear();
+    await send({type: "LINKPEEK_TOGGLE_MIRROR"});
+    expect(chrome.windows.create).toHaveBeenLastCalledWith({url: "chrome-extension://id/mirror.html", type: "popup", left: 1920, top: 0, width: 1280, height: 900});
+    expect(chrome.windows.update).toHaveBeenCalledWith(42, {state: "fullscreen"});
+    // Maximised before any normal size was known keeps a sensible size for coming back.
+    delete store.mirrorBounds;
+    onWindowBounds({id: 42, left: 0, top: 0, width: 2560, height: 1400, state: "maximized"} as chrome.windows.Window);
+    await tick();
+    await tick();
+    expect(store.mirrorBounds).toEqual({left: 0, top: 0, width: 1100, height: 760, state: "maximized"});
+    onWindowBounds({id: 42, left: 0, top: 0, width: 800, height: 600, state: "minimized"} as chrome.windows.Window);
+    await tick();
+    await tick();
+    expect(store.mirrorBounds).toMatchObject({state: "normal"});
   });
 
   it("recovers after worker suspension and notices the mirror closing", async () => {

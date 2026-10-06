@@ -320,10 +320,31 @@ async function toggleMirror() {
     await chrome.windows.remove(existing).catch(() => undefined);
     return broadcastMirror(false);
   }
-  const created = await chrome.windows.create({url: MIRROR_URL, type: "popup", width: 1100, height: 760});
+  // Reopen where it was last: same monitor, size and full-screen state.
+  const {mirrorBounds} = await chrome.storage.local.get(MIRROR_BOUNDS_KEY) as {mirrorBounds?: MirrorBounds};
+  const bounds = mirrorBounds ?? {width: 1100, height: 760};
+  const created = await chrome.windows.create({url: MIRROR_URL, type: "popup", left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height});
   await rememberMirror(created?.id);
+  if (created?.id !== undefined && bounds.state && bounds.state !== "normal") await chrome.windows.update(created.id, {state: bounds.state}).catch(() => undefined);
   return {open: true};
 }
+
+const MIRROR_BOUNDS_KEY = "mirrorBounds";
+type MirrorBounds = {left?: number; top?: number; width: number; height: number; state?: "normal" | "maximized" | "fullscreen"};
+
+/** Remembers where the mirror window is, so the next one opens on the same monitor at the same size. */
+chrome.windows.onBoundsChanged.addListener(window => {
+  void chrome.storage.session.get(MIRROR_WINDOW_KEY).then(async stored => {
+    if (stored[MIRROR_WINDOW_KEY] !== window.id) return;
+    const state = window.state === "maximized" || window.state === "fullscreen" ? window.state : "normal";
+    // A full-screen or maximised window reports the monitor's bounds; keep the last normal size for coming back.
+    const previous = (await chrome.storage.local.get(MIRROR_BOUNDS_KEY))[MIRROR_BOUNDS_KEY] as MirrorBounds | undefined;
+    const bounds: MirrorBounds = state === "normal"
+      ? {left: window.left, top: window.top, width: window.width!, height: window.height!, state}
+      : {...(previous ?? {width: 1100, height: 760}), left: window.left, top: window.top, state};
+    await chrome.storage.local.set({[MIRROR_BOUNDS_KEY]: bounds});
+  });
+});
 
 chrome.windows.onRemoved.addListener(id => {
   // Session storage survives service-worker suspension, so a close event can

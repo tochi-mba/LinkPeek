@@ -31,16 +31,21 @@ let applying = false;
 let browsingHere = false;
 
 function show(msg: MirrorStateMessage) {
+  // A move within a gallery this window does not have yet means nothing here.
+  if (!msg.result && msg.url !== currentUrl) return;
   hint.hidden = true;
   applying = true;
   try {
-    if (msg.result.url !== currentUrl) {
-      currentUrl = msg.result.url;
+    if (msg.result && msg.url !== currentUrl) {
+      currentUrl = msg.url;
       browsingHere = false;
-      viewer.openLoading(innerWidth / 2, innerHeight / 2, settings, msg.result.title || msg.result.url, msg.index);
+      const title = msg.result.title || msg.url;
+      viewer.openLoading(innerWidth / 2, innerHeight / 2, settings, title, msg.index);
       viewer.fillWindow();
+      // The taskbar shows which gallery this window holds.
+      document.title = `${title} · LinkPeek Mirror`;
     }
-    viewer.show(msg.result);
+    if (msg.result) viewer.show(msg.result);
     if (!browsingHere) viewer.jumpTo(msg.index);
   } finally {
     applying = false;
@@ -70,7 +75,16 @@ async function start() {
   viewer.onDismiss = () => {
     currentUrl = undefined;
     hint.hidden = false;
+    document.title = "LinkPeek Mirror";
   };
+  viewer.onExpand = () => {
+    void toggleFullscreen();
+    return true;
+  };
+  // Settings changed elsewhere (keys, slideshow speed) apply here too.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.settings) void loadSettings().then(fresh => settings = fresh);
+  });
   viewer.onPosition = () => {
     if (!applying) browsingHere = true;
   };

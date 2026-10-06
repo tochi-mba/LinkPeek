@@ -71,6 +71,8 @@ export class Viewer {
   onNeedMore?: () => void;
   /** Every item turned out too small to count, leaving the gallery empty. */
   onEmptied?: (url: string) => void;
+  /** Asked before expanding; returning true means the host handled it (the mirror goes full screen instead). */
+  onExpand?: () => boolean;
   private expanded = false;
   private gridThumbSize = 120;
   private remembered: {view?: View; gridThumbSize?: number; expanded?: boolean} = {};
@@ -380,6 +382,7 @@ export class Viewer {
         this.toggleView();
         return true;
       case "expand":
+        if (this.onExpand?.()) return true;
         this.expanded = !this.expanded;
         this.persistState();
         this.applyPanelStyle();
@@ -527,7 +530,7 @@ export class Viewer {
   private headerMarkup() {
     return markup.headerMarkup({
       title: this.headerTitle(), count: this.result?.items.length, view: this.view, expanded: this.expanded, pinned: this.pinned,
-      favorite: this.favorite, slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, popped: Boolean(this.pip), help: this.help, settings: this.settings
+      favorite: this.favorite, slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, popped: Boolean(this.pip), fills: this.fillsWindow, help: this.help, settings: this.settings
     });
   }
 
@@ -1030,6 +1033,7 @@ export class Viewer {
   fillWindow() {
     this.fillsWindow = true;
     this.panel.classList.add("lp-popped");
+    this.renderHeader();
   }
 
   /** Jumps straight to an item, for the mirror window following browsing on another screen. */

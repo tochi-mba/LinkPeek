@@ -182,10 +182,18 @@ describe("starting up", () => {
     const a = link("a");
     pointer("pointerover", a);
     await vi.advanceTimersByTimeAsync(100);
-    expect(messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE").at(-1)).toMatchObject({result: {url: a.href}, index: 0});
-    const beforePosition = messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE").length;
+    const mirrored = () => messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE") as Array<{url: string; index: number; result?: ScanResult}>;
+    expect(mirrored().at(-1)).toMatchObject({url: a.href, result: {url: a.href}, index: 0});
+    const beforePosition = mirrored().length;
+    // A move within the same gallery sends the position alone.
+    viewer.index = 0;
     viewer.onPosition?.(a.href, 0);
-    expect(messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE")).toHaveLength(beforePosition + 1);
+    expect(mirrored()).toHaveLength(beforePosition + 1);
+    expect(mirrored().at(-1)).toEqual({type: "LINKPEEK_MIRROR_STATE", url: a.href, index: 0});
+    // A grown gallery goes in full again.
+    viewer.result = {...viewer.result, items: [...viewer.result.items, {...viewer.result.items[0], id: "more"}]};
+    viewer.onPosition?.(a.href, 0);
+    expect(mirrored().at(-1)!.result!.items).toHaveLength(2);
 
     runtimeListeners[0]({type: "LINKPEEK_MIRROR_OPEN", open: false}, {}, answer);
     expect(viewer.conceal).toHaveBeenLastCalledWith(false);

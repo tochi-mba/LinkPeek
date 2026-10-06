@@ -114,6 +114,8 @@ async function start() {
     status = await chrome.tabs.sendMessage(tab.id!, {type: "LINKPEEK_STATUS"}).catch(() => undefined) as TabStatus | undefined;
   }
   render();
+  const mirror = await chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_QUERY"}).catch(() => undefined) as {open?: boolean} | undefined;
+  if (mirror?.open) $("mirror").textContent = "Close mirror";
   await renderFavorites();
 }
 

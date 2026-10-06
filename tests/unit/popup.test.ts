@@ -52,6 +52,19 @@ describe("the popup", () => {
     expect(($("#enabled") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("says the mirror button will close the mirror while one is open", async () => {
+    await open();
+    expect($("#mirror").textContent).toBe("Mirror");
+    vi.resetModules();
+    loadPage("popup.html");
+    harness = stubExtension({});
+    harness.chrome.tabs.query.mockResolvedValue([]);
+    harness.chrome.runtime.sendMessage.mockImplementation(async (msg: {type: string}) => msg.type === "LINKPEEK_MIRROR_QUERY" ? {open: true} : {ok: true});
+    await import("../../src/pages/popup");
+    await settle();
+    expect($("#mirror").textContent).toBe("Close mirror");
+  });
+
   it("opens the library, and its preloaded media directly", async () => {
     await open();
     $("#history").click();
@@ -184,7 +197,7 @@ describe("the popup", () => {
     expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/onboarding.html"});
     $("#clear").click();
     await settle();
-    expect(harness.messages).toEqual([{type: "LINKPEEK_CLEAR_CACHE"}]);
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_CLEAR_CACHE"});
     expect($("#clear").textContent).toBe("Cache cleared");
   });
 });
