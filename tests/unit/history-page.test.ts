@@ -385,6 +385,11 @@ describe("the saved view", () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect(download.mock.calls[0][0]).toMatchObject({filename: expect.stringContaining("b.jpg")});
     expect($("#summary").textContent).toBe("Saved 1 to Downloads / LinkPeek Library (1 already there)");
+    // With nothing picked, the save button does nothing.
+    $("#select").click();
+    $("#selSave").click();
+    await settle();
+    expect(download).toHaveBeenCalledTimes(1);
   });
 
   it("says when everything picked is already in Downloads", async () => {
@@ -490,6 +495,9 @@ describe("selecting many at once, and the live check line", () => {
     // Both pictures are gone; the GIF survives behind the picture filter.
     expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
     expect([$("#summary").textContent, $("#selbar").hidden]).toEqual(["Deleted 2 files, Downloads copies included", true]);
+    // The first press's lapsed timer finds the step already used and leaves the outcome alone.
+    vi.advanceTimersByTime(3001);
+    expect($("#summary").textContent).toBe("Deleted 2 files, Downloads copies included");
     chip('[data-kind="all"]').click();
     await settle();
     expect(document.querySelectorAll(".h-tile")).toHaveLength(1);
@@ -562,7 +570,8 @@ describe("selecting many at once, and the live check line", () => {
       harness.store[LIB] = [
         ["https://cdn.test/anim.gif", {bytes: 1, at: now, seen: true, type: "gif", title: "Anim", preview: "https://cdn.test/anim-s.jpg", original: "https://x.test/anim.gif"}],
         ["https://cdn.test/pic.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "Pic"}],
-        ["https://cdn.test/bare.gif", {bytes: 1, at: now - 2, seen: true, type: "gif", title: "Bare"}]
+        ["https://cdn.test/bare.gif", {bytes: 1, at: now - 2, seen: true, type: "gif", title: "Bare"}],
+        ["https://cdn.test/web.gif", {bytes: 1, at: now - 3, seen: true, type: "gif", title: "Web", preview: "https://cdn.test/web-s.jpg", original: "https://x.test/web.gif"}]
       ];
       await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/anim.gif", new Response("gifbytes"));
       await import("../../src/pages/history");
@@ -581,6 +590,10 @@ describe("selecting many at once, and the live check line", () => {
     tiles[0].dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
     await settle();
     expect(img.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+    // A GIF without a saved copy animates from the web instead.
+    tiles[3].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(tiles[3].querySelector("img")!.getAttribute("src")).toBe("https://x.test/web.gif");
     // Leaving without having hovered, plain pictures, previewless GIFs and stale tiles are all left alone.
     tiles[0].dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
     tiles[1].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
@@ -620,6 +633,11 @@ describe("selecting many at once, and the live check line", () => {
     expect($("#summary").textContent).not.toContain("left");
     expect($("#progress").classList.contains("h-bar-live")).toBe(false);
     expect($("#progress").title).toContain("of the 2.0 GB");
+    // A slow crawl is told in minutes.
+    tick({checked: 10, removed: 0, mirrored: 0});
+    vi.advanceTimersByTime(200_000);
+    tick({checked: 20, removed: 0, mirrored: 0});
+    expect($("#summary").textContent).toContain("min left");
     for (const listener of harness.runtimeListeners) listener({type: "OTHER"});
   });
 });
