@@ -95,7 +95,7 @@ describe("the history page", () => {
     expect($("#summary").textContent).toBe("300 items, newest first");
   });
 
-  it("explains an empty history, and clears after a second press", async () => {
+  it("warns with exact numbers before clearing, forgets the warning when it lapses, then clears", async () => {
     await open(null);
     expect($("#summary").textContent).toBe("Nothing here yet. What you open in LinkPeek appears here, newest first.");
     await open([entry(1, Date.now())]);
@@ -104,8 +104,11 @@ describe("the history page", () => {
     clear.click();
     await settle();
     expect(clear.textContent).toBe("Press again to clear");
+    // The warning says exactly what will go, and is taken back when the press lapses.
+    expect($("#summary").textContent).toBe("About to clear the whole history: 1 entry. Saved files stay.");
     vi.advanceTimersByTime(3001);
     expect(clear.textContent).toBe("Clear history");
+    expect($("#summary").textContent).toBe("1 item, newest first");
     clear.click();
     clear.click();
     await settle();
@@ -136,6 +139,7 @@ describe("saved media on the history page", () => {
     for (const url of savedUrls) await cache.put(url, new Response("bytes"));
     let blobs = 0;
     vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => `blob:saved-${++blobs}`)}));
+    history.replaceState(null, "", "/history.html");
     vi.resetModules();
     loadPage("history.html");
     harness = stubExtension({});
@@ -153,7 +157,8 @@ describe("saved media on the history page", () => {
     await openSaved([entry(2, now - 1000), entry(1, now, {t: "gif"})], ["https://cdn.test/2-s.jpg"]);
     const images = [...document.querySelectorAll<HTMLImageElement>(".h-tile img")];
     expect(images.map(image => image.getAttribute("src"))).toEqual(["https://cdn.test/1-s.jpg", "blob:saved-1"]);
-    expect($("#saveAll").title).toMatch(/^1 files kept on this device \(5 MB\)/);
+    // The history view is a diary, not a disk: no storage gauge here.
+    expect($("#progress").hidden).toBe(true);
   });
 
   it("opens an item full size, steps through by keys, scroll and mouse buttons, saves it, and closes", async () => {
@@ -213,27 +218,18 @@ describe("saved media on the history page", () => {
     $("#days").dispatchEvent(new MouseEvent("click", {bubbles: true}));
   });
 
-  it("saves every kept file into Downloads after a second press, and says when nothing is kept", async () => {
+  it("saves picked files into Downloads from the selection bar, web originals where no copy is kept", async () => {
     const now = Date.now();
-    await openSaved([entry(2, now - 1000), entry(1, now)], ["https://cdn.test/2-s.jpg", "https://cdn.test/1-s.jpg"]);
-    $("#saveAll").click();
+    await openSaved([entry(3, now - 2000), entry(2, now - 1000), entry(1, now)], ["https://cdn.test/2-s.jpg", "https://cdn.test/1-s.jpg"]);
+    document.querySelectorAll<HTMLButtonElement>("[data-pick]")[0].click();
     await settle();
-    expect($("#saveAll").textContent).toBe("Press again to save 2 files");
-    vi.advanceTimersByTime(3001);
-    expect($("#saveAll").textContent).toBe("Save all to Downloads");
-    $("#saveAll").click();
+    $("#selAll").click();
     await settle();
-    vi.advanceTimersByTime(1000);
-    $("#saveAll").click();
+    $("#selSave").click();
     await settle();
-    expect(downloads).toHaveBeenCalledTimes(2);
-    // The first press's timer finds the button already used, and leaves it alone.
-    vi.advanceTimersByTime(3000);
-    expect($("#summary").textContent).toBe("Saved 2 files to Downloads / LinkPeek Library");
-    await openSaved([entry(1, now)], []);
-    $("#saveAll").click();
-    await settle();
-    expect($("#summary").textContent).toMatch(/^Nothing here is saved on this device yet/);
+    expect(downloads).toHaveBeenCalledTimes(3);
+    expect(downloads.mock.calls.map(([options]: any[]) => options.url)).toEqual(["blob:saved-1", "blob:saved-2", "https://cdn.test/3.jpg"]);
+    expect([$("#summary").textContent, $("#selbar").hidden]).toEqual(["Saved 3 to Downloads / LinkPeek Library", true]);
   });
 });
 
@@ -267,8 +263,12 @@ describe("the saved view", () => {
     expect(tiles.map(t => t.querySelector("figcaption a")!.textContent)).toEqual(["Prepared", "b"]);
     expect(tiles.every(t => t.querySelector(".h-new")!.textContent === "Not seen yet")).toBe(true);
     expect(tiles[1].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/clip.jpg");
-    expect($("#summary").textContent).toBe("2 files, newest first");
-    expect($("#clear").textContent).toBe("Delete saved media");
+    expect($("#summary").textContent).toBe("2 files, newest first · 1 KB on this device");
+    expect($("#clear").textContent).toBe("Delete saved files");
+    // The gauge shows how much of the budget the saved files use.
+    expect($("#progress").hidden).toBe(false);
+    expect($("#progress").title).toContain("of the 2.0 GB");
+    expect(document.getElementById("progressFill")!.style.width).toBe("0%");
   });
 
   it("switches views and filters, keeping them in the address", async () => {
@@ -301,11 +301,12 @@ describe("the saved view", () => {
     $("#clear").click();
     await settle();
     expect($("#clear").textContent).toBe("Press again to delete");
+    expect($("#summary").textContent).toBe("About to delete every saved file: 1 file (1 KB), Downloads copies included.");
     $("#clear").click();
     await settle();
     expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_LIBRARY_CLEAR"});
     expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
-    expect($("#clear").textContent).toBe("Delete saved media");
+    expect($("#clear").textContent).toBe("Delete saved files");
     await openLibrary("corrupt", "?view=saved&filter=bogus");
     expect(chip('[data-filter="all"]').getAttribute("aria-pressed")).toBe("true");
   });
@@ -318,7 +319,7 @@ describe("the saved view", () => {
       ["https://cdn.test/clip.mp4", {bytes: 1, at: now - 9, seen: true, type: "video"}]
     ], "?view=saved&media=gif");
     expect([chip('[data-kind="gif"]').getAttribute("aria-pressed"), document.querySelectorAll(".h-tile").length]).toEqual(["true", 1]);
-    expect($("#summary").textContent).toBe("1 GIF, newest first");
+    expect($("#summary").textContent).toBe("1 GIF, newest first · 1 KB on this device");
     chip('[data-kind="video"]').click();
     await settle();
     expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved&media=video", 1]);
@@ -367,27 +368,34 @@ describe("the saved view", () => {
     document.querySelector<HTMLElement>('[data-index="0"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
     await settle();
     expect($("#viewMeta").textContent).toMatch(/^1 of 2 · 1920×1080 · 2\.0 MB · /);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    // A thumbnail that knows its shape reserves it, so the collage never jumps.
+    expect(document.querySelector('[data-row="0"] img')!.getAttribute("style")).toContain("aspect-ratio: 1920 / 1080");
+    document.querySelector<HTMLElement>('[data-index="0"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
     await settle();
     expect($("#viewMeta").textContent).toMatch(/^2 of 2 · 1 KB · /);
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
-    $("#saveAll").click();
+    $("#select").click();
+    $("#selAll").click();
     await settle();
-    expect($("#saveAll").textContent).toBe("Press again to save 1 files");
-    $("#saveAll").click();
+    $("#selSave").click();
     await settle();
     expect(download).toHaveBeenCalledTimes(1);
     expect(download.mock.calls[0][0]).toMatchObject({filename: expect.stringContaining("b.jpg")});
-    expect($("#summary").textContent).toBe("Saved 1 files to Downloads / LinkPeek Library (1 already there)");
+    expect($("#summary").textContent).toBe("Saved 1 to Downloads / LinkPeek Library (1 already there)");
   });
 
-  it("says when everything shown is already in Downloads", async () => {
+  it("says when everything picked is already in Downloads", async () => {
     const api = await openLibrary([["https://cdn.test/a.jpg", {bytes: 9, at: Date.now(), seen: true, type: "image", dl: 5}]], "?view=saved");
     await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/a.jpg", new Response("bytes"));
     harness.chrome.downloads = {download: vi.fn(), search: vi.fn(async () => [{id: 5, exists: true}])};
-    $("#saveAll").click();
+    document.querySelector<HTMLButtonElement>("[data-pick]")!.click();
     await settle();
-    expect($("#summary").textContent).toBe("Everything shown is already in Downloads / LinkPeek Library.");
+    $("#selSave").click();
+    await settle();
+    expect([$("#summary").textContent, $("#selbar").hidden]).toEqual(["Everything picked is already in Downloads / LinkPeek Library.", true]);
     expect(harness.chrome.downloads.download).not.toHaveBeenCalled();
   });
 });
@@ -470,6 +478,12 @@ describe("selecting many at once, and the live check line", () => {
     $("#selDelete").click();
     await settle();
     expect($("#selDelete").textContent).toBe("Press again to remove 2 files");
+    expect($("#summary").textContent).toBe("About to remove 2 files from this device and Downloads: a.jpg, b.jpg");
+    // Letting the press lapse takes the warning back.
+    vi.advanceTimersByTime(3001);
+    expect($("#summary").textContent).toMatch(/newest first/);
+    $("#selDelete").click();
+    await settle();
     $("#selDelete").click();
     await settle();
     expect(harness.messages).toContainEqual({type: "LINKPEEK_LIBRARY_REMOVE", urls: ["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]});
@@ -486,6 +500,18 @@ describe("selecting many at once, and the live check line", () => {
     expect(harness.messages.filter((msg: any) => msg.type === "LINKPEEK_LIBRARY_REMOVE")).toHaveLength(1);
     $("#select").click();
     expect($("#selbar").hidden).toBe(true);
+  });
+
+  it("names everything a big delete will take, up to a handful", async () => {
+    const now = Date.now();
+    await openLibrary(Array.from({length: 7}, (_, i) => [`https://cdn.test/m${i}.jpg`, {bytes: 1, at: now - i, seen: true, type: "image", title: `M ${i}`}]), "?view=saved");
+    document.querySelector<HTMLButtonElement>("[data-pick]")!.click();
+    await settle();
+    $("#selAll").click();
+    $("#selDelete").click();
+    await settle();
+    expect($("#summary").textContent).toBe("About to remove 7 files from this device and Downloads: m0.jpg, m1.jpg, m2.jpg, m3.jpg, m4.jpg and 2 more");
+    $("#selCancel").click();
   });
 
   it("removes picked entries from the history in the seen view, and forgets picks that filters hide", async () => {
@@ -523,16 +549,77 @@ describe("selecting many at once, and the live check line", () => {
     expect($("#selbar").hidden).toBe(true);
   });
 
+  it("plays a GIF tile only while hovered when that setting is on, and not at all when off", async () => {
+    const now = Date.now();
+    const openWith = async (settings: Record<string, unknown>) => {
+      bands.all.length = 0;
+      const api = fakeCaches();
+      vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:gif")}));
+      history.replaceState(null, "", "/history.html?view=saved");
+      vi.resetModules();
+      loadPage("history.html");
+      harness = stubExtension(settings);
+      harness.store[LIB] = [
+        ["https://cdn.test/anim.gif", {bytes: 1, at: now, seen: true, type: "gif", title: "Anim", preview: "https://cdn.test/anim-s.jpg", original: "https://x.test/anim.gif"}],
+        ["https://cdn.test/pic.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "Pic"}],
+        ["https://cdn.test/bare.gif", {bytes: 1, at: now - 2, seen: true, type: "gif", title: "Bare"}]
+      ];
+      await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/anim.gif", new Response("gifbytes"));
+      await import("../../src/pages/history");
+      await settle();
+      return [...document.querySelectorAll<HTMLElement>(".h-tile")];
+    };
+    const tiles = await openWith({libraryGifHover: true});
+    const img = tiles[0].querySelector("img")!;
+    expect(img.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+    tiles[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(img.getAttribute("src")).toBe("blob:gif");
+    // Hovering again keeps the remembered still; moving within the tile changes nothing; leaving stills it.
+    tiles[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    tiles[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true, relatedTarget: img}));
+    tiles[0].dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
+    await settle();
+    expect(img.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+    // Leaving without having hovered, plain pictures, previewless GIFs and stale tiles are all left alone.
+    tiles[0].dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
+    tiles[1].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    tiles[2].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    tiles[1].dataset.row = "99";
+    tiles[1].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    $("#days").dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(tiles[1].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/pic.jpg");
+    // Off (the default), hovering changes nothing.
+    const off = await openWith({});
+    off[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(off[0].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+  });
+
   it("narrates the saved-files check on one line as the worker reports it", async () => {
     await openLibrary(rows(), "?view=saved");
     const tick = (patch: Record<string, unknown>) => {
       for (const listener of harness.runtimeListeners) listener({type: "LINKPEEK_AUDIT_TICK", checked: 142, total: 384, removed: 3, mirrored: 12, url: "https://cdn.test/folder/beach.jpg?x=1", resting: 0, ...patch});
     };
+    // Too early for an estimate.
+    tick({checked: 2, removed: 0, mirrored: 0});
+    expect($("#summary").textContent).toBe("Checking saved files · 1% · 2 of 384 · 0 removed · 0 added to Downloads · beach.jpg");
     tick({});
-    expect($("#summary").textContent).toBe("Checking saved files · 142 of 384 · 3 removed · 12 added to Downloads · beach.jpg");
+    expect($("#summary").textContent).toBe("Checking saved files · 37% · 142 of 384 · 3 removed · 12 added to Downloads · beach.jpg · about 1s left");
+    expect([$("#progress").classList.contains("h-bar-live"), document.getElementById("progressFill")!.style.width]).toEqual([true, "37%"]);
     // Under load it says it is easing off; an address with no file name shows whole.
     tick({resting: 800, url: "https://cdn.test/"});
-    expect($("#summary").textContent).toBe("Checking saved files · 142 of 384 · 3 removed · 12 added to Downloads · https://cdn.test/ · easing off to spare the browser");
+    expect($("#summary").textContent).toBe("Checking saved files · 37% · 142 of 384 · 3 removed · 12 added to Downloads · https://cdn.test/ · about 1s left · easing off to spare the browser");
+    // The estimate follows the measured pace.
+    vi.advanceTimersByTime(10_000);
+    tick({checked: 284});
+    expect($("#summary").textContent).toContain("about 4s left");
+    // The last file hands the bar back to the storage gauge.
+    tick({checked: 384});
+    expect($("#summary").textContent).not.toContain("left");
+    expect($("#progress").classList.contains("h-bar-live")).toBe(false);
+    expect($("#progress").title).toContain("of the 2.0 GB");
     for (const listener of harness.runtimeListeners) listener({type: "OTHER"});
   });
 });
@@ -568,15 +655,18 @@ describe("tags, order and the slideshow", () => {
 
   it("mines tag chips from titles, filters by one, and keeps it in the address", async () => {
     await openLibrary(aliceRows(), "?view=saved");
-    const chips = [...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")];
-    expect(chips.map(button => button.textContent)).toEqual(["Alice", "Bob"]);
-    chips[0].click();
+    const chips = () => [...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")];
+    expect(chips().map(button => button.textContent)).toEqual(["Alice", "Bob"]);
+    chips()[0].click();
     await settle();
     expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved&tag=alice", 3]);
+    // The picked tag stays, pressed; nothing else from these titles leads anywhere.
+    expect(chips().map(button => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["Alice", "true"]]);
     // The same press clears it again.
     chip('#tags [data-tag="alice"]').click();
     await settle();
     expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved", 8]);
+    expect(chips().map(button => button.textContent)).toEqual(["Alice", "Bob"]);
     // A click beside the chips changes nothing.
     document.querySelector("#tags")!.dispatchEvent(new MouseEvent("click", {bubbles: true}));
     await settle();
@@ -588,10 +678,52 @@ describe("tags, order and the slideshow", () => {
     expect($("#summary").textContent).toBe("Nothing here carries \u201calice\u201d.");
   });
 
-  it("drops a tag from the address that the titles no longer carry, and hides the row without tags", async () => {
+  it("stacks tags, each pick narrowing the chips to what still has results", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/ab1.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "Alice beach aa"}],
+      ["https://cdn.test/ab2.jpg", {bytes: 1, at: now - 2, seen: true, type: "image", title: "Alice beach bb"}],
+      ["https://cdn.test/at.jpg", {bytes: 1, at: now - 3, seen: true, type: "image", title: "Alice town cc"}],
+      ["https://cdn.test/b1.jpg", {bytes: 1, at: now - 4, seen: true, type: "image", title: "Bob dd"}],
+      ["https://cdn.test/b2.jpg", {bytes: 1, at: now - 5, seen: true, type: "image", title: "Bob ee"}],
+      ["https://cdn.test/b3.jpg", {bytes: 1, at: now - 6, seen: true, type: "image", title: "Bob ff"}]
+    ], "?view=saved");
+    const chips = () => [...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")];
+    chip('#tags [data-tag="alice"]').click();
+    await settle();
+    // Only tags that still have results within the pick are offered next to it.
+    expect(chips().map(button => button.dataset.tag)).toEqual(["alice", "alice beach"]);
+    chip('#tags [data-tag="alice beach"]').click();
+    await settle();
+    expect(new URLSearchParams(location.search).get("tag")).toBe("alice,alice beach");
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(2);
+    // Dropping the broader tag keeps the narrower one working.
+    chip('#tags [data-tag="alice"]').click();
+    await settle();
+    expect([new URLSearchParams(location.search).get("tag"), document.querySelectorAll(".h-tile").length]).toEqual(["alice beach", 2]);
+  });
+
+  it("remembers the preview size on this device", async () => {
+    localStorage.removeItem("libraryTile");
+    await openLibrary(aliceRows(), "?view=saved");
+    const slider = $<HTMLInputElement>("#tileSize");
+    expect([slider.value, $("#days").style.getPropertyValue("--tile")]).toEqual(["220", "220px"]);
+    slider.value = "320";
+    slider.dispatchEvent(new Event("input"));
+    expect($("#days").style.getPropertyValue("--tile")).toBe("320px");
+    await openLibrary(aliceRows(), "?view=saved");
+    expect($<HTMLInputElement>("#tileSize").value).toBe("320");
+  });
+
+  it("keeps an address tag as a pressed chip even when nothing offers it, and hides an empty row", async () => {
     await openLibrary(aliceRows(), "?view=saved&tag=zzz");
-    expect(location.search).toBe("?view=saved");
-    expect(document.querySelectorAll('#tags [aria-pressed="true"]')).toHaveLength(0);
+    // The stray tag shows exactly what is filtering, and a press takes it off.
+    expect($("#summary").textContent).toBe("Nothing here carries \u201czzz\u201d.");
+    const stray = chip('#tags [data-tag="zzz"]');
+    expect(stray.getAttribute("aria-pressed")).toBe("true");
+    stray.click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved", 8]);
     await openLibrary([["https://cdn.test/x.jpg", {bytes: 1, at: now(), seen: true, title: "Lone title"}]], "?view=saved");
     expect($("#tags").hidden).toBe(true);
   });
@@ -635,7 +767,7 @@ describe("tags, order and the slideshow", () => {
     expect($("#view").hidden).toBe(false);
     // The GIF leads although both unseen files carry the tag.
     expect($("#viewTitle").textContent).toBe("Alice anim run");
-    expect($("#viewMeta").textContent).toMatch(/1 of 2 .*· slideshow$/);
+    expect($("#viewMeta").textContent).toMatch(/1 of 2 .*· slideshow · about 3s left$/);
     expect(harness.messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_HISTORY_ADD", entry: expect.objectContaining({o: "https://x.test/anim.gif"})}));
     await vi.advanceTimersByTimeAsync(3000);
     await settle();

@@ -226,11 +226,12 @@ input[type="range"] { accent-color: var(--signal); }
 .history-summary { margin: 14px 20px 0; font-size: 13px; }
 .h-day { padding: 8px 20px 4px; }
 .h-day h2 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--signal, #D7FF3F); margin: 14px 0 10px; }
-.h-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
-.h-tile { margin: 0; border: 1px solid var(--line, #29302A); border-radius: 12px; overflow: hidden; background: var(--panel, #111512); }
-.h-media { position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; background: #050605; }
-.h-media img { width: 100%; height: 100%; object-fit: cover; }
-.h-none { color: var(--muted, #858D83); font-size: 12px; }
+/* A collage: every tile keeps its own shape, packed into columns with no dead space. */
+.h-grid { columns: var(--tile, 220px) auto; column-gap: 10px; }
+.h-tile { margin: 0 0 10px; break-inside: avoid; border: 1px solid var(--line, #29302A); border-radius: 12px; overflow: hidden; background: var(--panel, #111512); }
+.h-media { position: relative; display: block; background: #050605; }
+.h-media img { display: block; width: 100%; height: auto; }
+.h-none { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted, #858D83); font-size: 12px; }
 .h-badge { position: absolute; top: 7px; right: 7px; padding: 1px 6px; border-radius: 6px; background: var(--signal, #D7FF3F); color: #111512; font: 800 10px ui-monospace, monospace; }
 .h-tile figcaption { display: flex; gap: 8px; align-items: baseline; padding: 7px 9px; font-size: 12px; }
 .h-tile figcaption a { flex: 1; min-width: 0; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -240,7 +241,9 @@ input[type="range"] { accent-color: var(--signal); }
 @media (max-width: 640px) { .history-head { flex-wrap: wrap; } .history-search { width: 100%; order: 5; } }
 
 /* The full-size viewer on the history page. */
-.h-media img[data-src] { visibility: hidden; }
+.h-media img[data-src] { visibility: hidden; aspect-ratio: 4 / 3; }
+/* The preview-size slider. */
+.h-size { width: 110px; accent-color: var(--signal, #D7FF3F); }
 .h-view { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 64px 1fr 64px; grid-template-rows: auto 1fr; background: rgba(5, 6, 5, .96); }
 .h-view[hidden] { display: none; }
 .h-view-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line, #29302A); }
@@ -276,3 +279,9 @@ input[type="range"] { accent-color: var(--signal); }
 .h-selcount { color: var(--text, #F2F5EE); font: 700 13px Inter, "Segoe UI", system-ui, sans-serif; }
 /* The rubber band DragSelect draws. */
 .ds-selector { border: 1px solid var(--signal, #D7FF3F); background: rgba(215, 255, 63, .12); }
+
+/* The one thin bar: the space used at rest, a task's progress while one runs. */
+.h-bar { height: 4px; margin: 8px 20px 0; border-radius: 999px; background: var(--raised, #181E19); overflow: hidden; }
+.h-bar[hidden] { display: none; }
+.h-bar-fill { height: 100%; width: 0; border-radius: 999px; background: var(--muted, #858D83); transition: width .2s ease; }
+.h-bar-live .h-bar-fill { background: var(--signal, #D7FF3F); }

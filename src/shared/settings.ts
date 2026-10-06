@@ -156,6 +156,8 @@ export interface LinkPeekSettings {
   savedMediaBudgetMb: number;
   /** Each saved file is also written into Downloads / LinkPeek Library, so the files themselves can be browsed. */
   saveToDownloads: boolean;
+  /** Library tiles hold a GIF still until the pointer rests on them. */
+  libraryGifHover: boolean;
 
   // Keyboard and sites
   shortcuts: Shortcuts;
@@ -313,6 +315,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   savePreparedMedia: true,
   savedMediaBudgetMb: 2048,
   saveToDownloads: true,
+  libraryGifHover: false,
 
   shortcuts: DEFAULT_SHORTCUTS,
   siteProfiles: {},

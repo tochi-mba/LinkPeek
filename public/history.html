@@ -11,8 +11,8 @@
     <div class="mark">LP</div>
     <div><div class="rex">REX TECHNOLOGIES</div><h1>Library</h1></div>
     <div class="h-views" role="group" aria-label="Show">
-      <button type="button" class="h-chip" data-show="seen" aria-pressed="true">Seen</button>
-      <button type="button" class="h-chip" data-show="saved" aria-pressed="false">Saved on this device</button>
+      <button type="button" class="h-chip" data-show="seen" aria-pressed="true" title="The diary: everything LinkPeek has shown you, even when its file is gone">History</button>
+      <button type="button" class="h-chip" data-show="saved" aria-pressed="false" title="Every file kept on this device, preloaded ones included">Saved files</button>
     </div>
     <div class="h-views" role="group" aria-label="Kind of media">
       <button type="button" class="h-chip" data-kind="all" aria-pressed="true">All media</button>
@@ -26,6 +26,7 @@
       <button type="button" class="h-chip" data-filter="seen" aria-pressed="false">Seen</button>
     </div>
     <span class="spacer"></span>
+    <input id="tileSize" class="h-size" type="range" min="140" max="420" step="20" value="220" aria-label="Preview size" title="Preview size">
     <select id="sort" class="h-sort" aria-label="Order">
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
@@ -36,7 +37,6 @@
     <button id="select" class="button ghost" type="button" aria-pressed="false" title="Select many at once: drag a box over the grid, or use the checkmarks on the tiles">Select</button>
     <button id="play" class="button ghost" type="button" title="A run of everything saved that you have never seen, GIFs first, honouring the filters, tag and search. Every slide shown is marked as seen.">▶ Play unseen</button>
     <button id="audit" class="button ghost" type="button" title="Measure every saved file, remove ones below your minimum media size, and add missing copies to Downloads / LinkPeek Library" hidden>Check saved files</button>
-    <button id="saveAll" class="button ghost" type="button" title="Save every file kept on this device into Downloads / LinkPeek Library">Save all to Downloads</button>
     <button id="clear" class="button ghost" type="button">Clear history</button>
   </header>
   <div id="tags" class="h-tags" role="group" aria-label="Tags from titles" hidden></div>
@@ -44,10 +44,12 @@
     <span id="selCount" class="h-selcount"></span>
     <span class="spacer"></span>
     <button id="selAll" class="button ghost" type="button">Select all shown</button>
+    <button id="selSave" class="button ghost" type="button" title="Write the picked files into Downloads / LinkPeek Library, skipping copies already there">Save to Downloads</button>
     <button id="selDelete" class="button ghost" type="button">Delete files</button>
     <button id="selCancel" class="button ghost" type="button">Cancel</button>
   </div>
   <p id="summary" class="history-summary muted" role="status"></p>
+  <div id="progress" class="h-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Progress" hidden><div id="progressFill" class="h-bar-fill"></div></div>
   <main id="days"></main>
   <div id="more" class="history-more" aria-hidden="true"></div>
   <div id="view" class="h-view" role="dialog" aria-modal="true" aria-label="Saved media" hidden>

@@ -1,16 +1,18 @@
 /**
  * The library page, in two views:
  *
- * - Seen: everything LinkPeek has shown, newest first, grouped by day.
- * - Saved on this device: every file kept, from links prepared in the
+ * - History: everything LinkPeek has shown, newest first, grouped by day —
+ *   the diary, which outlives the files themselves.
+ * - Saved files: every file kept on this device, from links prepared in the
  *   background as well as from what was shown, filterable to what you have
  *   not seen yet (the preloaded media) or have.
  *
  * Thumbnails come from the saved copies when there are any, so the page works
  * offline; the list grows as you scroll and search filters it. Clicking an item
  * opens it full size (arrows, scroll or the mouse's side buttons move through,
- * Escape closes). "Save all to Downloads" writes the saved files of the current
- * view into a LinkPeek Library folder, named by when they were seen or saved.
+ * Escape closes). Select mode sweeps up many rows for deleting together or for
+ * writing their files into Downloads / LinkPeek Library by hand — the copies
+ * usually arrive there on their own as files are saved.
  */
 import DragSelect from "dragselect";
 import {escapeHtml} from "../shared/dom";
@@ -76,9 +78,10 @@ let view: View = "seen";
 let filter: Filter = "all";
 let kind: Kind = "all";
 let sort: Sort = "newest";
-/** The active tag's normalised key, or null for no tag. */
-let tag: string | null = null;
-let tags: TitleTag[] = [];
+/** The tags switched on, in the order they were picked; rows must carry them all. */
+let activeTags: string[] = [];
+/** The display spelling of every tag ever offered, so a pressed chip keeps its label. */
+const tagLabels = new Map<string, string>();
 let settings: LinkPeekSettings = DEFAULT_SETTINGS;
 /** Everything ever seen, anywhere, so the slideshow can promise something new. */
 const seenMedia = new SeenMedia();
@@ -119,11 +122,50 @@ function displayTitle(row: Row) {
   return row.title || linkLabel(row.source);
 }
 
+/** A size people can read: KB under a megabyte, then MB, then GB. */
+function sizeLabel(bytes: number) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** The one thin bar under the summary, busy with a task's share of the work. */
+function paintLive(fraction: number) {
+  const bar = $("progress"), percent = Math.min(100, Math.round(fraction * 100));
+  bar.hidden = false;
+  bar.classList.add("h-bar-live");
+  bar.removeAttribute("title");
+  bar.setAttribute("aria-valuenow", String(percent));
+  ($("progressFill") as HTMLElement).style.width = `${percent}%`;
+}
+
+/** The same bar at rest: how much of the space for saved media is used. */
+function paintStorage() {
+  const bar = $("progress");
+  if (view !== "saved") {
+    bar.hidden = true;
+    return;
+  }
+  const used = savedRows.reduce((sum, row) => sum + row.bytes!, 0);
+  const budget = settings.savedMediaBudgetMb * 1024 * 1024;
+  const percent = Math.min(100, Math.round(used / budget * 100));
+  bar.hidden = false;
+  bar.classList.remove("h-bar-live");
+  bar.title = `${sizeLabel(used)} of the ${sizeLabel(budget)} for saved media is used`;
+  bar.setAttribute("aria-valuenow", String(percent));
+  ($("progressFill") as HTMLElement).style.width = `${percent}%`;
+}
+
+/** A thumbnail that already knows its shape holds its place before it loads, so the collage never jumps. */
+function shaped(picture: string, row: Row) {
+  return row.w ? picture.replace("<img ", `<img style="aspect-ratio: ${row.w} / ${row.h}" `) : picture;
+}
+
 function tile(row: Row, index: number) {
   const title = displayTitle(row);
   const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "");
   const picture = row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">${row.type === "video" ? "Video" : "No preview"}</span>`;
-  return `<figure class="h-tile${chosen.has(row) ? " h-selected" : ""}" data-row="${index}"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${picture}${badges}</a>`
+  return `<figure class="h-tile${chosen.has(row) ? " h-selected" : ""}" data-row="${index}"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${shaped(picture, row)}${badges}</a>`
     + `<button type="button" class="h-pick" data-pick aria-pressed="${String(chosen.has(row))}" aria-label="Select">✓</button>`
     + `<figcaption><a href="${escapeHtml(row.source)}" target="_blank" rel="noopener" title="${escapeHtml(row.source)}">${escapeHtml(title)}</a>`
     + `<time datetime="${new Date(row.at).toISOString()}">${new Date(row.at).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}</time></figcaption></figure>`;
@@ -186,40 +228,51 @@ function rowHasTag(row: Row, key: string) {
   return hit;
 }
 
-/** The rows of the current view, seen-state filter, kind of media and tag, before searching. */
+/** The rows of the current view, seen-state filter, kind of media and every active tag, before searching. */
 function current() {
   let base = view === "seen" ? seenRows : filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
   if (kind !== "all") base = base.filter(row => row.type === kind);
-  if (tag) base = base.filter(row => rowHasTag(row, tag!));
+  for (const key of activeTags) base = base.filter(row => rowHasTag(row, key));
   return base;
 }
 
-/**
- * Mines the tag chips from every title on record. The active tag survives
- * only while it is still offered, so the chips always explain the filter.
- */
+/** Remembers the display spelling of every tag the whole collection offers. */
 function computeTags() {
-  tags = mineTags([...seenRows, ...savedRows].map(row => row.title ?? ""));
-  if (tag && !tags.some(mined => mined.key === tag)) {
-    tag = null;
-    writeAddress();
-  }
+  for (const mined of mineTags([...seenRows, ...savedRows].map(row => row.title ?? ""))) tagLabels.set(mined.key, mined.label);
+}
+
+function chipMarkup(key: string, label: string, count: number | null) {
+  return `<button type="button" class="h-chip" data-tag="${escapeHtml(key)}" aria-pressed="${String(activeTags.includes(key))}"${count === null ? "" : ` title="${count.toLocaleString()} titles"`}>${escapeHtml(label)}</button>`;
+}
+
+/**
+ * The chips on offer: every tag switched on stays first (pressed, so it can
+ * be switched off), and the rest are re-mined from the rows that remain —
+ * picking a tag narrows the row to the tags that still lead anywhere.
+ */
+function renderTags() {
+  const offered = mineTags(current().map(row => row.title ?? "")).filter(mined => !activeTags.includes(mined.key));
+  for (const mined of offered) tagLabels.set(mined.key, mined.label);
   const host = $("tags");
-  host.innerHTML = tags.map(mined =>
-    `<button type="button" class="h-chip" data-tag="${escapeHtml(mined.key)}" aria-pressed="${String(mined.key === tag)}" title="${mined.count.toLocaleString()} titles">${escapeHtml(mined.label)}</button>`).join("");
-  host.hidden = !tags.length;
+  host.innerHTML = [
+    ...activeTags.map(key => chipMarkup(key, tagLabels.get(key) ?? key, null)),
+    ...offered.map(mined => chipMarkup(mined.key, mined.label, mined.count))
+  ].join("");
+  host.hidden = !host.innerHTML;
 }
 
 function summary() {
   const base = current(), query = ($("search") as HTMLInputElement).value.trim(), noun = NOUNS[kind][view === "seen" ? 0 : 1];
   if (!base.length) {
-    if (tag) return `Nothing here carries \u201c${tag}\u201d.`;
+    if (activeTags.length) return `Nothing here carries ${activeTags.map(key => `\u201c${key}\u201d`).join(" + ")}.`;
     if (kind !== "all") return `No ${noun}s ${view === "seen" ? "in the history" : "among the saved files"} yet.`;
     if (view === "seen") return "Nothing here yet. What you open in LinkPeek appears here, newest first.";
     return filter === "unseen" ? "Nothing preloaded is waiting: everything saved has been seen." : "Nothing is saved on this device yet. Prepared and shown media is saved here as LinkPeek works.";
   }
   if (query) return `${shown.length.toLocaleString()} of ${base.length.toLocaleString()} match “${query}”`;
-  return `${base.length.toLocaleString()} ${noun}${base.length === 1 ? "" : "s"}, newest first`;
+  const count = `${base.length.toLocaleString()} ${noun}${base.length === 1 ? "" : "s"}, newest first`;
+  // Saved files know their weight; the history is a diary, not a disk.
+  return view === "saved" ? `${count} · ${sizeLabel(base.reduce((sum, row) => sum + row.bytes!, 0))} on this device` : count;
 }
 
 /** Shows the right buttons as active for the current view and filter. */
@@ -227,14 +280,13 @@ function paintControls() {
   for (const button of document.querySelectorAll<HTMLElement>("[data-show]")) button.setAttribute("aria-pressed", String(button.dataset.show === view));
   for (const button of document.querySelectorAll<HTMLElement>("[data-filter]")) button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
   for (const button of document.querySelectorAll<HTMLElement>("[data-kind]")) button.setAttribute("aria-pressed", String(button.dataset.kind === kind));
-  for (const button of document.querySelectorAll<HTMLElement>("[data-tag]")) button.setAttribute("aria-pressed", String(button.dataset.tag === tag));
   const order = $("sort") as HTMLSelectElement;
   order.value = sort;
   // Only saved files know their size, so the seen view cannot order by it.
   order.querySelector<HTMLOptionElement>('option[value="largest"]')!.disabled = view === "seen";
   $("filters").hidden = view !== "saved";
   $("audit").hidden = view !== "saved";
-  $("clear").textContent = view === "seen" ? "Clear history" : "Delete saved media";
+  $("clear").textContent = view === "seen" ? "Clear history" : "Delete saved files";
 }
 
 // ---- Selecting many at once ----
@@ -271,7 +323,9 @@ function enterSelecting() {
   document.body.classList.add("h-selecting");
   $("select").setAttribute("aria-pressed", "true");
   $("selDelete").textContent = deleteLabel();
-  deleteStep = new TwoStep($("selDelete"), deleteLabel);
+  deleteStep = new TwoStep($("selDelete"), deleteLabel, () => {
+    $("summary").textContent = summary();
+  });
   band = new DragSelect<HTMLElement>({area: $("days"), draggability: false, selectables: tilesNow(), selectedClass: "h-banded"});
   // A drag of the band settles the whole selection; click toggles go through toggleRow below.
   band.subscribe("DS:end", ({items}) => {
@@ -309,12 +363,23 @@ function toggleRow(el: HTMLElement) {
   paintSelection();
 }
 
+/** Names exactly what a confirmed delete will take, a handful of files by name. */
+function aboutToRemove(rows: Row[], what: string) {
+  const names = rows.slice(0, 5).map(row => shortName(row.saved));
+  const more = rows.length - names.length;
+  const where = view === "seen" ? "from the history only" : "from this device and Downloads";
+  return `About to remove ${what} ${where}: ${names.join(", ")}${more > 0 ? ` and ${more.toLocaleString()} more` : ""}`;
+}
+
 /** Deletes the picked rows: saved files leave with their Downloads copies, seen rows leave the history. */
 async function deleteChosen() {
   const rows = [...chosen];
   if (!rows.length) return;
-  const noun = view === "seen" ? "entries" : "files";
-  if (!deleteStep!.confirm(`Press again to remove ${rows.length.toLocaleString()} ${noun}`)) return;
+  const what = view === "seen" ? plural(rows.length, "entry", "entries") : plural(rows.length, "file");
+  if (!deleteStep!.confirm(`Press again to remove ${what}`)) {
+    $("summary").textContent = aboutToRemove(rows, what);
+    return;
+  }
   if (view === "seen") {
     await chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_REMOVE", entries: rows.map(row => ({a: row.at, o: row.open}))}).catch(() => undefined);
     seenRows = seenRows.filter(row => !chosen.has(row));
@@ -353,6 +418,7 @@ async function apply() {
   shown = (words.length ? base.filter(row => matchesSearch(row, words)) : base).slice().sort(ORDERS[sort]);
   rendered = 0;
   paintControls();
+  renderTags();
   $("days").replaceChildren();
   $("summary").textContent = summary();
   await renderMore();
@@ -362,13 +428,18 @@ async function apply() {
     if (!visible.has(row)) chosen.delete(row);
   }
   paintSelection();
+  paintStorage();
 }
 
-/** A button that asks for a second press within a few seconds; only the second one acts. */
+/**
+ * A button that asks for a second press within a few seconds; only the second
+ * one acts. While it waits, the caller shows what is about to happen; letting
+ * it lapse calls `onIdle` so that warning is taken back too.
+ */
 class TwoStep {
   private until = 0;
 
-  constructor(private button: HTMLElement, private idle: () => string) {}
+  constructor(private button: HTMLElement, private idle: () => string, private onIdle: () => void) {}
 
   confirm(ask: string) {
     if (Date.now() <= this.until) {
@@ -382,21 +453,31 @@ class TwoStep {
       if (this.until !== until) return;
       this.until = 0;
       this.button.textContent = this.idle();
+      this.onIdle();
     }, CONFIRM_MS);
     return false;
   }
 }
 
-let clearStep: TwoStep, saveStep: TwoStep;
+let clearStep: TwoStep;
 
-/** Clears the history, or deletes the saved files, depending on the view. */
+const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString()} ${count === 1 ? one : many}`;
+
+/** Clears the history, or deletes the saved files, depending on the view — after saying exactly what will go. */
 async function clearView() {
   if (view === "seen") {
-    if (!clearStep.confirm("Press again to clear")) return;
+    if (!clearStep.confirm("Press again to clear")) {
+      $("summary").textContent = `About to clear the whole history: ${plural(seenRows.length, "entry", "entries")}. Saved files stay.`;
+      return;
+    }
     await chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_CLEAR"});
     seenRows = [];
   } else {
-    if (!clearStep.confirm("Press again to delete")) return;
+    if (!clearStep.confirm("Press again to delete")) {
+      const bytes = savedRows.reduce((sum, row) => sum + row.bytes!, 0);
+      $("summary").textContent = `About to delete every saved file: ${plural(savedRows.length, "file")} (${sizeLabel(bytes)}), Downloads copies included.`;
+      return;
+    }
     await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_CLEAR"});
     savedRows = [];
   }
@@ -415,6 +496,7 @@ function fileName(row: Row) {
  */
 async function auditSaved() {
   $("summary").textContent = "Checking the saved files…";
+  paintLive(0);
   const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number} | undefined;
   savedRows = await readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => []);
   computeTags();
@@ -424,17 +506,35 @@ async function auditSaved() {
     : "Couldn’t check the saved files.";
 }
 
+/** A rough time left, in friendly units. */
+function etaLabel(ms: number) {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 90 ? `about ${Math.max(1, seconds)}s left` : `about ${Math.round(seconds / 60)} min left`;
+}
+
 /** The file's own name, for the one-line progress of the saved-files check. */
 function shortName(url: string) {
   const tail = url.split("/").pop()!.split("?")[0];
   return tail || url;
 }
 
-/** One line, updated live while the worker checks the saved files. */
+let auditStart = 0;
+
+/** One line and the bar, updated live while the worker checks the saved files. */
 function onAuditTick(tick: AuditTickMessage) {
-  $("summary").textContent = `Checking saved files · ${tick.checked.toLocaleString()} of ${tick.total.toLocaleString()}`
+  auditStart ||= Date.now();
+  paintLive(tick.checked / tick.total);
+  const left = (tick.total - tick.checked) * (Date.now() - auditStart) / tick.checked;
+  $("summary").textContent = `Checking saved files · ${Math.round(tick.checked / tick.total * 100)}%`
+    + ` · ${tick.checked.toLocaleString()} of ${tick.total.toLocaleString()}`
     + ` · ${tick.removed.toLocaleString()} removed · ${tick.mirrored.toLocaleString()} added to Downloads · ${shortName(tick.url)}`
+    + (tick.checked >= 5 && tick.checked < tick.total ? ` · ${etaLabel(left)}` : "")
     + (tick.resting ? " · easing off to spare the browser" : "");
+  // Done — the bar goes back to showing the space used (a check the worker ran by itself ends here too).
+  if (tick.checked === tick.total) {
+    auditStart = 0;
+    paintStorage();
+  }
 }
 
 /** The ids of Downloads copies whose file is still on disk. */
@@ -443,31 +543,37 @@ async function inDownloads() {
   return new Set(found.filter(item => item.exists !== false).map(item => item.id));
 }
 
-async function saveAll() {
-  const saved = (await Promise.all(shown.map(async row => ({row, url: await savedCopy(row.saved)})))).filter(item => item.url);
-  if (!saved.length) {
-    $("summary").textContent = "Nothing here is saved on this device yet. Turn on Settings → Privacy → Save what you see.";
-    return;
-  }
-  // Files whose Downloads copy is still on disk are not written twice; rows from the seen view find theirs by address.
+/**
+ * Writes the picked rows' files into Downloads by hand — the saved copy when
+ * one is kept, the original otherwise — skipping copies already on disk.
+ * This is the manual path for when automatic copies are turned off.
+ */
+async function saveChosen() {
+  const rows = [...chosen];
+  if (!rows.length) return;
   const there = await inDownloads();
   const dlOf = new Map(savedRows.filter(row => row.dl !== undefined).map(row => [row.saved, row.dl!] as const));
-  const wanted = saved.filter(({row}) => {
+  const wanted = rows.filter(row => {
     const dl = row.dl ?? dlOf.get(row.saved);
     return dl === undefined || !there.has(dl);
   });
   if (!wanted.length) {
-    $("summary").textContent = "Everything shown is already in Downloads / LinkPeek Library.";
+    exitSelecting();
+    $("summary").textContent = "Everything picked is already in Downloads / LinkPeek Library.";
     return;
   }
-  if (!saveStep.confirm(`Press again to save ${wanted.length.toLocaleString()} files`)) return;
   let done = 0;
-  for (const {row, url} of wanted) {
-    await chrome.downloads.download({url: url!, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
-    $("summary").textContent = `Saving to Downloads / LinkPeek Library… ${++done} of ${wanted.length}`;
+  const began = Date.now();
+  for (const row of wanted) {
+    await chrome.downloads.download({url: await savedCopy(row.saved) ?? row.open, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
+    const left = (wanted.length - ++done) * (Date.now() - began) / done;
+    $("summary").textContent = `Saving to Downloads / LinkPeek Library… ${done} of ${wanted.length}${done >= 2 && done < wanted.length ? ` · ${etaLabel(left)}` : ""}`;
+    paintLive(done / wanted.length);
   }
-  const skipped = saved.length - wanted.length;
-  $("summary").textContent = `Saved ${wanted.length.toLocaleString()} files to Downloads / LinkPeek Library${skipped ? ` (${skipped.toLocaleString()} already there)` : ""}`;
+  const skipped = rows.length - wanted.length;
+  exitSelecting();
+  paintStorage();
+  $("summary").textContent = `Saved ${wanted.length.toLocaleString()} to Downloads / LinkPeek Library${skipped ? ` (${skipped.toLocaleString()} already there)` : ""}`;
 }
 
 // ---- The full-size viewer and the slideshow ----
@@ -479,6 +585,16 @@ let paused = false;
 let playTimer: ReturnType<typeof setTimeout> | undefined;
 /** Something became seen while the viewer was open; the grid refreshes on close. */
 let seenChanged = false;
+/** The viewer's meta line without the slideshow suffix, so pause can redraw it. */
+let metaBase = "";
+
+/** What the slideshow adds to the meta line: its state, and roughly how long the rest will take. */
+function modeSuffix() {
+  if (!playing) return "";
+  if (paused) return " · slideshow paused";
+  const remaining = viewed().length - viewing - 1;
+  return ` · slideshow${remaining > 0 ? ` · ${etaLabel(remaining * Math.max(1, settings.slideshowSeconds) * 1000)}` : ""}`;
+}
 
 function viewed() {
   return playlist ?? shown;
@@ -515,9 +631,9 @@ async function showItem(index: number) {
   title.href = row.source;
   ($("viewOriginal") as HTMLAnchorElement).href = row.open;
   const size = row.w ? ` · ${row.w}×${row.h}` : "";
-  const weight = row.bytes ? ` · ${row.bytes >= 1024 * 1024 ? `${(row.bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(row.bytes / 1024))} KB`}` : "";
-  const mode = playing ? (paused ? " · slideshow paused" : " · slideshow") : "";
-  $("viewMeta").textContent = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}${mode}`;
+  const weight = row.bytes ? ` · ${sizeLabel(row.bytes)}` : "";
+  metaBase = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}`;
+  $("viewMeta").textContent = metaBase + modeSuffix();
   markSeen(row);
   if (playing) {
     stage.querySelector("video")?.addEventListener("ended", () => advance(), {once: true});
@@ -568,7 +684,7 @@ function startSlideshow() {
   const words = searchWords();
   let pool = savedRows.filter(row => !row.seen && !seenMedia.has({originalUrl: row.open}));
   if (kind !== "all") pool = pool.filter(row => row.type === kind);
-  if (tag) pool = pool.filter(row => rowHasTag(row, tag!));
+  for (const key of activeTags) pool = pool.filter(row => rowHasTag(row, key));
   if (words.length) pool = pool.filter(row => matchesSearch(row, words));
   playlist = [...shuffleRows(pool.filter(row => row.type === "gif")), ...shuffleRows(pool.filter(row => row.type !== "gif"))];
   if (!playlist.length) {
@@ -589,7 +705,7 @@ function togglePause() {
   if (!playing) return;
   paused = !paused;
   $("viewPause").textContent = paused ? "Resume" : "Pause";
-  $("viewMeta").textContent = $("viewMeta").textContent!.replace(/ · slideshow( paused)?$/, paused ? " · slideshow paused" : " · slideshow");
+  $("viewMeta").textContent = metaBase + modeSuffix();
   if (paused) clearTimeout(playTimer);
   else queueAdvance(viewed()[viewing]);
 }
@@ -655,7 +771,7 @@ function readAddress() {
   kind = media === "gif" || media === "video" || media === "image" ? media : "all";
   const order = params.get("sort");
   sort = order === "oldest" || order === "title" || order === "largest" ? order : "newest";
-  tag = params.get("tag");
+  activeTags = (params.get("tag") ?? "").split(",").map(part => part.trim()).filter(Boolean);
 }
 
 function writeAddress() {
@@ -664,14 +780,23 @@ function writeAddress() {
   if (view === "saved" && filter !== "all") params.set("filter", filter);
   if (kind !== "all") params.set("media", kind);
   if (sort !== "newest") params.set("sort", sort);
-  if (tag) params.set("tag", tag);
+  if (activeTags.length) params.set("tag", activeTags.join(","));
   history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
 }
 
 async function start() {
-  clearStep = new TwoStep($("clear"), () => view === "seen" ? "Clear history" : "Delete saved media");
-  saveStep = new TwoStep($("saveAll"), () => "Save all to Downloads");
+  clearStep = new TwoStep($("clear"), () => view === "seen" ? "Clear history" : "Delete saved files", () => {
+    $("summary").textContent = summary();
+  });
   readAddress();
+  // The preview size is a taste, remembered on this device.
+  const tileSize = $("tileSize") as HTMLInputElement;
+  tileSize.value = String(Number(localStorage.getItem("libraryTile")) || 220);
+  $("days").style.setProperty("--tile", `${tileSize.value}px`);
+  tileSize.addEventListener("input", () => {
+    $("days").style.setProperty("--tile", `${tileSize.value}px`);
+    localStorage.setItem("libraryTile", tileSize.value);
+  });
   settings = await loadSettings().catch(() => DEFAULT_SETTINGS);
   void seenMedia.load();
   [seenRows, savedRows] = await Promise.all([
@@ -685,7 +810,6 @@ async function start() {
   }, {rootMargin: "800px 0px"}).observe($("more"));
   $("search").addEventListener("input", () => void apply());
   $("clear").addEventListener("click", () => void clearView());
-  $("saveAll").addEventListener("click", () => void saveAll());
   $("audit").addEventListener("click", () => void auditSaved());
   $("play").addEventListener("click", startSlideshow);
   $("select").addEventListener("click", () => selecting ? exitSelecting() : enterSelecting());
@@ -694,6 +818,7 @@ async function start() {
     paintSelection();
   });
   $("selCancel").addEventListener("click", exitSelecting);
+  $("selSave").addEventListener("click", () => void saveChosen());
   $("selDelete").addEventListener("click", () => void deleteChosen());
   chrome.runtime.onMessage.addListener((msg: {type?: string}) => {
     if (msg?.type === "LINKPEEK_AUDIT_TICK") onAuditTick(msg as AuditTickMessage);
@@ -708,7 +833,8 @@ async function start() {
   $("tags").addEventListener("click", event => {
     const button = (event.target as Element).closest<HTMLElement>("[data-tag]");
     if (!button) return;
-    tag = tag === button.dataset.tag ? null : button.dataset.tag!;
+    const key = button.dataset.tag!;
+    activeTags = activeTags.includes(key) ? activeTags.filter(active => active !== key) : [...activeTags, key];
     writeAddress();
     void apply();
   });
@@ -725,6 +851,29 @@ async function start() {
     writeAddress();
     void apply();
   });
+  // With "play GIFs only on hover" on, a GIF tile animates while the pointer rests on it.
+  const hoverGif = async (tile: HTMLElement, live: boolean) => {
+    const row = shown[Number(tile.dataset.row)];
+    if (!row || row.type !== "gif") return;
+    const img = tile.querySelector("img");
+    if (!img) return;
+    if (live) {
+      img.dataset.still ??= img.src;
+      const source = await savedCopy(row.saved) ?? row.open;
+      // The pointer may have left while the copy was being read; a stilled tile stays still.
+      if (img.dataset.still !== undefined) img.src = source;
+    } else if (img.dataset.still) {
+      img.src = img.dataset.still;
+      delete img.dataset.still;
+    }
+  };
+  for (const [name, live] of [["mouseover", true], ["mouseout", false]] as const) {
+    $("days").addEventListener(name, event => {
+      if (!settings.libraryGifHover) return;
+      const tile = (event.target as Element).closest<HTMLElement>(".h-tile");
+      if (tile && !tile.contains((event as MouseEvent).relatedTarget as Node)) void hoverGif(tile, live);
+    });
+  }
   $("days").addEventListener("click", event => {
     const target = event.target as Element;
     const pick = target.closest<HTMLElement>("[data-pick]");
@@ -758,8 +907,6 @@ async function start() {
   $("viewSave").addEventListener("click", () => void saveViewed());
   document.addEventListener("keydown", onKey);
   $("view").addEventListener("wheel", onWheel, {passive: false});
-  const stats = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_STATS"}).catch(() => undefined) as {count?: number; bytes?: number} | undefined;
-  if (stats?.count) $("saveAll").title = `${stats.count.toLocaleString()} files kept on this device (${(stats.bytes! / 1024 / 1024).toFixed(0)} MB) · save the ones shown into Downloads / LinkPeek Library`;
 }
 
 void start();
