@@ -35,6 +35,7 @@ function show(msg: MirrorStateMessage) {
       currentUrl = msg.result.url;
       browsingHere = false;
       viewer.openLoading(innerWidth / 2, innerHeight / 2, settings, msg.result.title || msg.result.url, msg.index);
+      viewer.fillWindow();
     }
     viewer.show(msg.result);
     if (!browsingHere) viewer.jumpTo(msg.index);
@@ -62,7 +63,7 @@ function onKey(event: KeyboardEvent) {
 
 async function start() {
   settings = await loadSettings();
-  viewer.restoreViewerState({expanded: true});
+  viewer.restoreViewerState({expanded: false});
   viewer.onDismiss = () => {
     currentUrl = undefined;
     hint.hidden = false;

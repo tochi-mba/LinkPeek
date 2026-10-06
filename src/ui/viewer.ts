@@ -87,6 +87,8 @@ export class Viewer {
   private pip?: Window;
   /** False in windows (the mirror) that must not write layout memory shared with page panels. */
   private persistEnabled = true;
+  /** The panel fills the window it is in (the mirror window); floating does the same. */
+  private fillsWindow = false;
   private slideshow = false;
   private slideshowPaused = false;
   private waitingForMore = false;
@@ -494,7 +496,7 @@ export class Viewer {
 
   private applyPanelStyle() {
     const s = this.settings, style = this.panel.style;
-    this.panel.className = `lp-panel${this.expanded ? " lp-expanded" : ""}${s.reducedMotion ? " lp-calm" : ""}`;
+    this.panel.className = `lp-panel${this.expanded ? " lp-expanded" : ""}${s.reducedMotion ? " lp-calm" : ""}${this.fillsWindow || this.pip ? " lp-popped" : ""}`;
     this.panel.setAttribute("role", "dialog");
     style.setProperty("--lp-maxh", `${s.panelMaxVh}vh`);
     style.setProperty("--lp-stageh", `${s.focusHeightVh}vh`);
@@ -989,6 +991,20 @@ export class Viewer {
     this.rotation = 0;
   }
 
+  /**
+   * Keeps the panel working but unseen, while a mirror window shows previews
+   * on another screen. Floating previews are never hidden.
+   */
+  conceal(hidden: boolean) {
+    this.host.style.visibility = hidden && !this.pip ? "hidden" : "";
+  }
+
+  /** Makes the panel fill the window it is in, for the mirror window. */
+  fillWindow() {
+    this.fillsWindow = true;
+    this.panel.classList.add("lp-popped");
+  }
+
   /** Jumps straight to an item, for the mirror window following browsing on another screen. */
   jumpTo(index: number) {
     const items = this.result?.items;
@@ -1109,7 +1125,7 @@ export class Viewer {
     this.pip = undefined;
     pip.document.removeEventListener("keydown", this.onPipKey);
     document.documentElement.append(this.host);
-    this.panel.classList.remove("lp-popped");
+    this.panel.classList.toggle("lp-popped", this.fillsWindow);
     if (!pip.closed) pip.close();
     this.renderHeader();
     if (announce) this.toast(announce);
