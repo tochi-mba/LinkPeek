@@ -138,15 +138,18 @@ describe("recording what was shown", () => {
     const sendMessage = vi.fn(async (msg: {type: string}) => msg.type === "LINKPEEK_FINGERPRINT" ? {prints: ["00000000000000ff"]} : {ok: true});
     (chrome as unknown as {runtime: unknown}).runtime = {sendMessage};
     const seen = new SeenMedia();
-    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true});
-    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true});
+    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true, saveMediaOffline: false});
+    recordSeen(seen, item(1), {skipSeenMedia: true, keepHistory: true, saveMediaOffline: false});
     await vi.advanceTimersByTimeAsync(0);
     expect(sendMessage.mock.calls.filter(([msg]) => msg.type === "LINKPEEK_HISTORY_ADD")).toHaveLength(1);
     expect([seen.has(item(1)), seen.hasPicture("00000000000000ff")]).toEqual([true, true]);
-    recordSeen(seen, item(2), {skipSeenMedia: false, keepHistory: false});
+    recordSeen(seen, item(2), {skipSeenMedia: false, keepHistory: false, saveMediaOffline: false});
     expect(seen.has(item(2))).toBe(false);
-    recordSeen(seen, item(3), {skipSeenMedia: true, keepHistory: false});
+    recordSeen(seen, item(3), {skipSeenMedia: true, keepHistory: false, saveMediaOffline: false});
     expect(sendMessage.mock.calls.filter(([msg]) => msg.type === "LINKPEEK_HISTORY_ADD")).toHaveLength(1);
+    // Saving files alone still tells the service worker about first sightings.
+    recordSeen(seen, item(4), {skipSeenMedia: false, keepHistory: false, saveMediaOffline: true});
+    expect(sendMessage.mock.calls.filter(([msg]) => msg.type === "LINKPEEK_HISTORY_ADD")).toHaveLength(2);
   });
 
   it("gets fingerprints for items, posters for videos, and gives up waiting when asked to be quick", async () => {

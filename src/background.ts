@@ -8,7 +8,8 @@
 import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
-import {HistoryWriter} from "./shared/history";
+import {MediaLibrary} from "./background/media-library";
+import {HistoryWriter, savedUrlOf} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {fetchWithRetry, readBytesCapped} from "./core/http";
@@ -28,6 +29,7 @@ const scans = new ByteCache<CachedScan>();
 const galleries = new GalleryStore();
 const fingerprints = new Fingerprinter();
 const history = new HistoryWriter();
+const library = new MediaLibrary();
 const binaries = new ByteCache<BinaryEntry>();
 const scanTasks = new Map<string, ScanTask>();
 const prefetchTasks = new Map<string, Promise<ScanResult | null>>();
@@ -370,9 +372,15 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       binaries.clear();
       return respond(galleries.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_HISTORY_ADD":
-      history.add(msg.entry);
-      sendResponse({ok: true});
-      return false;
+      return respond(currentSettings().then(settings => {
+        if (settings.keepHistory) history.add(msg.entry);
+        if (settings.saveMediaOffline) library.save(savedUrlOf(msg.entry), settings.savedMediaBudgetMb * 1024 * 1024);
+        return {ok: true};
+      }), sendResponse);
+    case "LINKPEEK_LIBRARY_STATS":
+      return respond(library.stats(), sendResponse);
+    case "LINKPEEK_LIBRARY_CLEAR":
+      return respond(library.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_HISTORY_CLEAR":
       return respond(history.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_FINGERPRINT":

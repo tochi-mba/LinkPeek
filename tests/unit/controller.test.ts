@@ -1115,7 +1115,7 @@ describe("the shuffle", () => {
   });
 
   it("follows only the page's own links when following links is off, and remembers nothing when skipping is off", async () => {
-    await boot({shuffleFollowLinks: false, skipSeenMedia: false, keepHistory: false});
+    await boot({shuffleFollowLinks: false, skipSeenMedia: false, keepHistory: false, saveMediaOffline: false});
     const a = link("a");
     respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 1, {linkContexts: [{sourceUrl: msg.url!, links: ["https://dest.test/deeper"]}]}) : {ok: true};
     key("s");
