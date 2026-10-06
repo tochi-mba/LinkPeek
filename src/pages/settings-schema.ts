@@ -198,7 +198,7 @@ export const SHORTCUT_LABELS: Record<keyof LinkPeekSettings["shortcuts"], string
   next: "Next media", previous: "Previous media", nextLink: "Next link with media", previousLink: "Previous link with media",
   grid: "Grid / single media", expand: "Expand / restore", pin: "Pin open", favorite: "Save link", open: "Open original",
   openPage: "Open the linked page", download: "Download original", downloadAll: "Download the whole gallery (press twice)",
-  copy: "Copy media link", slideshow: "Slideshow (shuffle when on)", pause: "Pause / resume the slideshow", fill: "Fill the panel / fit", rotate: "Rotate a quarter turn", zoomIn: "Zoom in (bigger tiles in grid)",
+  copy: "Copy media link", slideshow: "Slideshow (shuffle when on)", pause: "Pause / resume the slideshow", popOut: "Float the preview above every window", fill: "Fill the panel / fit", rotate: "Rotate a quarter turn", zoomIn: "Zoom in (bigger tiles in grid)",
   zoomOut: "Zoom out (smaller tiles in grid)", resetZoom: "Reset zoom", help: "Show controls", close: "Close", preloadInspector: "Preload inspector (then the same key alone)"
 };
 

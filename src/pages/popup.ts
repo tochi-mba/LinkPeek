@@ -93,6 +93,12 @@ async function toggleInspector() {
   if (answer.open) window.close();
 }
 
+/** Opens (or closes) the mirror window, previews' second screen, and gets out of the way. */
+async function openMirror() {
+  await chrome.runtime.sendMessage({type: "LINKPEEK_TOGGLE_MIRROR"}).catch(() => undefined);
+  window.close();
+}
+
 /** Starts the shuffle on the page and gets out of the way. */
 async function startShuffle() {
   const answer = await chrome.tabs.sendMessage(tabId!, {type: "LINKPEEK_START_SHUFFLE"}).catch(() => undefined) as {started: boolean} | undefined;
@@ -117,6 +123,7 @@ $("enabled").addEventListener("change", event => {
 });
 $("pauseSite").addEventListener("click", () => void togglePause());
 $("inspector").addEventListener("click", () => void toggleInspector());
+$("mirror").addEventListener("click", () => void openMirror());
 $("shuffle").addEventListener("click", () => void startShuffle());
 document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
   settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};

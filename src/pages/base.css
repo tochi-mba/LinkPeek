@@ -208,3 +208,11 @@ input[type="range"] { accent-color: var(--signal); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* The mirror window: dark, with a centred hint until the first preview arrives. */
+.mirror { margin: 0; background: #080A09; color: var(--text, #F2F5EE); }
+.mirror-hint { min-height: 100vh; display: grid; place-content: center; justify-items: center; text-align: center; gap: 10px; padding: 24px; }
+.mirror-hint h1 { font-size: 22px; margin: 6px 0 0; letter-spacing: -0.02em; }
+.mirror-hint p { margin: 0; color: var(--muted, #858D83); max-width: 52ch; font-size: 14px; }
+.mirror-keys kbd { border: 1px solid var(--line, #29302A); border-radius: 6px; padding: 1px 7px; background: var(--raised, #181E19); font: 700 12px ui-monospace, monospace; }
+.mirror [hidden] { display: none; }

@@ -201,6 +201,9 @@ export const overlayCss = `${rexCss}
   .lp-gif-controls { grid-template-columns: 30px 36px 30px minmax(60px, 1fr) auto 32px; }
   .lp-gif-time { display: none; }
 }
+/* Floating in its own window the panel IS the window; dragging and resizing belong to the OS. */
+.lp-panel.lp-popped { left: 0 !important; top: 0 !important; width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important; border-radius: 0; border: 0; }
+.lp-panel.lp-popped [data-resize] { display: none; }
 .lp-calm, .lp-calm * { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .lp-panel, .lp-panel * { animation: none !important; transition: none !important; }

@@ -6,7 +6,7 @@
  * inspector and the status the toolbar popup shows.
  */
 import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResult} from "../shared/media";
-import type {ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
+import type {MirrorStateMessage, ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {SeenMedia} from "../shared/seen-media";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
@@ -61,6 +61,8 @@ export class PreviewController {
   private navigationProbe?: {url: string; token: string};
   private positions = new Map<string, number>();
   private shuffle?: ShuffleSession;
+  /** A mirror window is open; previews shown here are sent to it. */
+  private mirrorOpen = false;
   readonly seen = new SeenMedia();
   private mutationFrame = 0;
   private inspectorChordUntil = 0;
@@ -116,7 +118,12 @@ export class PreviewController {
     const stored = await chrome.storage.local.get("viewerState");
     this.viewer.restoreViewerState(stored.viewerState as ViewerState | undefined);
     this.viewer.onDismiss = explicit => this.onDismiss(explicit);
-    this.viewer.onPosition = (url, index) => url === SHUFFLE_URL ? this.refillShuffle() : this.rememberPosition(url, index);
+    this.viewer.onPosition = (url, index) => {
+      if (url === SHUFFLE_URL) this.refillShuffle();
+      else this.rememberPosition(url, index);
+      this.sendMirror();
+    };
+    this.viewer.onShown = () => this.sendMirror();
     this.viewer.onSlideshowStart = () => this.startShuffle();
     this.viewer.onNeedMore = () => this.refillShuffle();
     this.viewer.onSeen = item => {
@@ -124,6 +131,10 @@ export class PreviewController {
     };
     void this.seen.load();
     this.disposers.push(() => this.seen.stop());
+    // A mirror window may already be open (opened before this page loaded).
+    chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_QUERY"}).then(answer => {
+      this.mirrorOpen = Boolean((answer as {open?: boolean} | undefined)?.open);
+    }).catch(() => undefined);
 
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void this.onStorageChanged(changes, area);
     chrome.storage.onChanged.addListener(onStorage);
@@ -216,9 +227,15 @@ export class PreviewController {
     this.prefetcher.reset();
   }
 
-  private onMessage(msg: {type?: string; token?: string; url?: string; result?: ScanResult}, sendResponse: (value: unknown) => void) {
+  private onMessage(msg: {type?: string; token?: string; url?: string; result?: ScanResult; open?: boolean}, sendResponse: (value: unknown) => void) {
     if (msg?.type === "LINKPEEK_STATUS") {
       sendResponse(this.status());
+      return false;
+    }
+    if (msg?.type === "LINKPEEK_MIRROR_OPEN") {
+      this.mirrorOpen = Boolean(msg.open);
+      if (this.mirrorOpen) this.sendMirror();
+      sendResponse({ok: true});
       return false;
     }
     if (msg?.type === "LINKPEEK_TOGGLE_INSPECTOR") {
@@ -623,6 +640,13 @@ export class PreviewController {
     } finally {
       clearTimeout(slow);
     }
+  }
+
+  /** Sends what is on screen to the mirror window, which shows it on another monitor. */
+  private sendMirror() {
+    const result = this.viewer.result;
+    if (!this.mirrorOpen || !result) return;
+    chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_STATE", result, index: this.viewer.index} satisfies MirrorStateMessage).catch(() => undefined);
   }
 
   private navigationNotice(message: string) {

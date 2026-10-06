@@ -17,7 +17,7 @@ export type Placement = "auto" | "right" | "left" | "above" | "below";
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
   "open", "openPage", "download", "downloadAll", "copy", "slideshow", "pause", "fill", "rotate", "zoomIn", "zoomOut", "resetZoom",
-  "help", "close", "preloadInspector"
+  "popOut", "help", "close", "preloadInspector"
 ] as const;
 export type ShortcutAction = typeof SHORTCUT_ACTIONS[number];
 export type Shortcuts = Record<ShortcutAction, string[]>;
@@ -168,6 +168,7 @@ export const DEFAULT_SHORTCUTS: Shortcuts = {
   copy: ["c"],
   slideshow: ["s"],
   pause: ["Space"],
+  popOut: ["e"],
   zoomIn: ["+", "="],
   zoomOut: ["-"],
   resetZoom: ["0"],

@@ -61,6 +61,8 @@ export class Viewer {
   help = false;
   onDismiss?: (explicit: boolean) => void;
   onPosition?: (url: string, index: number) => void;
+  /** A result reached the screen (first show or a change); the mirror window follows these. */
+  onShown?: () => void;
   /** Asked before a slideshow starts; returning true means the host started its own (the shuffle). */
   onSlideshowStart?: () => boolean;
   /** Each item shown in single view. */
@@ -81,6 +83,10 @@ export class Viewer {
   private closeTimer?: number;
   private toastTimer?: number;
   private slideshowTimer?: number;
+  /** The floating always-on-top window holding the preview, while popped out. */
+  private pip?: Window;
+  /** False in windows (the mirror) that must not write layout memory shared with page panels. */
+  private persistEnabled = true;
   private slideshow = false;
   private slideshowPaused = false;
   private waitingForMore = false;
@@ -108,13 +114,14 @@ export class Viewer {
   });
 
   /** `loadGifPlayer` defaults to the separately built gif-player.js, loaded only when a GIF is shown. */
-  constructor(options: {budget: () => Budget; loadGifPlayer?: () => Promise<GifModule>}) {
+  constructor(options: {budget: () => Budget; loadGifPlayer?: () => Promise<GifModule>; persist?: boolean}) {
     this.loadGifPlayer = options.loadGifPlayer ?? (() => import(chrome.runtime.getURL("gif-player.js")) as Promise<GifModule>);
     this.root.className = "lp-root";
     this.shadow.append(Object.assign(document.createElement("style"), {textContent: overlayCss}), this.root, this.ring);
     document.documentElement.appendChild(this.host);
     this.preloader = new MediaPreloader(options.budget);
     this.geometry = new PanelGeometry(this.panel, () => this.persistState());
+    this.persistEnabled = options.persist ?? true;
     this.panel.addEventListener("click", this.onPanelClick);
     this.panel.addEventListener("dblclick", this.onPanelDoubleClick);
     this.panel.addEventListener("pointerdown", this.onPanelPointerDown);
@@ -154,6 +161,7 @@ export class Viewer {
 
   private persistState() {
     this.remembered = {view: this.view, gridThumbSize: this.gridThumbSize, expanded: this.expanded};
+    if (!this.persistEnabled) return;
     const viewerState: ViewerState = {...this.remembered};
     if (this.settings.rememberPanelGeometry && this.geometry.remembered) viewerState.geometry = this.geometry.remembered;
     try {
@@ -169,6 +177,8 @@ export class Viewer {
    * names restart the fill without forcing a layout.
    */
   showHoverRing(x: number, y: number, durationMs: number, ready: boolean) {
+    // The countdown sits at page pointer coordinates, which mean nothing in the floating window.
+    if (this.pip) return;
     const ring = this.ring;
     ring.style.left = `${x + 14}px`;
     ring.style.top = `${y + 14}px`;
@@ -252,6 +262,7 @@ export class Viewer {
     if (!previous?.items.length || jumped) {
       this.render();
       if (!previous) void this.refreshFavorite();
+      this.onShown?.();
       return;
     }
     const changed = items.length !== previous.items.length || this.result.complete !== previous.complete || this.result.postsScanned !== previous.postsScanned || items[this.index]?.id !== currentId;
@@ -266,6 +277,7 @@ export class Viewer {
     } else {
       this.updateChrome();
     }
+    this.onShown?.();
   }
 
   /** Reports a failed scan. A gallery already on screen stays; the problem is only mentioned. */
@@ -282,6 +294,7 @@ export class Viewer {
   close(force = false) {
     if (!this.isOpen || (this.pinned && !force)) return;
     if (force) this.pinned = false;
+    this.popIn();
     this.cancelClose();
     this.stopSlideshow();
     this.geometry.cancel();
@@ -392,6 +405,9 @@ export class Viewer {
       case "rotate":
         this.rotate();
         return true;
+      case "popOut":
+        void this.popOut();
+        return true;
       case "download":
         if (item) this.download(item);
         return true;
@@ -465,7 +481,7 @@ export class Viewer {
   };
 
   private onPanelPointerDown = (event: PointerEvent) => {
-    if (this.expanded || event.button !== 0) return;
+    if (this.expanded || this.pip || event.button !== 0) return;
     const target = event.target as Element, handle = target.closest?.<HTMLElement>("[data-resize]");
     if (handle && this.settings.resizablePanel) {
       this.cancelClose();
@@ -505,7 +521,7 @@ export class Viewer {
   private headerMarkup() {
     return markup.headerMarkup({
       title: this.headerTitle(), count: this.result?.items.length, view: this.view, expanded: this.expanded, pinned: this.pinned,
-      favorite: this.favorite, slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, help: this.help, settings: this.settings
+      favorite: this.favorite, slideshow: this.slideshow, slideshowPaused: this.slideshowPaused, popped: Boolean(this.pip), help: this.help, settings: this.settings
     });
   }
 
@@ -973,6 +989,17 @@ export class Viewer {
     this.rotation = 0;
   }
 
+  /** Jumps straight to an item, for the mirror window following browsing on another screen. */
+  jumpTo(index: number) {
+    const items = this.result?.items;
+    if (!this.isOpen || !items?.length || this.pendingIndex !== null) return;
+    const target = Math.max(0, Math.min(items.length - 1, index));
+    if (target === this.index) return;
+    if (this.view === "grid") return this.moveGridSelection(target);
+    this.index = target;
+    this.showFocusMedia();
+  }
+
   applyZoom(factor: number, x: number, y: number) {
     // Looking closer pauses a slideshow rather than ending it.
     this.pauseSlideshow();
@@ -1037,6 +1064,55 @@ export class Viewer {
     holder.style.width = turned ? `${this.stage.clientHeight}px` : "";
     holder.style.height = turned ? `${this.stage.clientWidth}px` : "";
     holder.style.rotate = this.rotation ? `${this.rotation}deg` : "";
+  }
+
+  /**
+   * Floats the preview in its own always-on-top window (document
+   * picture-in-picture): it stays over every tab and application, and is
+   * dragged, resized and closed like any window. Hovering links on the page
+   * keeps feeding it. Called again, it brings the preview back into the page.
+   */
+  async popOut() {
+    if (this.pip) return this.popIn("Back in the page");
+    const api = (window as Window & {documentPictureInPicture?: {requestWindow(options: {width: number; height: number}): Promise<Window>}}).documentPictureInPicture;
+    if (!api) return this.toast("Floating needs a Chromium 116+ browser");
+    if (!this.isOpen) return;
+    try {
+      const pip = await api.requestWindow({width: Math.max(360, this.panel.offsetWidth || 520), height: Math.max(260, this.panel.offsetHeight || 420)});
+      this.pip = pip;
+      pip.document.body.style.margin = "0";
+      pip.document.body.style.background = "#080A09";
+      pip.document.body.append(this.host);
+      pip.document.addEventListener("keydown", this.onPipKey);
+      pip.addEventListener("pagehide", () => this.popIn(), {once: true});
+      this.panel.classList.add("lp-popped");
+      // Floating is an explicit ask to keep it: leaving links on the page must not close it.
+      this.pinned = true;
+      this.renderHeader();
+      this.toast("Floating above every window");
+    } catch {
+      this.toast("Couldn’t open the floating window");
+    }
+  }
+
+  /** The floating window has its own document, so its keys are brought to the viewer. */
+  private onPipKey = (event: KeyboardEvent) => {
+    if (!this.key(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  /** Returns the preview to the page and closes the floating window. */
+  private popIn(announce?: string) {
+    const pip = this.pip;
+    if (!pip) return;
+    this.pip = undefined;
+    pip.document.removeEventListener("keydown", this.onPipKey);
+    document.documentElement.append(this.host);
+    this.panel.classList.remove("lp-popped");
+    if (!pip.closed) pip.close();
+    this.renderHeader();
+    if (announce) this.toast(announce);
   }
 
   private async refreshFavorite() {

@@ -31,6 +31,8 @@ export interface HeaderState {
   favorite: boolean;
   slideshow: boolean;
   slideshowPaused: boolean;
+  /** The preview floats in its own always-on-top window. */
+  popped: boolean;
   help: boolean;
   settings: LinkPeekSettings;
 }
@@ -59,6 +61,7 @@ export function headerMarkup(state: HeaderState) {
     + slideshowButton(state)
     + button("favorite", state.favorite ? "★" : "☆", state.favorite ? "Remove saved link" : "Save link", withKey(state.favorite ? "Remove saved link" : "Save link", keys, "favorite"), state.favorite, "lp-favorite")
     + button("help", "?", "Show controls", withKey("Controls", keys, "help"), undefined, "lp-helpbtn", ` aria-expanded="${state.help}"`)
+    + button("popOut", state.popped ? "⇲" : "⇱", state.popped ? "Back into the page" : "Float above every window", withKey(state.popped ? "Back into the page" : "Float above every window", keys, "popOut"), state.popped, "lp-popout")
     + button("pin", "⌖", state.pinned ? "Unpin preview" : "Pin preview", withKey(state.pinned ? "Unpin preview" : "Pin preview", keys, "pin"), state.pinned, "lp-pin")
     + button("close", "×", "Close", withKey("Close", keys, "close"), undefined, "lp-close")
     + `</header>`;
@@ -150,7 +153,7 @@ const HELP_GROUPS: Array<[string, Array<[ShortcutAction, string]>]> = [
   ["Links", [["nextLink", "Next link with media (skip empty pages)"], ["previousLink", "Previous link with media"], ["openPage", "Open the linked page"]]],
   ["This media", [["open", "Open original"], ["download", "Download original"], ["downloadAll", "Download the whole gallery (press twice)"], ["copy", "Copy media link"], ["favorite", "Save this link"]]],
   ["Zoom", [["fill", "Fill the panel / fit"], ["rotate", "Rotate"], ["zoomIn", "Zoom in"], ["zoomOut", "Zoom out"], ["resetZoom", "Reset zoom"]]],
-  ["Panel", [["expand", "Expand / restore"], ["pin", "Pin open"], ["help", "These controls"], ["close", "Close"]]]
+  ["Panel", [["expand", "Expand / restore"], ["pin", "Pin open"], ["popOut", "Float above every window"], ["help", "These controls"], ["close", "Close"]]]
 ];
 
 export function helpMarkup(shortcuts: Shortcuts, gif: boolean) {
