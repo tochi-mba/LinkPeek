@@ -143,7 +143,7 @@ input[type="range"] { accent-color: var(--signal); }
 .popup .site { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }
 .popup .status { margin: 8px 0 10px; font-size: 12px; line-height: 1.45; color: var(--text); }
 .popup .spaced { margin-top: 14px; }
-.popup .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.popup .actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
 .popup .actions .button { padding: 0 8px; font-size: 12px; }
 .popup .actions.two { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; margin-top: 0; }
 .popup .actions .button[hidden] { display: none; }
@@ -251,3 +251,9 @@ input[type="range"] { accent-color: var(--signal); }
 .h-view-stage img, .h-view-stage video { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
 .h-view-nav { border: 0; background: transparent; color: var(--muted, #858D83); font-size: 44px; cursor: pointer; }
 .h-view-nav:hover { color: var(--signal, #D7FF3F); }
+
+.h-views { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line, #29302A); border-radius: 10px; background: var(--raised, #181E19); }
+.h-chip { height: 28px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted, #858D83); font: 600 12px Inter, "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+.h-chip[aria-pressed="true"] { background: var(--signal, #D7FF3F); color: #111512; }
+.h-views[hidden] { display: none; }
+.h-new { position: absolute; left: 7px; bottom: 7px; padding: 1px 6px; border-radius: 6px; background: rgba(17, 21, 18, .86); color: var(--signal, #D7FF3F); font: 700 10px ui-monospace, monospace; }

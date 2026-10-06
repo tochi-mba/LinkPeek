@@ -52,6 +52,14 @@ describe("the popup", () => {
     expect(($("#enabled") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("opens the library, and its preloaded media directly", async () => {
+    await open();
+    $("#history").click();
+    $("#preloaded").click();
+    expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html"});
+    expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html?view=saved&filter=unseen"});
+  });
+
   it("opens the preload inspector on the page and gets out of the way", async () => {
     await open();
     const button = $<HTMLButtonElement>("#inspector"), close = vi.spyOn(window, "close").mockImplementation(() => undefined);

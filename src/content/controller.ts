@@ -125,6 +125,7 @@ export class PreviewController {
       snapshot: () => this.prefetcher.snapshot(),
       setPriority: (urls, priority) => this.prefetcher.setPriority(urls, priority),
       openUrl: url => this.openUrlFromInspector(url),
+      openPreloaded: () => void chrome.runtime.sendMessage({type: "LINKPEEK_OPEN_LIBRARY", view: "saved", filter: "unseen"}).catch(() => undefined),
       subscribe: listener => this.prefetcher.subscribe(listener)
     });
   }

@@ -9,7 +9,7 @@ import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
 import {MediaLibrary} from "./background/media-library";
-import {HistoryWriter, savedUrlOf} from "./shared/history";
+import {HistoryWriter, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {fetchWithRetry, readBytesCapped} from "./core/http";
@@ -69,6 +69,19 @@ function cacheScan(url: string, result: ScanResult, settings: LinkPeekSettings, 
   scans.set(url, entry, estimateBytes(entry), Math.max(1, settings.maxCacheMb) * 1024 * 1024);
   // Only finished galleries are kept on the device; a partial one would hide the rest next time.
   if (persist && result.complete && settings.rememberGalleries) void galleries.put(url, entry.scanKey, result).catch(() => undefined);
+  if (persist) savePrepared(result, settings);
+}
+
+/** Downloads the files of a gallery that was prepared or scanned, into the library, as unseen media. */
+function savePrepared(result: ScanResult, settings: LinkPeekSettings) {
+  if (!settings.saveMediaOffline || !settings.savePreparedMedia) return;
+  const budget = settings.savedMediaBudgetMb * 1024 * 1024;
+  for (const item of result.items) {
+    library.save(savedUrlOfItem(item), budget, {
+      seen: false, type: item.type, source: item.sourceUrl, title: item.sourceTitle, original: item.originalUrl,
+      preview: item.type === "video" ? item.posterUrl : item.previewUrl
+    });
+  }
 }
 
 /** A gallery saved on the device earlier, when keeping them is on. */
@@ -374,9 +387,19 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "LINKPEEK_HISTORY_ADD":
       return respond(currentSettings().then(settings => {
         if (settings.keepHistory) history.add(msg.entry);
-        if (settings.saveMediaOffline) library.save(savedUrlOf(msg.entry), settings.savedMediaBudgetMb * 1024 * 1024);
+        const entry = msg.entry;
+        if (settings.saveMediaOffline) {
+          library.save(savedUrlOf(entry), settings.savedMediaBudgetMb * 1024 * 1024, {seen: true, type: entry.t, source: entry.s, title: entry.n, preview: entry.p || undefined, original: entry.o});
+        }
         return {ok: true};
       }), sendResponse);
+    case "LINKPEEK_OPEN_LIBRARY": {
+      const params = new URLSearchParams();
+      if (msg.view) params.set("view", msg.view);
+      if (msg.filter) params.set("filter", msg.filter);
+      const query = params.toString();
+      return respond(chrome.tabs.create({url: chrome.runtime.getURL(`history.html${query ? `?${query}` : ""}`)}).then(() => ({ok: true})), sendResponse);
+    }
     case "LINKPEEK_LIBRARY_STATS":
       return respond(library.stats(), sendResponse);
     case "LINKPEEK_LIBRARY_CLEAR":

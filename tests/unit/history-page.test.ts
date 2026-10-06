@@ -217,6 +217,79 @@ describe("saved media on the history page", () => {
     await openSaved([entry(1, now)], []);
     $("#saveAll").click();
     await settle();
+    expect($("#summary").textContent).toMatch(/^Nothing here is saved on this device yet/);
+  });
+});
+
+describe("the saved view", () => {
+  const LIB = "mediaIndex";
+  const chip = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
+
+  async function openLibrary(index: unknown, search = "") {
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", `/history.html${search}`);
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[LIB] = index;
+    await import("../../src/pages/history");
+    await settle();
+  }
+
+  it("opens straight on what was preloaded and not seen yet, from the address", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/new.jpg", {bytes: 1, at: now, seen: false, type: "image", source: "https://forum.test/a", title: "Prepared"}],
+      ["https://cdn.test/old.jpg", {bytes: 1, at: now - 1000}],
+      ["https://cdn.test/clip.mp4", {bytes: 1, at: now - 2000, seen: false, type: "video", source: "https://forum.test/b", preview: "https://cdn.test/clip.jpg", original: "https://cdn.test/clip.mp4"}],
+      ["https://cdn.test/anim.gif", {bytes: 1, at: now - 3000, seen: true}]
+    ], "?view=saved&filter=unseen");
+    expect([chip('[data-show="saved"]').getAttribute("aria-pressed"), chip('[data-filter="unseen"]').getAttribute("aria-pressed"), $("#filters").hidden]).toEqual(["true", "true", false]);
+    const tiles = [...document.querySelectorAll(".h-tile")];
+    expect(tiles.map(t => t.querySelector("figcaption a")!.textContent)).toEqual(["Prepared", "b"]);
+    expect(tiles.every(t => t.querySelector(".h-new")!.textContent === "Not seen yet")).toBe(true);
+    expect(tiles[1].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/clip.jpg");
+    expect($("#summary").textContent).toBe("2 files, newest first");
+    expect($("#clear").textContent).toBe("Delete saved media");
+  });
+
+  it("switches views and filters, keeping them in the address", async () => {
+    const now = Date.now();
+    await openLibrary([["https://cdn.test/a.jpg", {bytes: 1, at: now, seen: true}], ["https://cdn.test/anim.gif", {bytes: 1, at: now - 5, seen: false}]]);
+    expect([$("#filters").hidden, $("#clear").textContent]).toEqual([true, "Clear history"]);
+    chip('[data-show="saved"]').click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved", 2]);
+    expect(document.querySelector(".h-badge")!.textContent).toBe("GIF");
+    chip('[data-filter="seen"]').click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved&filter=seen", 1]);
+    chip('[data-filter="unseen"]').click();
+    await settle();
+    expect(document.querySelectorAll(".h-tile").length).toBe(1);
+    document.querySelector<HTMLElement>(".history-head h1")!.click();
+    chip('[data-show="seen"]').click();
+    await settle();
+    expect(location.search).toBe("");
+  });
+
+  it("explains an empty library or an empty preloaded list, and deletes saved media after a second press", async () => {
+    await openLibrary(undefined, "?view=saved");
     expect($("#summary").textContent).toMatch(/^Nothing is saved on this device yet/);
+    await openLibrary([["https://cdn.test/a.jpg", {bytes: 1, at: Date.now(), seen: true}]], "?view=saved&filter=unseen");
+    expect($("#summary").textContent).toBe("Nothing preloaded is waiting: everything saved has been seen.");
+    chip('[data-filter="all"]').click();
+    await settle();
+    $("#clear").click();
+    await settle();
+    expect($("#clear").textContent).toBe("Press again to delete");
+    $("#clear").click();
+    await settle();
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_LIBRARY_CLEAR"});
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
+    expect($("#clear").textContent).toBe("Delete saved media");
+    await openLibrary("corrupt", "?view=saved&filter=bogus");
+    expect(chip('[data-filter="all"]').getAttribute("aria-pressed")).toBe("true");
   });
 });

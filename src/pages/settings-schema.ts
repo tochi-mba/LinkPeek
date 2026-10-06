@@ -172,6 +172,7 @@ export const SECTIONS: SectionSpec[] = [
       {key: "cacheMinutes", label: "Remember scans for", help: "After this, a link is scanned again (a saved gallery still shows at once while it refreshes).", unit: "min", advanced: true},
       {key: "rememberGalleries", label: "Keep galleries on this device", help: "Galleries LinkPeek has found are saved here, so a link you opened or that was prepared before shows at once, even after a restart, without loading it again.", control: "galleries"},
       {key: "saveMediaOffline", label: "Save what you see on this device", help: "Every picture, GIF and video LinkPeek shows is kept here the first time, so the History page shows it even offline and can save it all to a folder. The oldest go first once the space below is used.", control: "library"},
+      {key: "savePreparedMedia", label: "Also save media from prepared links", help: "Galleries LinkPeek prepares before you hover are downloaded too, two files at a time, so they are on this device even if you never open them. When space runs out, media you never saw goes first."},
       {key: "savedMediaBudgetMb", label: "Space for saved media", help: "How much of this device saved media may use.", unit: "MB"},
       {key: "rememberGalleriesDays", label: "Keep saved galleries for", help: "Older ones are fetched fresh the next time.", unit: "days", advanced: true}
     ]

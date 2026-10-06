@@ -2,7 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, onTestFinished, vi} from "v
 import type {PreloadEntry} from "../../src/content/link-prefetcher";
 import {PreloadInspector, type PreloadInspectorHost} from "../../src/content/preload-inspector";
 
-let entries: PreloadEntry[], listeners: Array<() => void>, frames: Array<() => void>, source: PreloadInspectorHost & {[K in "setPriority" | "openUrl"]: ReturnType<typeof vi.fn>};
+let entries: PreloadEntry[], listeners: Array<() => void>, frames: Array<() => void>, source: PreloadInspectorHost & {[K in "setPriority" | "openUrl" | "openPreloaded"]: ReturnType<typeof vi.fn>};
 
 const entry = (name: string, state: PreloadEntry["state"], patch: Partial<PreloadEntry> = {}): PreloadEntry => ({
   url: `https://x.test/${name}`, label: name, state, priority: "normal", source: "page", hasGif: false, ...patch
@@ -33,6 +33,7 @@ beforeEach(() => {
     snapshot: () => entries,
     setPriority: vi.fn(),
     openUrl: vi.fn(),
+    openPreloaded: vi.fn(),
     subscribe: listener => {
       listeners.push(listener);
       return () => listeners.splice(listeners.indexOf(listener), 1);
@@ -320,5 +321,26 @@ describe("the preload inspector", () => {
     vi.advanceTimersByTime(200);
     frames.shift()!();
     expect(q(inspector, ".pi-list")!.scrollTop).toBe(120);
+  });
+});
+
+describe("the way to preloaded media", () => {
+  it("opens the library on what was saved but not seen yet", () => {
+    entries = [entry("a", "prepared")];
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    q<HTMLButtonElement>(inspector, '[data-action="preloaded"]')!.click();
+    expect(source.openPreloaded).toHaveBeenCalled();
+    inspector.close();
+  });
+});
+
+describe("an empty page", () => {
+  it("still shows the panel when there are no links at all", () => {
+    entries = [];
+    const inspector = new PreloadInspector(source);
+    inspector.open();
+    expect(q(inspector, ".pi-sum")!.textContent).toBe("0 ready · 0 loading · 0 queued");
+    inspector.close();
   });
 });

@@ -139,6 +139,7 @@ $("practice").addEventListener("click", event => {
   void chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")});
 });
 $("history").addEventListener("click", () => void chrome.tabs.create({url: chrome.runtime.getURL("history.html")}));
+$("preloaded").addEventListener("click", () => void chrome.tabs.create({url: chrome.runtime.getURL("history.html?view=saved&filter=unseen")}));
 $("clear").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({type: "LINKPEEK_CLEAR_CACHE"});
   $("clear").textContent = "Cache cleared";

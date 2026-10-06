@@ -37,7 +37,8 @@ function send(msg: unknown, sender: unknown = {tab: {id: 3}, frameId: 2}) {
 beforeEach(async () => {
   vi.resetModules();
   for (const mock of Object.values(core)) mock.mockReset();
-  store = {settings: {}, settingsVersion: SETTINGS_VERSION};
+  // Downloading prepared galleries is tested on its own; elsewhere it would add fetches the tests count.
+  store = {settings: {savePreparedMedia: false}, settingsVersion: SETTINGS_VERSION};
   sessionStore = {};
   sent = [];
   created = [];
@@ -537,6 +538,28 @@ describe("history and fingerprints", () => {
     for (let i = 0; i < 10; i++) await tick();
     expect(api.stores.get("linkpeek-media")?.size ?? 0).toBe(0);
   });
+
+  it("download the files of prepared and scanned galleries as not seen yet, and open the library on request", async () => {
+    const api = fakeCaches();
+    store.settings = {};
+    onStorage({settings: {newValue: store.settings}}, "local");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(3), {headers: {"content-type": "image/jpeg"}})));
+    core.scanGeneric.mockImplementation(async (url: string) => ({...result(url, "generic", 2), items: [
+      {id: "a", type: "image", originalUrl: `${url}/a.jpg`, previewUrl: `${url}/a-s.jpg`, sourceUrl: url, sourceTitle: "Page", score: 1},
+      {id: "b", type: "video", originalUrl: `${url}/b.mp4`, previewUrl: `${url}/b.mp4`, posterUrl: `${url}/b.jpg`, sourceUrl: url, score: 1}
+    ]}));
+    await send({type: "LINKPEEK_PREFETCH", url: "https://x.test/prepared", kind: "generic", deep: false});
+    for (let i = 0; i < 12; i++) await tick();
+    expect([...api.stores.get("linkpeek-media")!.keys()].sort()).toEqual(["https://x.test/prepared/a-s.jpg", "https://x.test/prepared/b.mp4"]);
+    await new Promise(resolve => setTimeout(resolve, 5100));
+    const index = new Map(store.mediaIndex as Array<[string, {seen: boolean; title?: string; preview?: string; original?: string}]>);
+    expect(index.get("https://x.test/prepared/a-s.jpg")).toMatchObject({seen: false, title: "Page", original: "https://x.test/prepared/a.jpg"});
+    expect(index.get("https://x.test/prepared/b.mp4")).toMatchObject({seen: false, preview: "https://x.test/prepared/b.jpg"});
+    created.length = 0;
+    expect((await send({type: "LINKPEEK_OPEN_LIBRARY", view: "saved", filter: "unseen"})).value).toEqual({ok: true});
+    await send({type: "LINKPEEK_OPEN_LIBRARY"});
+    expect(created).toEqual([{url: "chrome-extension://id/history.html?view=saved&filter=unseen"}, {url: "chrome-extension://id/history.html"}]);
+  }, 20_000);
 
   it("append to the history and clear it", async () => {
     vi.useFakeTimers();

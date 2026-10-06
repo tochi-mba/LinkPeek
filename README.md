@@ -25,7 +25,7 @@ It is designed around one-handed touchpad use: two-finger browse, horizontal scr
 - treats links whose media is all too small as empty: searches their linked pages once, and N moves on
 - keeps galleries on the device, so links opened or prepared before show at once, even after a restart
 - keeps a history of everything seen (toolbar → History), newest first, searchable
-- saves every picture, GIF and video it shows on the device (2 GB by default, oldest first out), so the History page works offline, opens items full size, and can save them all into Downloads / LinkPeek Library
+- downloads the media of every gallery it prepares or shows onto the device (2 GB by default; never-seen media goes first when space runs out), so the Library page (Seen / Saved on this device, with a "Not seen yet" filter for what was preloaded) works offline, opens items full size, and can save them into Downloads / LinkPeek Library
 - lets a slideshow pause (Space), skip ahead with any next/previous control, and let videos and GIFs play through
 - has a preload inspector (Ctrl+X, then X) that outlines every link by state and lets you raise a link's priority
 - floats the current preview above every app with E, or mirrors every hovered gallery into a draggable, minimizable window that can go full screen with F11 on a second monitor
