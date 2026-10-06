@@ -4,7 +4,7 @@
 
 LinkPeek is a Chromium/Helium browser extension that lets you hover a link and browse the media behind it without leaving the page.
 
-It is designed around one-handed touchpad use: two-finger browse, horizontal scrub, pinch-style zoom, zoom-at-pointer, grid/focus views, pinning, whole-thread scanning for supported forums, and a deep settings model for people who want to tune everything.
+It is designed around one-handed touchpad use: two-finger browse, horizontal scrub, pinch-style zoom, zoom-at-pointer, grid/focus views, pinning, always-on-top and second-screen windows, whole-thread scanning for supported forums, and a deep settings model for people who want to tune everything.
 
 ## What it does
 
@@ -23,6 +23,7 @@ It is designed around one-handed touchpad use: two-finger browse, horizontal scr
 - has an endless shuffle slideshow (S): media from every link mixed, never two in a row from one link, never anything already seen, following links to more pages when the page runs out
 - lets a slideshow pause (Space), skip ahead with any next/previous control, and let videos and GIFs play through
 - has a preload inspector (Ctrl+X, then X) that outlines every link by state and lets you raise a link's priority
+- floats the current preview above every app with E, or mirrors every hovered gallery into a draggable, minimizable window that can go full screen with F11 on a second monitor
 - skips links with no media when stepping with N, and steps through a linked page's own list when a gallery came from linked pages
 - ships interactive onboarding, persistent controls help and searchable settings
 - supports presets and per-site profiles

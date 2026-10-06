@@ -198,6 +198,27 @@ test("S starts a shuffle across links that pauses, skips ahead and never shows w
   }finally{await closeExtension(context,profile)}
 });
 
+test("mirror window follows hovered galleries and gives the page its space back when closed",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const extensionOrigin=context.serviceWorkers()[0].url().replace(/\/background\.js$/,"");
+    const popup=await context.newPage();await popup.goto(`${extensionOrigin}/popup.html`);await popup.locator("#mirror").click();
+    await expect.poll(()=>context.pages().find(candidate=>candidate.url().endsWith("/mirror.html"))?.url()).toContain("mirror.html");
+    const mirror=context.pages().find(candidate=>candidate.url().endsWith("/mirror.html"))!;
+    await expect(mirror.getByText("Your second screen for previews")).toBeVisible();
+
+    const page=await context.newPage();await page.goto(base);await page.locator("#topic").hover();
+    await expect(page.locator(".lp-panel")).toContainText("Demo thread",{timeout:12_000});
+    await expect(page.locator(".lp-panel")).toHaveCSS("visibility","hidden");
+    await expect(mirror.locator(".lp-title")).toHaveText("Demo thread",{timeout:12_000});
+    await mirror.keyboard.press("g");
+    await expect(mirror.locator(".lp-grid")).toBeVisible();
+
+    await mirror.close();
+    await expect(page.locator(".lp-panel")).toHaveCSS("visibility","visible");
+  }finally{await closeExtension(context,profile)}
+});
+
 test("Discourse hover filters page chrome and opens the whole-thread viewer",async()=>{
   const {context,profile}=await launchExtension();
   try{

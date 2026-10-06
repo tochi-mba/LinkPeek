@@ -13,6 +13,7 @@ vi.mock("../../src/ui/viewer", () => ({
     index = 0;
     onDismiss?: (explicit: boolean) => void;
     onPosition?: (url: string, index: number) => void;
+    onShown?: () => void;
     restoreViewerState = vi.fn();
     openLoading = vi.fn(() => {
       this.isOpen = true;
@@ -22,6 +23,7 @@ vi.mock("../../src/ui/viewer", () => ({
       const previous = result.mixed && this.result?.url === result.url ? this.result.items : [];
       this.result = {...result, items: [...previous, ...result.items]};
       this.index = Math.min(this.index, Math.max(0, this.result.items.length - 1));
+      this.onShown?.();
     });
     startSlideshow = vi.fn();
     onSlideshowStart?: () => boolean;
@@ -33,6 +35,7 @@ vi.mock("../../src/ui/viewer", () => ({
     containsPoint = vi.fn(() => false);
     showHoverRing = vi.fn();
     toast = vi.fn();
+    conceal = vi.fn();
     hideHoverRing = vi.fn();
     key = vi.fn(() => false);
     budget: () => unknown;
@@ -51,7 +54,7 @@ vi.mock("../../src/ui/viewer", () => ({
 
 import {PreviewController} from "../../src/content/controller";
 
-type Message = {type: string; url?: string; token?: string; kind?: string; deep?: boolean};
+type Message = {type: string; url?: string; token?: string; kind?: string; deep?: boolean; open?: boolean; result?: ScanResult; index?: number};
 let store: Record<string, unknown>, messages: Message[], respond: (msg: Message) => unknown;
 let storageListeners: Array<(changes: Record<string, unknown>, area: string) => void>, runtimeListeners: Array<(msg: unknown, sender: unknown, send: (v: unknown) => void) => unknown>;
 let mutations: MutationCallback, frames: Array<() => void>, idle: Array<() => void>, observed: Element[], runtime: {id?: string};
@@ -103,7 +106,9 @@ beforeEach(() => {
   idle = [];
   observed = [];
   runtime = {id: "linkpeek"};
-  respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!) : msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2) : {ok: true};
+  respond = msg => msg.type === "LINKPEEK_SCAN" ? scan(msg.url!)
+    : msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2)
+      : msg.type === "LINKPEEK_MIRROR_QUERY" ? {open: false} : {ok: true};
   history.replaceState(null, "", "/page");
   vi.stubGlobal("chrome", {
     storage: {
@@ -166,6 +171,28 @@ describe("starting up", () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({tier: expect.any(String)}));
     expect(runtimeListeners[0](undefined, {}, send)).toBe(false);
   });
+
+  it("mirrors the current gallery and can keep the page panel out of the way", async () => {
+    await boot();
+    const answer = vi.fn();
+    expect(runtimeListeners[0]({type: "LINKPEEK_MIRROR_OPEN", open: true}, {}, answer)).toBe(false);
+    expect(answer).toHaveBeenCalledWith({ok: true});
+    expect(viewer.conceal).toHaveBeenLastCalledWith(true);
+
+    const a = link("a");
+    pointer("pointerover", a);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE").at(-1)).toMatchObject({result: {url: a.href}, index: 0});
+    const beforePosition = messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE").length;
+    viewer.onPosition?.(a.href, 0);
+    expect(messages.filter(message => message.type === "LINKPEEK_MIRROR_STATE")).toHaveLength(beforePosition + 1);
+
+    runtimeListeners[0]({type: "LINKPEEK_MIRROR_OPEN", open: false}, {}, answer);
+    expect(viewer.conceal).toHaveBeenLastCalledWith(false);
+    await setSettings({mirrorOnly: false});
+    runtimeListeners[0]({type: "LINKPEEK_MIRROR_OPEN", open: true}, {}, answer);
+    expect(viewer.conceal).toHaveBeenLastCalledWith(false);
+  });
 });
 
 describe("hover previews", () => {
@@ -185,7 +212,7 @@ describe("hover previews", () => {
     const a = link("a");
     pointer("pointerover", a);
     await flush();
-    expect(messages[0]).toMatchObject({type: "LINKPEEK_PREFETCH", deep: false});
+    expect(messages.find(message => message.type === "LINKPEEK_PREFETCH")).toMatchObject({type: "LINKPEEK_PREFETCH", deep: false});
     let finish!: (value: ScanResult) => void;
     respond = msg => msg.type === "LINKPEEK_SCAN" ? new Promise(resolve => finish = resolve) : scan(msg.url!, 2);
     await vi.advanceTimersByTimeAsync(100);

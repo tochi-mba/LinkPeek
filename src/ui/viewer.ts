@@ -30,7 +30,7 @@ export type ViewerState = {view?: View; gridThumbSize?: number; expanded?: boole
 /** Shortcut actions the viewer handles itself, in matching order. Link actions belong to the page. */
 const KEY_ACTIONS: readonly ShortcutAction[] = [
   "next", "previous", "grid", "expand", "pin", "favorite", "open", "openPage", "download", "downloadAll", "copy", "slideshow",
-  "fill", "rotate", "zoomIn", "zoomOut", "resetZoom", "help"
+  "popOut", "fill", "rotate", "zoomIn", "zoomOut", "resetZoom", "help"
 ];
 /** How long the first Shift+D waits for the second before forgetting it. */
 const CONFIRM_MS = 3000;
@@ -89,6 +89,8 @@ export class Viewer {
   private persistEnabled = true;
   /** The panel fills the window it is in (the mirror window); floating does the same. */
   private fillsWindow = false;
+  /** The page host can hide its copy while a mirror window is following it. */
+  private concealed = false;
   private slideshow = false;
   private slideshowPaused = false;
   private waitingForMore = false;
@@ -996,7 +998,12 @@ export class Viewer {
    * on another screen. Floating previews are never hidden.
    */
   conceal(hidden: boolean) {
-    this.host.style.visibility = hidden && !this.pip ? "hidden" : "";
+    this.concealed = hidden;
+    this.applyVisibility();
+  }
+
+  private applyVisibility() {
+    this.host.style.visibility = this.concealed && !this.pip ? "hidden" : "";
   }
 
   /** Makes the panel fill the window it is in, for the mirror window. */
@@ -1096,6 +1103,7 @@ export class Viewer {
     try {
       const pip = await api.requestWindow({width: Math.max(360, this.panel.offsetWidth || 520), height: Math.max(260, this.panel.offsetHeight || 420)});
       this.pip = pip;
+      this.applyVisibility();
       pip.document.body.style.margin = "0";
       pip.document.body.style.background = "#080A09";
       pip.document.body.append(this.host);
@@ -1123,6 +1131,7 @@ export class Viewer {
     const pip = this.pip;
     if (!pip) return;
     this.pip = undefined;
+    this.applyVisibility();
     pip.document.removeEventListener("keydown", this.onPipKey);
     document.documentElement.append(this.host);
     this.panel.classList.toggle("lp-popped", this.fillsWindow);
