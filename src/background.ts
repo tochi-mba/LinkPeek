@@ -8,11 +8,11 @@
 import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
-import {MediaLibrary} from "./background/media-library";
-import {HistoryWriter, savedUrlOf, savedUrlOfItem} from "./shared/history";
+import {MediaLibrary, type LibraryRules} from "./background/media-library";
+import {HistoryWriter, LIBRARY_CACHE, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
-import {fetchWithRetry, readBytesCapped} from "./core/http";
+import {bytesToBase64, fetchWithRetry, readBytesCapped} from "./core/http";
 import type {LinkKind, ScanResult} from "./shared/media";
 import type {BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
@@ -72,12 +72,17 @@ function cacheScan(url: string, result: ScanResult, settings: LinkPeekSettings, 
   if (persist) savePrepared(result, settings);
 }
 
+/** How the library must behave right now, from the settings. */
+function libraryRules(settings: LinkPeekSettings): LibraryRules {
+  return {budget: settings.savedMediaBudgetMb * 1024 * 1024, minWidth: settings.minWidth, minHeight: settings.minHeight, mirror: settings.saveToDownloads};
+}
+
 /** Downloads the files of a gallery that was prepared or scanned, into the library, as unseen media. */
 function savePrepared(result: ScanResult, settings: LinkPeekSettings) {
   if (!settings.saveMediaOffline || !settings.savePreparedMedia) return;
-  const budget = settings.savedMediaBudgetMb * 1024 * 1024;
+  const rules = libraryRules(settings);
   for (const item of result.items) {
-    library.save(savedUrlOfItem(item), budget, {
+    library.save(savedUrlOfItem(item), rules, {
       seen: false, type: item.type, source: item.sourceUrl, title: item.sourceTitle, original: item.originalUrl,
       preview: item.type === "video" ? item.posterUrl : item.previewUrl
     });
@@ -88,13 +93,6 @@ function savePrepared(result: ScanResult, settings: LinkPeekSettings) {
 function storedScan(url: string, settings: LinkPeekSettings): Promise<StoredGallery | undefined> {
   if (!settings.rememberGalleries) return Promise.resolve(undefined);
   return galleries.get(url, scanKey(settings), settings.rememberGalleriesDays * 86_400_000).catch(() => undefined);
-}
-
-function bytesToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer), chunk = 0x8000;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  return btoa(binary);
 }
 
 /** Fetches media bytes for the GIF frame player, which cannot read cross-origin pixels itself. */
@@ -113,6 +111,15 @@ function fetchBinary(url: string, maxMb: number): Promise<BinaryEntry> {
     const parsed = new URL(url);
     if (!/^https?:$/.test(parsed.protocol)) throw new Error("Unsupported media URL");
     const tooLarge = "GIF is larger than the configured frame-control limit";
+    // Saved on this device already: served from the library, with no network at all.
+    const kept = typeof caches === "undefined" ? undefined : await caches.open(LIBRARY_CACHE).then(cache => cache.match(url)).catch(() => undefined);
+    if (kept) {
+      const buffer = await kept.arrayBuffer();
+      if (buffer.byteLength > maxBytes) throw new Error(tooLarge);
+      const entry = {base64: bytesToBase64(buffer), mime: kept.headers.get("content-type") || "application/octet-stream", bytes: buffer.byteLength};
+      binaries.set(key, entry, entry.bytes, BINARY_BUDGET);
+      return entry;
+    }
     const entry = await fetchWithRetry(parsed.href, {credentials: "include", redirect: "follow"}, {read: async response => {
     if (!response.ok) throw new Error(`HTTP ${response.status} for media`);
     const buffer = await readBytesCapped(response, maxBytes, tooLarge);
@@ -370,7 +377,9 @@ chrome.runtime.onInstalled.addListener(async details => {
     await chrome.storage.local.set({settings: {}, settingsVersion: SETTINGS_VERSION});
     await chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")});
   } else if (details.reason === "update") {
-    await loadSettings();
+    const settings = await loadSettings();
+    // Files saved by an older version migrate into Downloads, and too-small ones are cleaned out.
+    if (settings.saveMediaOffline) await library.audit(libraryRules(settings)).catch(() => undefined);
   }
 });
 
@@ -410,7 +419,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
         if (settings.keepHistory) history.add(msg.entry);
         const entry = msg.entry;
         if (settings.saveMediaOffline) {
-          library.save(savedUrlOf(entry), settings.savedMediaBudgetMb * 1024 * 1024, {seen: true, type: entry.t, source: entry.s, title: entry.n, preview: entry.p || undefined, original: entry.o});
+          library.save(savedUrlOf(entry), libraryRules(settings), {seen: true, type: entry.t, source: entry.s, title: entry.n, preview: entry.p || undefined, original: entry.o});
         }
         return {ok: true};
       }), sendResponse);
@@ -425,6 +434,8 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(library.stats(), sendResponse);
     case "LINKPEEK_LIBRARY_CLEAR":
       return respond(library.clear().then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_LIBRARY_AUDIT":
+      return respond(currentSettings().then(settings => library.audit(libraryRules(settings))), sendResponse);
     case "LINKPEEK_HISTORY_CLEAR":
       return respond(history.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_FINGERPRINT":

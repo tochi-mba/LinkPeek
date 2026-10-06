@@ -257,3 +257,10 @@ input[type="range"] { accent-color: var(--signal); }
 .h-chip[aria-pressed="true"] { background: var(--signal, #D7FF3F); color: #111512; }
 .h-views[hidden] { display: none; }
 .h-new { position: absolute; left: 7px; bottom: 7px; padding: 1px 6px; border-radius: 6px; background: rgba(17, 21, 18, .86); color: var(--signal, #D7FF3F); font: 700 10px ui-monospace, monospace; }
+
+/* Tags mined from titles, and the library's order control. */
+.h-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 20px 0; }
+.h-tags[hidden] { display: none; }
+.h-tags .h-chip { border: 1px solid var(--line, #29302A); border-radius: 999px; background: var(--raised, #181E19); }
+.h-tags .h-chip[aria-pressed="true"] { background: var(--signal, #D7FF3F); color: #111512; border-color: var(--signal, #D7FF3F); }
+.h-sort { height: 34px; padding: 0 8px; border: 1px solid var(--line, #29302A); border-radius: 10px; background: var(--raised, #181E19); color: var(--text, #F2F5EE); font: 600 12px Inter, "Segoe UI", system-ui, sans-serif; }

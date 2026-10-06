@@ -80,13 +80,14 @@ beforeEach(async () => {
       onBoundsChanged: {addListener: vi.fn(listener => onWindowBounds = listener)},
       update: vi.fn(async () => undefined)
     },
-    downloads: {download: vi.fn(async () => 7)}
+    downloads: {download: vi.fn(async () => 7), removeFile: vi.fn(async () => undefined), erase: vi.fn(async () => undefined)}
   });
   core.scanGeneric.mockImplementation(async (url: string) => result(url, "generic", 1));
   core.prefetchDiscourse.mockImplementation(async (url: string) => ({result: result(url, "discourse", 1, false), seed}));
   core.scanDiscourse.mockImplementation(async (url: string) => result(url, "discourse", 2));
   await import("../../src/background");
-});
+  // The first import compiles the whole worker under coverage, which can pass 10 s on a busy machine.
+}, 30_000);
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -412,6 +413,20 @@ describe("GIF bytes, downloads and housekeeping", () => {
     expect((await send({type:"LINKPEEK_FETCH_BINARY",url:"https://x.test/large.gif",maxMb:1})).value.error).toContain("larger");
   });
 
+  it("serves GIF bytes from the saved media library before touching the network", async () => {
+    const api = fakeCaches();
+    const cache = await api.open("linkpeek-media");
+    await cache.put("https://x.test/kept.gif", new Response(new Uint8Array(3).fill(65), {headers: {"content-type": "image/gif"}}));
+    await cache.put("https://x.test/fat.gif", new Response(new Uint8Array(1024 * 1024 + 1).fill(65)));
+    await cache.put("https://x.test/plain.gif", new Response(new Uint8Array(2).fill(65)));
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect((await send({type: "LINKPEEK_FETCH_BINARY", url: "https://x.test/kept.gif", maxMb: 1})).value).toEqual({base64: "QUFB", mime: "image/gif", bytes: 3});
+    expect((await send({type: "LINKPEEK_FETCH_BINARY", url: "https://x.test/fat.gif", maxMb: 1})).value.error).toMatch(/larger than/);
+    expect((await send({type: "LINKPEEK_FETCH_BINARY", url: "https://x.test/plain.gif", maxMb: 1})).value.mime).toBe("application/octet-stream");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("fetches GIF bytes once, shares the work and caches the result", async () => {
     const fetch = vi.fn(async () => bytes(3, {"content-type": "image/gif"}));
     vi.stubGlobal("fetch", fetch);
@@ -592,6 +607,25 @@ describe("history and fingerprints", () => {
     await send({type: "LINKPEEK_OPEN_LIBRARY"});
     expect(created).toEqual([{url: "chrome-extension://id/history.html?view=saved&filter=unseen"}, {url: "chrome-extension://id/history.html"}]);
   }, 20_000);
+
+  it("checks the saved files on demand, removing too-small ones and filling in Downloads copies", async () => {
+    fakeCaches();
+    store.mediaIndex = [
+      ["https://cdn.test/small.jpg", {bytes: 3, at: 1, w: 20, h: 300, dl: 9}],
+      ["https://cdn.test/fine.jpg", {bytes: 4, at: 2, w: 900, h: 900}]
+    ];
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 2, removed: 1, mirrored: 1});
+    expect(chrome.downloads.removeFile).toHaveBeenCalledWith(9);
+    const index = new Map(store.mediaIndex as Array<[string, {dl?: number}]>);
+    expect([[...index.keys()], index.get("https://cdn.test/fine.jpg")!.dl]).toEqual([["https://cdn.test/fine.jpg"], 7]);
+  });
+
+  it("cleans and migrates the saved files when the extension updates", async () => {
+    fakeCaches();
+    store.mediaIndex = [["https://cdn.test/small.jpg", {bytes: 3, at: 1, w: 20, h: 300}]];
+    await onInstalled({reason: "update"});
+    expect(store.mediaIndex).toEqual([]);
+  });
 
   it("append to the history and clear it", async () => {
     vi.useFakeTimers();

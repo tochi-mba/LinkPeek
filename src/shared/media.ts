@@ -171,6 +171,11 @@ export function uniqueMediaItems(items: MediaItem[]): {items: MediaItem[]; dupli
 
 const UNSAFE_NAME_CHARS = /[\\/:*?"<>|\x00-\x1f]+/g;
 
+/** Whether media of this measured size falls below the configured minimums; an unknown (zero) axis passes. */
+export function underSized(width: number, height: number, limits: {minWidth: number; minHeight: number}) {
+  return (width > 0 && width < limits.minWidth) || (height > 0 && height < limits.minHeight);
+}
+
 /** A folder name every desktop OS accepts, for downloading a whole gallery. */
 export function safeFolderName(title: string) {
   return title.replace(UNSAFE_NAME_CHARS, " ").replace(/\s+/g, " ").replace(/^[.\s]+|[.\s]+$/g, "").slice(0, 80) || "LinkPeek gallery";

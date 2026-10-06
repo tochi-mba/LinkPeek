@@ -27,7 +27,7 @@ async function open(entries: HistoryEntry[] | null) {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({toFake: ["Date", "setTimeout"]});
+  vi.useFakeTimers({toFake: ["Date", "setTimeout", "clearTimeout"]});
   vi.setSystemTime(new Date(2026, 9, 6, 12, 0));
   observed = [];
   vi.stubGlobal("IntersectionObserver", class {
@@ -226,7 +226,7 @@ describe("the saved view", () => {
   const chip = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
 
   async function openLibrary(index: unknown, search = "") {
-    fakeCaches();
+    const api = fakeCaches();
     vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
     history.replaceState(null, "", `/history.html${search}`);
     vi.resetModules();
@@ -235,6 +235,7 @@ describe("the saved view", () => {
     harness.store[LIB] = index;
     await import("../../src/pages/history");
     await settle();
+    return api;
   }
 
   it("opens straight on what was preloaded and not seen yet, from the address", async () => {
@@ -291,5 +292,267 @@ describe("the saved view", () => {
     expect($("#clear").textContent).toBe("Delete saved media");
     await openLibrary("corrupt", "?view=saved&filter=bogus");
     expect(chip('[data-filter="all"]').getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("filters by kind of media in both views, keeping it in the address", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/a.jpg", {bytes: 1, at: now, seen: true, type: "image"}],
+      ["https://cdn.test/anim.gif", {bytes: 1, at: now - 5, seen: true, type: "gif"}],
+      ["https://cdn.test/clip.mp4", {bytes: 1, at: now - 9, seen: true, type: "video"}]
+    ], "?view=saved&media=gif");
+    expect([chip('[data-kind="gif"]').getAttribute("aria-pressed"), document.querySelectorAll(".h-tile").length]).toEqual(["true", 1]);
+    expect($("#summary").textContent).toBe("1 GIF, newest first");
+    chip('[data-kind="video"]').click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved&media=video", 1]);
+    chip('[data-show="seen"]').click();
+    await settle();
+    // The kind follows across views; the history holds no videos at all.
+    expect([location.search, $("#summary").textContent]).toEqual(["?media=video", "No videos in the history yet."]);
+    expect($("#audit").hidden).toBe(true);
+    chip('[data-kind="all"]').click();
+    await settle();
+    expect(location.search).toBe("");
+    await openLibrary([["https://cdn.test/a.jpg", {bytes: 1, at: now, seen: true, type: "image"}]], "?view=saved&media=video");
+    expect($("#summary").textContent).toBe("No videos among the saved files yet.");
+  });
+
+  it("checks the saved files on request and reports what was done", async () => {
+    await openLibrary([["https://cdn.test/tiny.jpg", {bytes: 1, at: Date.now(), seen: false, type: "image"}]], "?view=saved");
+    expect($("#audit").hidden).toBe(false);
+    harness.chrome.runtime.sendMessage.mockImplementation(async (msg: {type: string}) => {
+      if (msg.type !== "LINKPEEK_LIBRARY_AUDIT") return {ok: true};
+      harness.store[LIB] = [];
+      return {checked: 1, removed: 1, mirrored: 0};
+    });
+    $("#audit").click();
+    await settle();
+    expect($("#summary").textContent).toBe("Checked every saved file: removed 1 below your minimum size, added 0 to Downloads / LinkPeek Library.");
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
+    // When the worker cannot answer, the page says so instead of staying stuck on "checking".
+    harness.chrome.runtime.sendMessage.mockRejectedValueOnce(new Error("gone"));
+    $("#audit").click();
+    await settle();
+    expect($("#summary").textContent).toBe("Couldn’t check the saved files.");
+  });
+
+  it("shows a saved file's measurements, and skips files already in Downloads when saving all", async () => {
+    const now = Date.now();
+    const api = await openLibrary([
+      ["https://cdn.test/a.jpg", {bytes: 2 * 1024 * 1024, at: now, seen: true, type: "image", w: 1920, h: 1080, dl: 5}],
+      ["https://cdn.test/b.jpg", {bytes: 512, at: now - 5, seen: true, type: "image"}]
+    ], "?view=saved");
+    const cache = await api.open(LIBRARY_CACHE);
+    await cache.put("https://cdn.test/a.jpg", new Response("bytes"));
+    await cache.put("https://cdn.test/b.jpg", new Response("bytes"));
+    const download = vi.fn(async (options: {filename: string}) => options && 1);
+    harness.chrome.downloads = {download, search: vi.fn(async () => [{id: 5, exists: true}, {id: 9, exists: false}])};
+    document.querySelector<HTMLElement>('[data-index="0"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/^1 of 2 · 1920×1080 · 2\.0 MB · /);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/^2 of 2 · 1 KB · /);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    $("#saveAll").click();
+    await settle();
+    expect($("#saveAll").textContent).toBe("Press again to save 1 files");
+    $("#saveAll").click();
+    await settle();
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(download.mock.calls[0][0]).toMatchObject({filename: expect.stringContaining("b.jpg")});
+    expect($("#summary").textContent).toBe("Saved 1 files to Downloads / LinkPeek Library (1 already there)");
+  });
+
+  it("says when everything shown is already in Downloads", async () => {
+    const api = await openLibrary([["https://cdn.test/a.jpg", {bytes: 9, at: Date.now(), seen: true, type: "image", dl: 5}]], "?view=saved");
+    await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/a.jpg", new Response("bytes"));
+    harness.chrome.downloads = {download: vi.fn(), search: vi.fn(async () => [{id: 5, exists: true}])};
+    $("#saveAll").click();
+    await settle();
+    expect($("#summary").textContent).toBe("Everything shown is already in Downloads / LinkPeek Library.");
+    expect(harness.chrome.downloads.download).not.toHaveBeenCalled();
+  });
+});
+
+describe("tags, order and the slideshow", () => {
+  const LIB = "mediaIndex";
+  const chip = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
+
+  async function openLibrary(index: unknown, search = "") {
+    const api = fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", `/history.html${search}`);
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[LIB] = index;
+    await import("../../src/pages/history");
+    await settle();
+    return api;
+  }
+
+  const now = () => Date.now();
+  const aliceRows = () => [
+    ["https://cdn.test/anim.gif", {bytes: 1, at: now() - 1, seen: false, type: "gif", title: "Alice anim run", original: "https://x.test/anim.gif", source: "https://forum.test/t/a", preview: "https://cdn.test/anim-s.jpg"}],
+    ["https://cdn.test/beach.jpg", {bytes: 1, at: now() - 2, seen: false, type: "image", title: "Alice beach walk", original: "https://x.test/beach.jpg", source: "https://forum.test/t/b"}],
+    ["https://cdn.test/town.jpg", {bytes: 1, at: now() - 3, seen: true, type: "image", title: "Alice town pose"}],
+    ["https://cdn.test/zed.jpg", {bytes: 1, at: now() - 4, seen: false, type: "image", title: "Zed misc shot"}],
+    ["https://cdn.test/b1.jpg", {bytes: 1, at: now() - 5, seen: true, type: "image", title: "Bob first walkabout"}],
+    ["https://cdn.test/b2.jpg", {bytes: 1, at: now() - 6, seen: true, type: "image", title: "Bob second try"}],
+    ["https://cdn.test/b3.jpg", {bytes: 1, at: now() - 7, seen: true, type: "image", title: "Bob third day"}],
+    ["https://cdn.test/untitled.jpg", {bytes: 1, at: now() - 8, seen: true, type: "image"}]
+  ];
+
+  it("mines tag chips from titles, filters by one, and keeps it in the address", async () => {
+    await openLibrary(aliceRows(), "?view=saved");
+    const chips = [...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")];
+    expect(chips.map(button => button.textContent)).toEqual(["Alice", "Bob"]);
+    chips[0].click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved&tag=alice", 3]);
+    // The same press clears it again.
+    chip('#tags [data-tag="alice"]').click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length]).toEqual(["?view=saved", 8]);
+    // A click beside the chips changes nothing.
+    document.querySelector("#tags")!.dispatchEvent(new MouseEvent("click", {bubbles: true}));
+    await settle();
+    expect(location.search).toBe("?view=saved");
+    // A tag with nothing behind it says so.
+    chip('#tags [data-tag="alice"]').click();
+    chip('[data-kind="video"]').click();
+    await settle();
+    expect($("#summary").textContent).toBe("Nothing here carries \u201calice\u201d.");
+  });
+
+  it("drops a tag from the address that the titles no longer carry, and hides the row without tags", async () => {
+    await openLibrary(aliceRows(), "?view=saved&tag=zzz");
+    expect(location.search).toBe("?view=saved");
+    expect(document.querySelectorAll('#tags [aria-pressed="true"]')).toHaveLength(0);
+    await openLibrary([["https://cdn.test/x.jpg", {bytes: 1, at: now(), seen: true, title: "Lone title"}]], "?view=saved");
+    expect($("#tags").hidden).toBe(true);
+  });
+
+  it("orders by date, title or size, with headings to match", async () => {
+    await openLibrary([
+      ["https://cdn.test/big.jpg", {bytes: 12 * 1024 * 1024, at: now() - 1000, seen: true, type: "image", title: "Zebra big"}],
+      ["https://cdn.test/mid.jpg", {bytes: 2 * 1024 * 1024, at: now() - 2000, seen: true, type: "image", title: "apple mid"}],
+      ["https://cdn.test/mid2.jpg", {bytes: 2 * 1024 * 1024 + 5, at: now() - 3000, seen: true, type: "image", title: "apple mid"}],
+      ["https://cdn.test/wee.jpg", {bytes: 100, at: now() - 400, seen: true, type: "image", title: "1 numbers"}],
+      ["https://cdn.test/wee2.jpg", {bytes: 100, at: now() - 500, seen: true, type: "image", title: "1 numbers"}]
+    ], "?view=saved&sort=largest");
+    const order = $<HTMLSelectElement>("#sort");
+    expect(order.value).toBe("largest");
+    expect([...document.querySelectorAll(".h-day h2")].map(heading => heading.textContent)).toEqual(["10 MB and up", "1 to 10 MB", "Under 1 MB"]);
+    expect([...document.querySelectorAll(".h-tile figcaption a")].map(link => link.textContent))
+      .toEqual(["Zebra big", "apple mid", "apple mid", "1 numbers", "1 numbers"]);
+    order.value = "title";
+    order.dispatchEvent(new Event("change"));
+    await settle();
+    expect(location.search).toBe("?view=saved&sort=title");
+    expect([...document.querySelectorAll(".h-day h2")].map(heading => heading.textContent)).toEqual(["#", "A", "Z"]);
+    order.value = "oldest";
+    order.dispatchEvent(new Event("change"));
+    await settle();
+    expect([...document.querySelectorAll(".h-tile figcaption a")].map(link => link.textContent))
+      .toEqual(["apple mid", "apple mid", "Zebra big", "1 numbers", "1 numbers"]);
+    // The seen view cannot order by size; switching resets to newest.
+    order.value = "largest";
+    order.dispatchEvent(new Event("change"));
+    await settle();
+    chip('[data-show="seen"]').click();
+    await settle();
+    expect([order.value, order.querySelector<HTMLOptionElement>('option[value="largest"]')!.disabled]).toEqual(["newest", true]);
+  });
+
+  it("plays only what was never seen, GIFs first, marking each slide seen everywhere", async () => {
+    await openLibrary(aliceRows(), "?view=saved&tag=alice");
+    $("#play").click();
+    await settle();
+    expect($("#view").hidden).toBe(false);
+    // The GIF leads although both unseen files carry the tag.
+    expect($("#viewTitle").textContent).toBe("Alice anim run");
+    expect($("#viewMeta").textContent).toMatch(/1 of 2 .*· slideshow$/);
+    expect(harness.messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_HISTORY_ADD", entry: expect.objectContaining({o: "https://x.test/anim.gif"})}));
+    await vi.advanceTimersByTimeAsync(3000);
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Alice beach walk");
+    expect(harness.messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_HISTORY_ADD", entry: expect.objectContaining({o: "https://x.test/beach.jpg"})}));
+    // The queue ends by saying so instead of looping back round.
+    await vi.advanceTimersByTimeAsync(3000);
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/all caught up$/);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    await settle();
+    // Both slides now count as seen, so another run has nothing left.
+    $("#play").click();
+    await settle();
+    expect($("#summary").textContent).toBe("Nothing new to play: everything saved that matches has been seen.");
+    expect(document.querySelectorAll('.h-tile .h-new')).toHaveLength(0);
+  });
+
+  it("pauses with the button or Space, still stepping by hand, and honours kind and search", async () => {
+    await openLibrary([
+      ["https://cdn.test/one.jpg", {bytes: 1, at: now() - 1, seen: false, type: "image", title: "One thing"}],
+      ["https://cdn.test/two.jpg", {bytes: 1, at: now() - 2, seen: false, type: "image", title: "Two thing"}],
+      ["https://cdn.test/odd.gif", {bytes: 1, at: now() - 3, seen: false, type: "gif", title: "Elsewhere entirely"}]
+    ], "?view=saved&media=image");
+    const search = $<HTMLInputElement>("#search");
+    search.value = "thing";
+    search.dispatchEvent(new Event("input"));
+    await settle();
+    $("#play").click();
+    await settle();
+    const first = $("#viewTitle").textContent;
+    expect($("#viewMeta").textContent).toMatch(/1 of 2/);
+    $("#viewPause").click();
+    expect($("#viewPause").textContent).toBe("Resume");
+    expect($("#viewMeta").textContent).toMatch(/slideshow paused$/);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
+    expect($("#viewTitle").textContent).toBe(first);
+    // Stepping by hand still works while paused, without restarting the clock.
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
+    await settle();
+    expect($("#viewTitle").textContent).not.toBe(first);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: " "}));
+    await settle();
+    expect($("#viewPause").textContent).toBe("Pause");
+    await vi.advanceTimersByTimeAsync(3000);
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/all caught up$/);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    await settle();
+    // In the plain viewer, Space simply steps.
+    document.querySelector<HTMLElement>('[data-index="0"]')!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: " "}));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/^2 of 2/);
+  });
+
+  it("lets a video slide play itself out, staying put while paused", async () => {
+    await openLibrary([
+      ["https://cdn.test/clip.mp4", {bytes: 1, at: now(), seen: false, type: "video", title: "Clip night", preview: "https://cdn.test/clip-s.jpg"}]
+    ], "?view=saved");
+    $("#play").click();
+    await settle();
+    const video = document.querySelector<HTMLVideoElement>("#viewStage video")!;
+    // A slideshow's video plays once rather than looping.
+    expect(video.hasAttribute("loop")).toBe(false);
+    $("#viewPause").click();
+    video.dispatchEvent(new Event("ended"));
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/slideshow paused$/);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: " "}));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect($("#viewMeta").textContent).toMatch(/all caught up/);
+    expect($("#viewPause").hidden).toBe(true);
+    // The pause button does nothing once the slideshow is over.
+    $("#viewPause").click();
+    expect($("#viewPause").hidden).toBe(true);
   });
 });

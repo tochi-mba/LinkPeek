@@ -5,7 +5,7 @@
  * adding an entry rewrites one small chunk; past the limit the oldest chunk is
  * dropped. The service worker is the only writer; the history page reads.
  */
-import type {MediaItem} from "./media";
+import {safeDownloadName, type MediaItem} from "./media";
 
 export const HISTORY_META = "historyMeta";
 /** The Cache Storage holding saved media files (written by the service worker, read by the history page). */
@@ -28,6 +28,18 @@ export interface LibraryEntry {
   preview?: string;
   /** The original, for opening on the web. */
   original?: string;
+  /** Measured pixel size, when the saved file could be decoded. */
+  w?: number;
+  h?: number;
+  /** Its copy in Downloads / LinkPeek Library (a chrome.downloads id), once one was made. */
+  dl?: number;
+}
+
+/** The name a saved file gets under Downloads: the LinkPeek Library folder, the day, then the time, so folders sort in order. */
+export function libraryFileName(url: string, at: number) {
+  const date = new Date(at), pad = (value: number) => String(value).padStart(2, "0");
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return `LinkPeek Library/${day}/${pad(date.getHours())}.${pad(date.getMinutes())}.${pad(date.getSeconds())} ${safeDownloadName({originalUrl: url})}`;
 }
 
 /** The file the viewer shows for an item, which is what the library saves: a picture's preview, or the original GIF or video. */

@@ -154,6 +154,8 @@ export interface LinkPeekSettings {
   /** Media of prepared links is saved too, not only what is shown. */
   savePreparedMedia: boolean;
   savedMediaBudgetMb: number;
+  /** Each saved file is also written into Downloads / LinkPeek Library, so the files themselves can be browsed. */
+  saveToDownloads: boolean;
 
   // Keyboard and sites
   shortcuts: Shortcuts;
@@ -310,6 +312,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   saveMediaOffline: true,
   savePreparedMedia: true,
   savedMediaBudgetMb: 2048,
+  saveToDownloads: true,
 
   shortcuts: DEFAULT_SHORTCUTS,
   siteProfiles: {},

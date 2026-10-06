@@ -13,16 +13,26 @@
  * view into a LinkPeek Library folder, named by when they were seen or saved.
  */
 import {escapeHtml} from "../shared/dom";
-import {LIBRARY_CACHE, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
-import {linkLabel, safeDownloadName, type MediaItem} from "../shared/media";
+import {LIBRARY_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
+import {linkLabel, type MediaItem} from "../shared/media";
+import {SeenMedia, recordSeen} from "../shared/seen-media";
+import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
+import {mineTags, titleHasTag, type TitleTag} from "../shared/title-tags";
 
 /** Entries rendered per step as the list scrolls. */
 const PAGE = 240;
 const CONFIRM_MS = 3000;
 const WHEEL_STEP_MS = 220;
+/** A video slide may play itself out for at most this long. */
+const PLAY_MAX_MS = 60_000;
 
 type View = "seen" | "saved";
 type Filter = "all" | "unseen" | "seen";
+type Kind = "all" | "gif" | "video" | "image";
+type Sort = "newest" | "oldest" | "title" | "largest";
+
+/** What one of each kind is called, in the seen and the saved view. */
+const NOUNS: Record<Kind, [string, string]> = {all: ["item", "file"], gif: ["GIF", "GIF"], video: ["video", "video"], image: ["picture", "picture"]};
 
 /** One item on the page, whichever view it came from. */
 export interface Row {
@@ -38,6 +48,12 @@ export interface Row {
   /** Still for the grid ("" when there is none). */
   thumb: string;
   seen: boolean;
+  /** Measured pixel size and weight, known for saved files. */
+  w?: number;
+  h?: number;
+  bytes?: number;
+  /** Its copy in Downloads / LinkPeek Library, when one was made. */
+  dl?: number;
 }
 
 export function rowFromHistory(entry: HistoryEntry): Row {
@@ -48,13 +64,22 @@ export function rowFromLibrary([url, entry]: [string, LibraryEntry]): Row {
   const type = entry.type ?? (/\.gif(?:$|[?#])/i.test(url) ? "gif" : "image");
   return {
     at: entry.at, type, title: entry.title, source: entry.source ?? url, open: entry.original ?? url, saved: url,
-    thumb: type === "image" ? url : entry.preview ?? "", seen: entry.seen !== false
+    thumb: type === "image" ? url : entry.preview ?? "", seen: entry.seen !== false,
+    w: entry.w, h: entry.h, bytes: entry.bytes, dl: entry.dl
   };
 }
 
 const $ = (id: string) => document.getElementById(id)!;
 let view: View = "seen";
 let filter: Filter = "all";
+let kind: Kind = "all";
+let sort: Sort = "newest";
+/** The active tag's normalised key, or null for no tag. */
+let tag: string | null = null;
+let tags: TitleTag[] = [];
+let settings: LinkPeekSettings = DEFAULT_SETTINGS;
+/** Everything ever seen, anywhere, so the slideshow can promise something new. */
+const seenMedia = new SeenMedia();
 let seenRows: Row[] = [];
 let savedRows: Row[] = [];
 let shown: Row[] = [];
@@ -88,8 +113,12 @@ function dayLabel(at: number, now = new Date()) {
   return day.toLocaleDateString(undefined, {weekday: "long", day: "numeric", month: "long", year: day.getFullYear() === now.getFullYear() ? undefined : "numeric"});
 }
 
+function displayTitle(row: Row) {
+  return row.title || linkLabel(row.source);
+}
+
 function tile(row: Row, index: number) {
-  const title = row.title || linkLabel(row.source);
+  const title = displayTitle(row);
   const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "");
   const picture = row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">${row.type === "video" ? "Video" : "No preview"}</span>`;
   return `<figure class="h-tile"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${picture}${badges}</a>`
@@ -102,18 +131,34 @@ async function fillThumbnails() {
   for (const image of document.querySelectorAll<HTMLImageElement>("img[data-src]")) {
     const row = shown[Number(image.closest<HTMLElement>("[data-index]")!.dataset.index)], network = image.dataset.src!;
     image.removeAttribute("data-src");
+    // The grid may be refiltered while a saved copy is being read; a tile no longer backed by a row is left alone.
+    if (!row) continue;
     // A picture's saved copy is its thumbnail; a GIF's or video's is the original, too heavy for a tile.
     image.src = (row.type === "image" ? await savedCopy(row.saved) : undefined) ?? network;
   }
 }
 
-/** Renders the next page of rows, starting a new day heading where the day changes. */
+/** The heading a row files under: the day for date orders, a letter for titles, a size band for sizes. */
+function headingFor(row: Row) {
+  if (sort === "title") {
+    const first = displayTitle(row).trim().charAt(0).toUpperCase();
+    return /\p{L}/u.test(first) ? first : "#";
+  }
+  if (sort === "largest") {
+    const bytes = row.bytes!;
+    if (bytes >= 10 * 1024 * 1024) return "10 MB and up";
+    return bytes >= 1024 * 1024 ? "1 to 10 MB" : "Under 1 MB";
+  }
+  return dayLabel(row.at);
+}
+
+/** Renders the next page of rows, starting a new heading where it changes. */
 function renderMore() {
   const days = $("days"), start = rendered, next = shown.slice(rendered, rendered + PAGE);
   let grid = days.lastElementChild?.querySelector(".h-grid") ?? null, lastDay = days.lastElementChild?.getAttribute("data-day") ?? "";
   const pieces: string[] = [];
   next.forEach((row, offset) => {
-    const label = dayLabel(row.at);
+    const label = headingFor(row);
     if (label !== lastDay) {
       // A heading always exists before any tile, so a pending run belongs to the grid being left.
       if (pieces.length) grid!.insertAdjacentHTML("beforeend", pieces.splice(0).join(""));
@@ -128,20 +173,48 @@ function renderMore() {
   return fillThumbnails();
 }
 
-/** The rows of the current view and filter, before searching. */
+/** Whether the row's title carries the tag, remembered per title so filtering stays instant. */
+const tagHits = new Map<string, boolean>();
+function rowHasTag(row: Row, key: string) {
+  const memo = `${key}\u0000${row.title ?? ""}`;
+  let hit = tagHits.get(memo);
+  if (hit === undefined) tagHits.set(memo, hit = titleHasTag(row.title ?? "", key));
+  return hit;
+}
+
+/** The rows of the current view, seen-state filter, kind of media and tag, before searching. */
 function current() {
-  if (view === "seen") return seenRows;
-  return filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
+  let base = view === "seen" ? seenRows : filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
+  if (kind !== "all") base = base.filter(row => row.type === kind);
+  if (tag) base = base.filter(row => rowHasTag(row, tag!));
+  return base;
+}
+
+/**
+ * Mines the tag chips from every title on record. The active tag survives
+ * only while it is still offered, so the chips always explain the filter.
+ */
+function computeTags() {
+  tags = mineTags([...seenRows, ...savedRows].map(row => row.title ?? ""));
+  if (tag && !tags.some(mined => mined.key === tag)) {
+    tag = null;
+    writeAddress();
+  }
+  const host = $("tags");
+  host.innerHTML = tags.map(mined =>
+    `<button type="button" class="h-chip" data-tag="${escapeHtml(mined.key)}" aria-pressed="${String(mined.key === tag)}" title="${mined.count.toLocaleString()} titles">${escapeHtml(mined.label)}</button>`).join("");
+  host.hidden = !tags.length;
 }
 
 function summary() {
-  const base = current(), query = ($("search") as HTMLInputElement).value.trim();
+  const base = current(), query = ($("search") as HTMLInputElement).value.trim(), noun = NOUNS[kind][view === "seen" ? 0 : 1];
   if (!base.length) {
+    if (tag) return `Nothing here carries \u201c${tag}\u201d.`;
+    if (kind !== "all") return `No ${noun}s ${view === "seen" ? "in the history" : "among the saved files"} yet.`;
     if (view === "seen") return "Nothing here yet. What you open in LinkPeek appears here, newest first.";
     return filter === "unseen" ? "Nothing preloaded is waiting: everything saved has been seen." : "Nothing is saved on this device yet. Prepared and shown media is saved here as LinkPeek works.";
   }
   if (query) return `${shown.length.toLocaleString()} of ${base.length.toLocaleString()} match “${query}”`;
-  const noun = view === "seen" ? "item" : "file";
   return `${base.length.toLocaleString()} ${noun}${base.length === 1 ? "" : "s"}, newest first`;
 }
 
@@ -149,17 +222,37 @@ function summary() {
 function paintControls() {
   for (const button of document.querySelectorAll<HTMLElement>("[data-show]")) button.setAttribute("aria-pressed", String(button.dataset.show === view));
   for (const button of document.querySelectorAll<HTMLElement>("[data-filter]")) button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
+  for (const button of document.querySelectorAll<HTMLElement>("[data-kind]")) button.setAttribute("aria-pressed", String(button.dataset.kind === kind));
+  for (const button of document.querySelectorAll<HTMLElement>("[data-tag]")) button.setAttribute("aria-pressed", String(button.dataset.tag === tag));
+  const order = $("sort") as HTMLSelectElement;
+  order.value = sort;
+  // Only saved files know their size, so the seen view cannot order by it.
+  order.querySelector<HTMLOptionElement>('option[value="largest"]')!.disabled = view === "seen";
   $("filters").hidden = view !== "saved";
+  $("audit").hidden = view !== "saved";
   $("clear").textContent = view === "seen" ? "Clear history" : "Delete saved media";
 }
 
+function searchWords() {
+  return ($("search") as HTMLInputElement).value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchesSearch(row: Row, words: string[]) {
+  const text = `${row.title ?? ""} ${row.source} ${row.open}`.toLowerCase();
+  return words.every(word => text.includes(word));
+}
+
+const ORDERS: Record<Sort, (a: Row, b: Row) => number> = {
+  newest: (a, b) => b.at - a.at,
+  oldest: (a, b) => a.at - b.at,
+  title: (a, b) => displayTitle(a).localeCompare(displayTitle(b)) || b.at - a.at,
+  largest: (a, b) => b.bytes! - a.bytes! || b.at - a.at
+};
+
 function apply() {
-  const words = ($("search") as HTMLInputElement).value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const words = searchWords();
   const base = current();
-  shown = words.length ? base.filter(row => {
-    const text = `${row.title ?? ""} ${row.source} ${row.open}`.toLowerCase();
-    return words.every(word => text.includes(word));
-  }) : base;
+  shown = (words.length ? base.filter(row => matchesSearch(row, words)) : base).slice().sort(ORDERS[sort]);
   rendered = 0;
   paintControls();
   $("days").replaceChildren();
@@ -203,14 +296,34 @@ async function clearView() {
     await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_CLEAR"});
     savedRows = [];
   }
+  computeTags();
   await apply();
 }
 
 /** The file name a saved item gets in Downloads: when it was seen or saved, then its own name, so the folder sorts in order. */
 function fileName(row: Row) {
-  const at = new Date(row.at), pad = (value: number) => String(value).padStart(2, "0");
-  const day = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
-  return `LinkPeek Library/${day}/${pad(at.getHours())}.${pad(at.getMinutes())}.${pad(at.getSeconds())} ${safeDownloadName({originalUrl: row.saved})}`;
+  return libraryFileName(row.saved, row.at);
+}
+
+/**
+ * Measures every saved file, removes ones below the minimum media size
+ * (Downloads copies included), and fills in missing Downloads copies.
+ */
+async function auditSaved() {
+  $("summary").textContent = "Checking the saved files…";
+  const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number} | undefined;
+  savedRows = await readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => []);
+  computeTags();
+  await apply();
+  $("summary").textContent = result
+    ? `Checked every saved file: removed ${result.removed.toLocaleString()} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
+    : "Couldn’t check the saved files.";
+}
+
+/** The ids of Downloads copies whose file is still on disk. */
+async function inDownloads() {
+  const found = await (chrome.downloads.search?.({filenameRegex: "LinkPeek Library"}) ?? Promise.resolve([])).catch(() => [] as chrome.downloads.DownloadItem[]);
+  return new Set(found.filter(item => item.exists !== false).map(item => item.id));
 }
 
 async function saveAll() {
@@ -219,42 +332,167 @@ async function saveAll() {
     $("summary").textContent = "Nothing here is saved on this device yet. Turn on Settings → Privacy → Save what you see.";
     return;
   }
-  if (!saveStep.confirm(`Press again to save ${saved.length.toLocaleString()} files`)) return;
-  let done = 0;
-  for (const {row, url} of saved) {
-    await chrome.downloads.download({url: url!, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
-    $("summary").textContent = `Saving to Downloads / LinkPeek Library… ${++done} of ${saved.length}`;
+  // Files whose Downloads copy is still on disk are not written twice; rows from the seen view find theirs by address.
+  const there = await inDownloads();
+  const dlOf = new Map(savedRows.filter(row => row.dl !== undefined).map(row => [row.saved, row.dl!] as const));
+  const wanted = saved.filter(({row}) => {
+    const dl = row.dl ?? dlOf.get(row.saved);
+    return dl === undefined || !there.has(dl);
+  });
+  if (!wanted.length) {
+    $("summary").textContent = "Everything shown is already in Downloads / LinkPeek Library.";
+    return;
   }
-  $("summary").textContent = `Saved ${saved.length.toLocaleString()} files to Downloads / LinkPeek Library`;
+  if (!saveStep.confirm(`Press again to save ${wanted.length.toLocaleString()} files`)) return;
+  let done = 0;
+  for (const {row, url} of wanted) {
+    await chrome.downloads.download({url: url!, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
+    $("summary").textContent = `Saving to Downloads / LinkPeek Library… ${++done} of ${wanted.length}`;
+  }
+  const skipped = saved.length - wanted.length;
+  $("summary").textContent = `Saved ${wanted.length.toLocaleString()} files to Downloads / LinkPeek Library${skipped ? ` (${skipped.toLocaleString()} already there)` : ""}`;
 }
 
-// ---- The full-size viewer ----
+// ---- The full-size viewer and the slideshow ----
+
+/** The rows the viewer walks: the slideshow's queue while one plays, else what the grid shows. */
+let playlist: Row[] | null = null;
+let playing = false;
+let paused = false;
+let playTimer: ReturnType<typeof setTimeout> | undefined;
+/** Something became seen while the viewer was open; the grid refreshes on close. */
+let seenChanged = false;
+
+function viewed() {
+  return playlist ?? shown;
+}
+
+/** The row as the rest of LinkPeek knows media, for recording it as seen. */
+function itemOf(row: Row): MediaItem {
+  return {
+    id: row.saved, type: row.type, originalUrl: row.open, previewUrl: row.type === "image" ? row.saved : row.thumb,
+    posterUrl: row.type === "video" ? row.thumb : undefined, sourceUrl: row.source, sourceTitle: row.title, score: 1
+  };
+}
+
+/** Opening a file full size counts as seeing it — in the history, the library and the shuffle's memory. */
+function markSeen(row: Row) {
+  if (row.seen) return;
+  row.seen = true;
+  seenChanged = true;
+  recordSeen(seenMedia, itemOf(row), settings);
+}
 
 async function showItem(index: number) {
-  viewing = (index + shown.length) % shown.length;
-  const row = shown[viewing], copy = await savedCopy(row.saved);
-  if (shown[viewing] !== row) return;
-  // The saved copy works offline; without one, the original from the web.
+  const list = viewed();
+  viewing = (index + list.length) % list.length;
+  const row = list[viewing], copy = await savedCopy(row.saved);
+  if (viewed()[viewing] !== row) return;
+  // The saved copy works offline; without one, the original from the web. A slideshow's video plays once.
   const source = copy ?? row.open, stage = $("viewStage");
   stage.innerHTML = row.type === "video"
-    ? `<video src="${escapeHtml(source)}" controls autoplay loop playsinline></video>`
+    ? `<video src="${escapeHtml(source)}" controls autoplay ${playing ? "" : "loop "}playsinline></video>`
     : `<img src="${escapeHtml(source)}" alt="">`;
   const title = $("viewTitle") as HTMLAnchorElement;
-  title.textContent = row.title || linkLabel(row.source);
+  title.textContent = displayTitle(row);
   title.href = row.source;
   ($("viewOriginal") as HTMLAnchorElement).href = row.open;
-  $("viewMeta").textContent = `${viewing + 1} of ${shown.length} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}`;
+  const size = row.w ? ` · ${row.w}×${row.h}` : "";
+  const weight = row.bytes ? ` · ${row.bytes >= 1024 * 1024 ? `${(row.bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(row.bytes / 1024))} KB`}` : "";
+  const mode = playing ? (paused ? " · slideshow paused" : " · slideshow") : "";
+  $("viewMeta").textContent = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}${mode}`;
+  markSeen(row);
+  if (playing) {
+    stage.querySelector("video")?.addEventListener("ended", () => advance(), {once: true});
+    queueAdvance(row);
+  }
+}
+
+/** Lines up the next slide: a still waits the configured seconds, a video gets to play itself out. */
+function queueAdvance(row: Row) {
+  clearTimeout(playTimer);
+  if (paused) return;
+  playTimer = setTimeout(advance, row.type === "video" ? PLAY_MAX_MS : Math.max(1, settings.slideshowSeconds) * 1000);
+}
+
+function advance() {
+  clearTimeout(playTimer);
+  // A video that ends while the slideshow is paused stays put.
+  if (paused) return;
+  if (viewing >= viewed().length - 1) {
+    stopSlideshow("all caught up");
+    return;
+  }
+  void showItem(viewing + 1);
+}
+
+function stopSlideshow(note?: string) {
+  clearTimeout(playTimer);
+  playing = false;
+  paused = false;
+  $("viewPause").hidden = true;
+  if (note) $("viewMeta").textContent += ` · ${note}`;
+}
+
+function shuffleRows(rows: Row[]) {
+  for (let i = rows.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rows[i], rows[j]] = [rows[j], rows[i]];
+  }
+  return rows;
+}
+
+/**
+ * Plays everything saved but never seen — not here, not in any tab, not ever —
+ * honouring the kind, tag and search filters. GIFs always come first, and
+ * every slide shown is recorded as seen.
+ */
+function startSlideshow() {
+  const words = searchWords();
+  let pool = savedRows.filter(row => !row.seen && !seenMedia.has({originalUrl: row.open}));
+  if (kind !== "all") pool = pool.filter(row => row.type === kind);
+  if (tag) pool = pool.filter(row => rowHasTag(row, tag!));
+  if (words.length) pool = pool.filter(row => matchesSearch(row, words));
+  playlist = [...shuffleRows(pool.filter(row => row.type === "gif")), ...shuffleRows(pool.filter(row => row.type !== "gif"))];
+  if (!playlist.length) {
+    playlist = null;
+    $("summary").textContent = "Nothing new to play: everything saved that matches has been seen.";
+    return;
+  }
+  playing = true;
+  paused = false;
+  const pause = $("viewPause");
+  pause.hidden = false;
+  pause.textContent = "Pause";
+  $("view").hidden = false;
+  void showItem(0);
+}
+
+function togglePause() {
+  if (!playing) return;
+  paused = !paused;
+  $("viewPause").textContent = paused ? "Resume" : "Pause";
+  $("viewMeta").textContent = $("viewMeta").textContent!.replace(/ · slideshow( paused)?$/, paused ? " · slideshow paused" : " · slideshow");
+  if (paused) clearTimeout(playTimer);
+  else queueAdvance(viewed()[viewing]);
 }
 
 function openViewer(index: number) {
+  playlist = null;
   $("view").hidden = false;
   void showItem(index);
 }
 
 function closeViewer() {
+  stopSlideshow();
+  playlist = null;
   $("view").hidden = true;
   $("viewStage").replaceChildren();
   viewing = -1;
+  if (seenChanged) {
+    seenChanged = false;
+    void apply();
+  }
 }
 
 function step(delta: number) {
@@ -262,14 +500,15 @@ function step(delta: number) {
 }
 
 async function saveViewed() {
-  const row = shown[viewing];
+  const row = viewed()[viewing];
   await chrome.downloads.download({url: await savedCopy(row.saved) ?? row.open, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
 }
 
 function onKey(event: KeyboardEvent) {
   if (viewing < 0) return;
   const moves: Record<string, number> = {ArrowRight: 1, ArrowDown: 1, " ": 1, ArrowLeft: -1, ArrowUp: -1};
-  if (event.key === "Escape") closeViewer();
+  if (event.key === " " && playing) togglePause();
+  else if (event.key === "Escape") closeViewer();
   else if (event.key in moves) step(moves[event.key]);
   else return;
   event.preventDefault();
@@ -289,12 +528,20 @@ function readAddress() {
   view = params.get("view") === "saved" ? "saved" : "seen";
   const wanted = params.get("filter");
   filter = wanted === "unseen" || wanted === "seen" ? wanted : "all";
+  const media = params.get("media");
+  kind = media === "gif" || media === "video" || media === "image" ? media : "all";
+  const order = params.get("sort");
+  sort = order === "oldest" || order === "title" || order === "largest" ? order : "newest";
+  tag = params.get("tag");
 }
 
 function writeAddress() {
   const params = new URLSearchParams();
   if (view === "saved") params.set("view", "saved");
   if (view === "saved" && filter !== "all") params.set("filter", filter);
+  if (kind !== "all") params.set("media", kind);
+  if (sort !== "newest") params.set("sort", sort);
+  if (tag) params.set("tag", tag);
   history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
 }
 
@@ -302,10 +549,13 @@ async function start() {
   clearStep = new TwoStep($("clear"), () => view === "seen" ? "Clear history" : "Delete saved media");
   saveStep = new TwoStep($("saveAll"), () => "Save all to Downloads");
   readAddress();
+  settings = await loadSettings().catch(() => DEFAULT_SETTINGS);
+  void seenMedia.load();
   [seenRows, savedRows] = await Promise.all([
     readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
     readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
   ]);
+  computeTags();
   await apply();
   new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting) && rendered < shown.length) void renderMore();
@@ -313,10 +563,29 @@ async function start() {
   $("search").addEventListener("input", () => void apply());
   $("clear").addEventListener("click", () => void clearView());
   $("saveAll").addEventListener("click", () => void saveAll());
-  document.querySelector(".history-head")!.addEventListener("click", event => {
-    const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter]");
+  $("audit").addEventListener("click", () => void auditSaved());
+  $("play").addEventListener("click", startSlideshow);
+  $("viewPause").addEventListener("click", togglePause);
+  $("sort").addEventListener("change", () => {
+    sort = ($("sort") as HTMLSelectElement).value as Sort;
+    writeAddress();
+    void apply();
+  });
+  $("tags").addEventListener("click", event => {
+    const button = (event.target as Element).closest<HTMLElement>("[data-tag]");
     if (!button) return;
-    if (button.dataset.show) view = button.dataset.show as View;
+    tag = tag === button.dataset.tag ? null : button.dataset.tag!;
+    writeAddress();
+    void apply();
+  });
+  document.querySelector(".history-head")!.addEventListener("click", event => {
+    const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter],[data-kind]");
+    if (!button) return;
+    if (button.dataset.show) {
+      view = button.dataset.show as View;
+      // The seen view cannot order by size.
+      if (view === "seen" && sort === "largest") sort = "newest";
+    } else if (button.dataset.kind) kind = button.dataset.kind as Kind;
     else filter = button.dataset.filter as Filter;
     writeAddress();
     void apply();
