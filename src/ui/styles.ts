@@ -204,6 +204,7 @@ export const overlayCss = `${rexCss}
 /* Floating in its own window the panel IS the window; dragging and resizing belong to the OS. */
 .lp-panel.lp-popped { left: 0 !important; top: 0 !important; width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important; border-radius: 0; border: 0; }
 .lp-panel.lp-popped [data-resize] { display: none; }
+.lp-popped .lp-stage, .lp-popped .lp-grid { height: auto !important; max-height: none !important; min-height: 0 !important; flex: 1 1 auto; }
 .lp-calm, .lp-calm * { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .lp-panel, .lp-panel * { animation: none !important; transition: none !important; }

@@ -71,6 +71,8 @@ export interface LinkPeekSettings {
   skipSeenMedia: boolean;
   /** When the page runs out, the shuffle follows links to further pages. */
   shuffleFollowLinks: boolean;
+  /** While the mirror window is open, previews show only there (the page panel keeps working, unseen). */
+  mirrorOnly: boolean;
   thumbnailSize: number;
   verticalGesture: "navigate" | "off";
   horizontalGesture: "scrub" | "navigate" | "off";
@@ -222,6 +224,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   shuffleSlideshow: true,
   skipSeenMedia: true,
   shuffleFollowLinks: true,
+  mirrorOnly: true,
   thumbnailSize: 120,
   verticalGesture: "navigate",
   horizontalGesture: "scrub",

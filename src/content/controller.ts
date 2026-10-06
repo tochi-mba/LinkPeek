@@ -134,6 +134,7 @@ export class PreviewController {
     // A mirror window may already be open (opened before this page loaded).
     chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_QUERY"}).then(answer => {
       this.mirrorOpen = Boolean((answer as {open?: boolean} | undefined)?.open);
+      this.concealForMirror();
     }).catch(() => undefined);
 
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void this.onStorageChanged(changes, area);
@@ -224,6 +225,7 @@ export class PreviewController {
   private async onStorageChanged(changes: Record<string, chrome.storage.StorageChange>, area: string) {
     if (area !== "local" || !changes.settings) return;
     this.settings = await loadSettings();
+    this.concealForMirror();
     this.prefetcher.reset();
   }
 
@@ -234,6 +236,7 @@ export class PreviewController {
     }
     if (msg?.type === "LINKPEEK_MIRROR_OPEN") {
       this.mirrorOpen = Boolean(msg.open);
+      this.concealForMirror();
       if (this.mirrorOpen) this.sendMirror();
       sendResponse({ok: true});
       return false;
@@ -640,6 +643,11 @@ export class PreviewController {
     } finally {
       clearTimeout(slow);
     }
+  }
+
+  /** With the mirror open, the page's own panel stays unseen (unless that setting is off). */
+  private concealForMirror() {
+    this.viewer.conceal(this.mirrorOpen && this.pageSettings().mirrorOnly);
   }
 
   /** Sends what is on screen to the mirror window, which shows it on another monitor. */
