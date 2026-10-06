@@ -126,6 +126,17 @@ describe("other states", () => {
     expect(html(markup.resizeHandles()).querySelectorAll("[data-resize]")).toHaveLength(8);
   });
 
+  it("say where an item came from only when that adds something", () => {
+    const base = result({title: "Thread"}), own = item({sourceUrl: base.url});
+    expect(markup.captionText(undefined, base)).toBe("");
+    expect(markup.captionText(own, undefined)).toBe("");
+    expect(markup.captionText({...own, sourceTitle: "Thread"}, base)).toBe("");
+    expect(markup.captionText(item({sourceUrl: "https://x.test/t/1/5", sourceTitle: "Thread", postNumber: 5, author: "rex"}), base)).toBe("Post #5 · by rex");
+    expect(markup.captionText(item({sourceUrl: "https://other.test/album/one", sourceTitle: "Album one"}), base)).toBe("Album one");
+    expect(markup.captionText(item({sourceUrl: "https://other.test/album/two"}), base)).toBe("two");
+    expect(markup.captionText(item({sourceTitle: "Trip"}), result({mixed: true}))).toBe("Trip");
+  });
+
   it("build the help sheet from the actual bindings", () => {
     const el = html(markup.helpMarkup({...DEFAULT_SHORTCUTS, nextLink: [], previousLink: [], openPage: [], preloadInspector: [], slideshow: ["Shift+s"]}, true));
     expect(el.textContent).toContain("Play / pause");

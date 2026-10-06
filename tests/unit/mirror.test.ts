@@ -13,6 +13,7 @@ vi.mock("../../src/ui/viewer", () => ({
     key = vi.fn(() => false);
     onDismiss?: () => void;
     onPosition?: () => void;
+    onSeen?: (item: unknown) => void;
     constructor(public options: unknown) {
       viewers.push(this);
     }
@@ -94,6 +95,10 @@ describe("the mirror window", () => {
 
     viewer.onDismiss();
     expect(document.getElementById("hint")!.hidden).toBe(false);
+    // What is browsed here counts as seen too.
+    viewer.onSeen({id: "x", type: "image", originalUrl: "https://forum.test/x.jpg", previewUrl: "https://forum.test/x.jpg", sourceUrl: "https://forum.test", score: 1});
+    await settle();
+    expect(harness.messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_HISTORY_ADD"}));
   });
 
   it("supports F11 fullscreen and forwards other keys to the viewer", async () => {

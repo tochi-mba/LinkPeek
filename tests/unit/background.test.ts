@@ -44,8 +44,9 @@ beforeEach(async () => {
   vi.stubGlobal("chrome", {
     storage: {
       local: {
-        get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.map(key => [key, store[key]]))),
-        set: vi.fn(async (values: Record<string, unknown>) => Object.assign(store, values))
+        get: vi.fn(async (keys: string | string[]) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, store[key]]))),
+        set: vi.fn(async (values: Record<string, unknown>) => Object.assign(store, values)),
+        remove: vi.fn(async (keys: string | string[]) => (Array.isArray(keys) ? keys : [keys]).forEach(key => delete store[key]))
       },
       session: {
         get: vi.fn(async (key: string) => ({[key]: sessionStore[key]})),
@@ -448,5 +449,95 @@ describe("GIF bytes, downloads and housekeeping", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(await send({type: "SOMETHING_ELSE"})).toEqual({async: false, value: undefined});
     expect(await send(undefined)).toEqual({async: false, value: undefined});
+  });
+});
+
+describe("galleries kept on the device", () => {
+  const sent = () => (chrome.tabs.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+
+  it("answer a scan straight away while fresh, show an old one at once while a fresh scan runs, and serve preparation", async () => {
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/kept", kind: "generic", token: "a"});
+    await tick();
+    expect(store["gallery:https://x.test/kept"]).toMatchObject({url: "https://x.test/kept", result: {items: [expect.anything()]}});
+    // A new session of the service worker: memory is empty, the device still has it.
+    vi.resetModules();
+    await import("../../src/background");
+    core.scanGeneric.mockClear();
+    expect((await send({type: "LINKPEEK_SCAN", url: "https://x.test/kept", kind: "generic", token: "b"})).value.url).toBe("https://x.test/kept");
+    expect((await send({type: "LINKPEEK_PREFETCH", url: "https://x.test/kept", kind: "generic", deep: false})).value.url).toBe("https://x.test/kept");
+    expect(core.scanGeneric).not.toHaveBeenCalled();
+    (store["gallery:https://x.test/kept"] as {at: number}).at -= 2 * 60 * 60_000;
+    vi.resetModules();
+    await import("../../src/background");
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/kept", kind: "generic", token: "c"}, {tab: {id: 9}, frameId: 0});
+    expect(sent().some(([tab, msg]) => tab === 9 && msg.type === "LINKPEEK_SCAN_PROGRESS" && msg.token === "c")).toBe(true);
+    expect(core.scanGeneric).toHaveBeenCalledTimes(1);
+    vi.resetModules();
+    await import("../../src/background");
+    (store["gallery:https://x.test/kept"] as {at: number}).at -= 2 * 60 * 60_000;
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/kept", kind: "generic", token: "d"}, {});
+    vi.resetModules();
+    await import("../../src/background");
+    (store["gallery:https://x.test/kept"] as {at: number}).at -= 2 * 60 * 60_000;
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/kept", kind: "generic", token: "e"}, {tab: {id: 9}});
+    expect(sent().some(([tab, msg, options]) => tab === 9 && msg.token === "e" && options.frameId === 0)).toBe(true);
+    // Preparation in a fresh session answers from the device too.
+    vi.resetModules();
+    await import("../../src/background");
+    core.scanGeneric.mockClear();
+    expect((await send({type: "LINKPEEK_PREFETCH", url: "https://x.test/kept", kind: "generic", deep: false})).value.url).toBe("https://x.test/kept");
+    expect(core.scanGeneric).not.toHaveBeenCalled();
+  });
+
+  it("are not used or kept while that is off, report their size, and can be forgotten", async () => {
+    store.settings = {rememberGalleries: false};
+    onStorage({settings: {newValue: store.settings}}, "local");
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/off", kind: "generic", token: "a"});
+    await send({type: "LINKPEEK_PREFETCH", url: "https://x.test/off2", kind: "generic", deep: true});
+    await tick();
+    expect(Object.keys(store).some(key => key.startsWith("gallery:"))).toBe(false);
+    store.settings = {};
+    onStorage({settings: {newValue: store.settings}}, "local");
+    await send({type: "LINKPEEK_SCAN", url: "https://x.test/on", kind: "generic", token: "b"});
+    await tick();
+    expect((await send({type: "LINKPEEK_GALLERY_STATS"})).value).toMatchObject({count: 1});
+    expect((await send({type: "LINKPEEK_FORGET_GALLERIES"})).value).toEqual({ok: true});
+    expect(store["gallery:https://x.test/on"]).toBeUndefined();
+  });
+
+  it("search linked pages on request, as their own scan, after any preparation of that link finishes", async () => {
+    let finish!: (value: unknown) => void;
+    core.scanGeneric.mockImplementationOnce(() => new Promise(resolve => finish = resolve));
+    const warming = send({type: "LINKPEEK_PREFETCH", url: "https://x.test/tiny", kind: "generic", deep: false});
+    while (!finish) await tick();
+    const linked = send({type: "LINKPEEK_SCAN", url: "https://x.test/tiny", kind: "generic", token: "a", linked: true});
+    await tick();
+    expect(core.scanGeneric).toHaveBeenCalledTimes(1);
+    finish(result("https://x.test/tiny", "generic", 1));
+    await warming;
+    await linked;
+    expect(core.scanGeneric.mock.calls.at(-1)![1]).toMatchObject({recursiveTrigger: "always"});
+  });
+});
+
+describe("history and fingerprints", () => {
+  it("append to the history and clear it", async () => {
+    vi.useFakeTimers();
+    expect((await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 1, o: "https://cdn.test/1.jpg", p: "", t: "image", s: "https://x.test"}})).value).toEqual({ok: true});
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(store.historyMeta).toEqual({first: 0, last: 0});
+    expect((await send({type: "LINKPEEK_HISTORY_CLEAR"})).value).toEqual({ok: true});
+    expect(store.historyMeta).toBeUndefined();
+  });
+
+  it("fingerprint pictures for pages, null where a picture cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(new Uint8Array([1]), {headers: url.includes("plain") ? {} : {"content-type": "image/png"}})));
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({close() {}})));
+    vi.stubGlobal("OffscreenCanvas", class {
+      getContext() {
+        return {drawImage() {}, getImageData: () => ({data: new Uint8ClampedArray(288)})};
+      }
+    });
+    expect((await send({type: "LINKPEEK_FINGERPRINT", urls: ["https://cdn.test/a.png", "https://cdn.test/plain"]})).value).toEqual({prints: ["0000000000000000", null]});
   });
 });

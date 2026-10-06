@@ -134,7 +134,11 @@ document.querySelectorAll<HTMLButtonElement>("[data-open]").forEach(button => bu
   void save();
 }));
 $("options").addEventListener("click", () => void chrome.runtime.openOptionsPage());
-$("practice").addEventListener("click", () => void chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")}));
+$("practice").addEventListener("click", event => {
+  event.preventDefault();
+  void chrome.tabs.create({url: chrome.runtime.getURL("onboarding.html")});
+});
+$("history").addEventListener("click", () => void chrome.tabs.create({url: chrome.runtime.getURL("history.html")}));
 $("clear").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({type: "LINKPEEK_CLEAR_CACHE"});
   $("clear").textContent = "Cache cleared";

@@ -86,7 +86,8 @@ function toResult(raw: string, topic: DTopic, items: MediaItem[], postsScanned: 
   const warnings = warning ? [warning] : [];
   if (deduped.items.length > cap) warnings.push(`${LIMIT_WARNING} ${cap} media limit.`);
   return {
-    url: raw, kind: "discourse", title: topic.title, items: deduped.items.slice(0, cap), complete, postsScanned, totalPosts,
+    url: raw, kind: "discourse", title: topic.title, complete, postsScanned, totalPosts,
+    items: deduped.items.slice(0, cap).map(item => topic.title && !item.sourceTitle ? {...item, sourceTitle: topic.title} : item),
     diagnostics: {adapter: "Discourse", ignored: 0, duplicates: deduped.duplicates, warnings}
   };
 }

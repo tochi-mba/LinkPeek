@@ -1,6 +1,6 @@
 /** HTML for the viewer's parts. Pure functions of state, so rendering stays predictable. */
 import {escapeHtml} from "../shared/dom";
-import type {MediaItem, ScanResult} from "../shared/media";
+import {linkLabel, type MediaItem, type ScanResult} from "../shared/media";
 import type {LinkPeekSettings, ShortcutAction, Shortcuts} from "../shared/settings";
 import {comboLabel} from "../shared/shortcuts";
 import {RESIZE_EDGES} from "./panel-geometry";
@@ -119,6 +119,18 @@ export function mediaMarkup(item: MediaItem, settings: LinkPeekSettings, decoded
   }
   if (decoded) return `<div class="lp-image-slot"></div>`;
   return `<img class="lp-image" src="${escapeHtml(item.previewUrl)}" alt="${escapeHtml(item.filename || "Preview image")}" decoding="async">`;
+}
+
+/**
+ * Where an item came from, when that adds something to the header: the page or
+ * post title (always in a shuffle, otherwise when it differs from the gallery's
+ * own), the post number and the author.
+ */
+export function captionText(item: MediaItem | undefined, result: ScanResult | undefined) {
+  if (!item || !result) return "";
+  const elsewhere = result.mixed || item.sourceUrl !== result.url;
+  const title = result.mixed || (elsewhere && item.sourceTitle !== result.title) ? item.sourceTitle || linkLabel(item.sourceUrl) : "";
+  return [title, item.postNumber ? `Post #${item.postNumber}` : "", item.author ? `by ${item.author}` : ""].filter(Boolean).join(" · ");
 }
 
 export function tipText(item: MediaItem | undefined) {

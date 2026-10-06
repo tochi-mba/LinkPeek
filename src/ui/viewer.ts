@@ -69,6 +69,8 @@ export class Viewer {
   onSeen?: (item: MediaItem) => void;
   /** Reached the end of a gallery that is still growing. */
   onNeedMore?: () => void;
+  /** Every item turned out too small to count, leaving the gallery empty. */
+  onEmptied?: (url: string) => void;
   private expanded = false;
   private gridThumbSize = 120;
   private remembered: {view?: View; gridThumbSize?: number; expanded?: boolean} = {};
@@ -476,7 +478,7 @@ export class Viewer {
   private onPanelAuxClick = (event: MouseEvent) => {
     if (event.button !== 1) return;
     const target = event.target as Element, item = this.result?.items[this.index];
-    const url = target.closest?.(".lp-title") ? this.pageUrl() : target.closest?.(".lp-stage") ? item?.originalUrl : undefined;
+    const url = target.closest?.(".lp-title") ? this.pageUrl() : target.closest?.(".lp-caption") ? item?.sourceUrl : target.closest?.(".lp-stage") ? item?.originalUrl : undefined;
     if (!url) return;
     event.preventDefault();
     chrome.runtime.sendMessage({type: "LINKPEEK_OPEN_TAB", url, active: false})
@@ -614,6 +616,20 @@ export class Viewer {
     else bar.lastElementChild!.textContent = `Still scanning · ${markup.progressText(this.result)}`;
   }
 
+  /** The small "where it came from" link in the corner of the media; a link, so it opens that page. */
+  private updateCaption(item: MediaItem) {
+    const text = this.settings.showSourceTitle ? markup.captionText(item, this.result) : "";
+    let caption = this.stage?.querySelector<HTMLAnchorElement>(".lp-caption");
+    if (!text) return caption?.remove();
+    if (!caption) {
+      caption = Object.assign(document.createElement("a"), {className: "lp-caption", target: "_blank", rel: "noopener"});
+      this.stage!.append(caption);
+    }
+    caption.textContent = text;
+    caption.href = item.sourceUrl;
+    caption.title = `Open ${item.sourceUrl}`;
+  }
+
   /** Places the item's media in the stage: the decoded image, a GIF player or a video. */
   private fillMedia(item: MediaItem, version: number) {
     const slot = this.stage?.querySelector(".lp-image-slot");
@@ -624,6 +640,7 @@ export class Viewer {
       slot.replaceWith(decoded);
     }
     if (item.type === "gif") void this.mountGif(item, version);
+    this.updateCaption(item);
     this.onSeen?.(item);
     // In a shuffle each item may come from a different link, so the saved-link star follows it.
     if (this.result?.mixed) void this.refreshFavorite();
@@ -658,7 +675,10 @@ export class Viewer {
     this.result = {...this.result, items};
     if (at < this.index) this.index--;
     this.index = Math.min(this.index, Math.max(0, items.length - 1));
-    if (!items.length) return this.render();
+    if (!items.length) {
+      this.render();
+      return this.onEmptied?.(this.result.url);
+    }
     // Drop it in place: the grid keeps its scroll position and the stage keeps its listeners.
     this.preloader.reset(items, this.index, this.settings);
     if (this.view === "grid") {

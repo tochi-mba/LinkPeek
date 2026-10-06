@@ -33,6 +33,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("page titles", () => {
+  it("label each item with the page it was found on, decoded, and nothing for an empty title", async () => {
+    html("https://a.test/titled", `<title> Cats &amp; dogs </title><img src="/a.jpg" width="800" height="600">`);
+    html("https://a.test/blank", `<title>   </title><img src="/b.jpg" width="800" height="600">`);
+    expect((await scanGeneric("https://a.test/titled", settings({recursiveSearch: "off"}))).items[0].sourceTitle).toBe("Cats & dogs");
+    expect((await scanGeneric("https://a.test/blank", settings({recursiveSearch: "off"}))).items[0]).not.toHaveProperty("sourceTitle");
+  });
+});
+
 describe("reading a page", () => {
   it("extracts posted media and the title from HTML", async () => {
     html("https://a.test/post", `<title>  A   post </title><img src="/one.jpg"><img src="/two.png">`);

@@ -216,3 +216,25 @@ input[type="range"] { accent-color: var(--signal); }
 .mirror-hint p { margin: 0; color: var(--muted, #858D83); max-width: 52ch; font-size: 14px; }
 .mirror-keys kbd { border: 1px solid var(--line, #29302A); border-radius: 6px; padding: 1px 7px; background: var(--raised, #181E19); font: 700 12px ui-monospace, monospace; }
 .mirror [hidden] { display: none; }
+
+/* The history page: a dark grid of everything seen, grouped by day. */
+.history { margin: 0; background: #080A09; color: var(--text, #F2F5EE); }
+.history-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: rgba(8, 10, 9, .94); border-bottom: 1px solid var(--line, #29302A); backdrop-filter: blur(12px); }
+.history-head h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+.history-search { width: min(360px, 40vw); height: 36px; padding: 0 12px; border: 1px solid var(--line, #29302A); border-radius: 9px; background: var(--raised, #181E19); color: inherit; font: inherit; }
+.history-search:focus { outline: 2px solid var(--signal, #D7FF3F); outline-offset: 1px; }
+.history-summary { margin: 14px 20px 0; font-size: 13px; }
+.h-day { padding: 8px 20px 4px; }
+.h-day h2 { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--signal, #D7FF3F); margin: 14px 0 10px; }
+.h-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.h-tile { margin: 0; border: 1px solid var(--line, #29302A); border-radius: 12px; overflow: hidden; background: var(--panel, #111512); }
+.h-media { position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; background: #050605; }
+.h-media img { width: 100%; height: 100%; object-fit: cover; }
+.h-none { color: var(--muted, #858D83); font-size: 12px; }
+.h-badge { position: absolute; top: 7px; right: 7px; padding: 1px 6px; border-radius: 6px; background: var(--signal, #D7FF3F); color: #111512; font: 800 10px ui-monospace, monospace; }
+.h-tile figcaption { display: flex; gap: 8px; align-items: baseline; padding: 7px 9px; font-size: 12px; }
+.h-tile figcaption a { flex: 1; min-width: 0; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-tile figcaption a:hover { color: var(--signal, #D7FF3F); }
+.h-tile time { color: var(--muted, #858D83); font: 600 11px ui-monospace, monospace; }
+.history-more { height: 1px; }
+@media (max-width: 640px) { .history-head { flex-wrap: wrap; } .history-search { width: 100%; order: 5; } }

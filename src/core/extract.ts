@@ -24,7 +24,7 @@ const ENTITY = /&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi;
 const NAMED_ENTITIES: Record<string, string> = {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'"};
 const attributePatterns = new Map<string, RegExp>();
 
-function decodeEntities(value: string) {
+export function decodeEntities(value: string) {
   return value.replace(ENTITY, (_, entity: string) => {
     const lower = entity.toLowerCase();
     if (!lower.startsWith("#")) return NAMED_ENTITIES[lower];

@@ -1522,3 +1522,36 @@ describe("a shuffle of many links", () => {
     expect([count(), toast()]).toEqual(["2 / 2", "End of gallery"]);
   });
 });
+
+describe("where each item came from", () => {
+  const linked = () => ({...result(2), items: [item(0, "image", {sourceUrl: "https://other.test/album", sourceTitle: "Album"}), item(1, "image", {sourceUrl: "https://forum.test/t/a/1"})]});
+
+  it("names the page in the corner, as a link, and follows the item on screen", async () => {
+    open().show(linked());
+    const caption = q<HTMLAnchorElement>(".lp-caption")!;
+    expect([caption.textContent, caption.getAttribute("href"), caption.target]).toEqual(["Album", "https://other.test/album", "_blank"]);
+    press("ArrowRight");
+    await flush();
+    expect(q(".lp-caption")).toBeNull();
+    press("ArrowLeft");
+    await flush();
+    q(".lp-caption")!.dispatchEvent(new MouseEvent("auxclick", {button: 1, bubbles: true, cancelable: true}));
+    await flush();
+    expect(messages.at(-1)).toEqual({type: "LINKPEEK_OPEN_TAB", url: "https://other.test/album", active: false});
+  });
+
+  it("stays out of the way when turned off", () => {
+    open({showSourceTitle: false}).show(linked());
+    expect(q(".lp-caption")).toBeNull();
+  });
+
+  it("says when every item turned out too small", () => {
+    const emptied = vi.fn();
+    viewer.onEmptied = emptied;
+    open({minWidth: 50}).show({...result(1), items: [item(0, "image", {previewUrl: "https://x.test/o0"})]});
+    const image = q<HTMLImageElement>(".lp-image")!;
+    Object.defineProperty(image, "naturalWidth", {configurable: true, value: 10});
+    image.dispatchEvent(new Event("load"));
+    expect(emptied).toHaveBeenCalledWith("https://forum.test/t/a/1");
+  });
+});

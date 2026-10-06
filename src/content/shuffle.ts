@@ -6,9 +6,13 @@
  * slides in a row never come from the same link while another link has media
  * left. Media already in the mix, or already seen, is skipped.
  *
+ * With GIFs favoured, each link's GIFs come first in its queue and every pick
+ * goes to a link whose next item is a GIF whenever one exists; still pictures
+ * fill in only while no GIF is available (never by waiting for one).
+ *
  * The mix also keeps the frontier of links still to explore: the page's own
  * links first, then links found on the pages read so far. Links come out in
- * random order, each at most once.
+ * random order, each at most once, those known to hold GIFs first when asked.
  */
 import {canonicalMediaUrl, type MediaItem, type ScanResult} from "../shared/media";
 
@@ -34,7 +38,7 @@ export class ShuffleMix {
   private frontier: string[] = [];
   private queued = new Set<string>();
 
-  constructor(private isSeen: (item: MediaItem) => boolean, private random: Random = Math.random) {}
+  constructor(private isSeen: (item: MediaItem) => boolean, private random: Random = Math.random, private favorGifs = false) {}
 
   /** Adds a link's gallery; the links its pages lead to join the frontier. */
   add(link: string, result: ScanResult, followLinks = true) {
@@ -43,7 +47,8 @@ export class ShuffleMix {
     if (followLinks) for (const context of result.linkContexts ?? []) this.explore(context.links);
     if (this.added.has(link)) return;
     this.added.add(link);
-    const items = shuffled(result.items, this.random).filter(item => !this.isSeen(item) && !this.placed.has(canonicalMediaUrl(item.originalUrl)));
+    const fresh = shuffled(result.items, this.random).filter(item => !this.isSeen(item) && !this.placed.has(canonicalMediaUrl(item.originalUrl)));
+    const items = this.favorGifs ? [...fresh.filter(item => item.type === "gif"), ...fresh.filter(item => item.type !== "gif")] : fresh;
     if (items.length) this.queues.set(link, items);
   }
 
@@ -71,8 +76,11 @@ export class ShuffleMix {
   take(count: number, repeatLink = false) {
     const out: MediaItem[] = [];
     while (out.length < count) {
-      const choices = [...this.queues.keys()].filter(link => link !== this.last || (repeatLink && this.queues.size === 1));
-      if (!choices.length) break;
+      const open = [...this.queues.keys()].filter(link => link !== this.last || (repeatLink && this.queues.size === 1));
+      if (!open.length) break;
+      // GIFs sit first in each queue, so a link offers a GIF exactly when its next item is one.
+      const gifs = this.favorGifs ? open.filter(link => this.queues.get(link)![0].type === "gif") : [];
+      const choices = gifs.length ? gifs : open;
       const link = choices[Math.floor(this.random() * choices.length)], queue = this.queues.get(link)!, item = queue.shift()!;
       if (!queue.length) this.queues.delete(link);
       const key = canonicalMediaUrl(item.originalUrl);
@@ -94,11 +102,12 @@ export class ShuffleMix {
     }
   }
 
-  /** The next `count` links to explore, picked at random. */
-  nextLinks(count: number) {
+  /** The next `count` links to explore, picked at random; links `preferred` says yes to go first. */
+  nextLinks(count: number, preferred: (link: string) => boolean = () => false) {
     const out: string[] = [];
     while (out.length < count && this.frontier.length) {
-      const at = Math.floor(this.random() * this.frontier.length);
+      const favoured = this.frontier.flatMap((link, i) => preferred(link) ? [i] : []);
+      const at = favoured.length ? favoured[Math.floor(this.random() * favoured.length)] : Math.floor(this.random() * this.frontier.length);
       out.push(this.frontier[at]);
       this.frontier[at] = this.frontier[this.frontier.length - 1];
       this.frontier.pop();

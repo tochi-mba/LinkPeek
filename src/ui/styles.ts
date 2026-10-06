@@ -51,6 +51,13 @@ export const overlayCss = `${rexCss}
   animation: lp-busy 0.9s ease-in-out infinite;
 }
 @keyframes lp-busy { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.lp-caption {
+  position: absolute; top: 10px; left: 10px; z-index: 2; max-width: calc(100% - 20px);
+  padding: 5px 11px; border-radius: 999px; border: 1px solid ${REX.line}; background: rgba(17, 21, 18, .84);
+  color: ${REX.text}; font: 600 12px/1.3 Inter, "Segoe UI", system-ui, sans-serif; text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lp-caption:hover { color: ${REX.signal}; border-color: ${REX.signal}; }
 .lp-tip {
   position: absolute; bottom: 14px; left: 50%; translate: -50% 0; max-width: calc(100% - 16px);
   padding: 7px 10px; border-radius: 999px; border: 1px solid ${REX.line}; background: ${REX.raised};

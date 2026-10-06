@@ -9,6 +9,7 @@
  */
 import type {Budget} from "../content/resource-governor";
 import type {MirrorStateMessage} from "../shared/messages";
+import {SeenMedia, recordSeen} from "../shared/seen-media";
 import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {Viewer} from "../ui/viewer";
 
@@ -20,6 +21,8 @@ const MIRROR_BUDGET: Budget = {
 
 const viewer = new Viewer({budget: () => MIRROR_BUDGET, persist: false});
 const hint = document.getElementById("hint")!;
+/** What is browsed here counts as seen too: the shuffle and the history know about it. */
+const seen = new SeenMedia();
 let settings: LinkPeekSettings = DEFAULT_SETTINGS;
 let currentUrl: string | undefined;
 /** Set while applying a remote update, so onPosition can tell local browsing apart. */
@@ -71,6 +74,8 @@ async function start() {
   viewer.onPosition = () => {
     if (!applying) browsingHere = true;
   };
+  viewer.onSeen = item => recordSeen(seen, item, settings);
+  void seen.load();
   chrome.runtime.onMessage.addListener((msg: {type?: string}) => {
     if (msg?.type === "LINKPEEK_MIRROR_STATE") show(msg as MirrorStateMessage);
     return false;

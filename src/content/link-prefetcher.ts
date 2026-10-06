@@ -218,6 +218,11 @@ export class LinkPrefetcher {
     return this.results.has(url) || Boolean(this.known.get(url)?.media);
   }
 
+  /** True when a check found a GIF behind this link. */
+  knownGif(url: string) {
+    return Boolean(this.known.get(url)?.gif);
+  }
+
   /** True when a check found no media and no deeper search could find any. */
   knownEmpty(url: string) {
     const summary = this.known.get(url);
@@ -276,6 +281,9 @@ export class LinkPrefetcher {
       this.results.delete(url);
       this.results.set(url, result);
       remove(this.results, RESULT_CACHE_SIZE);
+    } else if (!result.items.length) {
+      // Found empty after all (its media too small to count): never offer the old gallery again.
+      this.results.delete(url);
     }
     this.changed();
   }

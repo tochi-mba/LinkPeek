@@ -5,6 +5,7 @@
   "description": "Preview and browse the media behind links without leaving the page. A REX Technologies product.",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "downloads"
   ],
   "host_permissions": [

@@ -6,6 +6,9 @@
  * long threads, and keeps a byte-bounded cache of results and GIF bytes.
  */
 import {ByteCache} from "./background/byte-cache";
+import {Fingerprinter} from "./background/fingerprint";
+import {GalleryStore, type StoredGallery} from "./background/gallery-store";
+import {HistoryWriter} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {fetchWithRetry, readBytesCapped} from "./core/http";
@@ -22,6 +25,9 @@ const BINARY_BUDGET = 64 * 1024 * 1024;
 const PROGRESS_FIRST_DELAY_MS = 60;
 
 const scans = new ByteCache<CachedScan>();
+const galleries = new GalleryStore();
+const fingerprints = new Fingerprinter();
+const history = new HistoryWriter();
 const binaries = new ByteCache<BinaryEntry>();
 const scanTasks = new Map<string, ScanTask>();
 const prefetchTasks = new Map<string, Promise<ScanResult | null>>();
@@ -56,9 +62,17 @@ function cachedScan(url: string, settings: LinkPeekSettings) {
   return entry;
 }
 
-function cacheScan(url: string, result: ScanResult, settings: LinkPeekSettings, seed?: DiscourseSeed) {
-  const entry: CachedScan = {at: Date.now(), scanKey: scanKey(settings), result, seed};
+function cacheScan(url: string, result: ScanResult, settings: LinkPeekSettings, seed?: DiscourseSeed, at = Date.now(), persist = true) {
+  const entry: CachedScan = {at, scanKey: scanKey(settings), result, seed};
   scans.set(url, entry, estimateBytes(entry), Math.max(1, settings.maxCacheMb) * 1024 * 1024);
+  // Only finished galleries are kept on the device; a partial one would hide the rest next time.
+  if (persist && result.complete && settings.rememberGalleries) void galleries.put(url, entry.scanKey, result).catch(() => undefined);
+}
+
+/** A gallery saved on the device earlier, when keeping them is on. */
+function storedScan(url: string, settings: LinkPeekSettings): Promise<StoredGallery | undefined> {
+  if (!settings.rememberGalleries) return Promise.resolve(undefined);
+  return galleries.get(url, scanKey(settings), settings.rememberGalleriesDays * 86_400_000).catch(() => undefined);
 }
 
 function bytesToBase64(buffer: ArrayBuffer) {
@@ -143,6 +157,12 @@ async function executeScan(url: string, kind: LinkKind, settings: LinkPeekSettin
 async function prefetch(url: string, kind: LinkKind, settings: LinkPeekSettings, deep: boolean): Promise<ScanResult | null> {
   const cached = cachedScan(url, settings);
   if (cached) return cached.result;
+  // Saved on the device: nothing to fetch ahead of time, whatever its age within the keep period.
+  const stored = await storedScan(url, settings);
+  if (stored) {
+    cacheScan(url, stored.result, settings, undefined, stored.at, false);
+    return stored.result;
+  }
   if (kind === "direct-image" || kind === "direct-video") {
     const result = directResult(url, kind, settings);
     cacheScan(url, result, settings);
@@ -175,26 +195,38 @@ async function prefetch(url: string, kind: LinkKind, settings: LinkPeekSettings,
 }
 
 async function scan(msg: ScanRequest, sender: chrome.runtime.MessageSender) {
-  const settings = effectiveSettings(await currentSettings(), msg.url);
+  const base = effectiveSettings(await currentSettings(), msg.url);
+  // Searching linked pages whatever the page itself holds; its own media were all too small to count.
+  const settings: LinkPeekSettings = msg.linked ? {...base, recursiveTrigger: "always"} : base;
+  const key = msg.linked ? `${msg.url}\u0000linked` : msg.url;
   // Reuse a prefetch that is already running instead of starting the same requests twice.
   let warming: Promise<unknown> | undefined;
   while ((warming = prefetchTasks.get(msg.url))) await warming.catch(() => null);
   const cached = cachedScan(msg.url, settings);
   if (cached?.result.complete) return cached.result;
-  let task = scanTasks.get(msg.url);
+  // Saved on the device: fresh enough is the answer; older shows at once while a fresh scan runs.
+  const stored = cached || msg.linked ? undefined : await storedScan(msg.url, settings);
+  if (stored && Date.now() - stored.at < settings.cacheMinutes * 60_000) {
+    cacheScan(msg.url, stored.result, settings, undefined, stored.at, false);
+    return stored.result;
+  }
+  let task = scanTasks.get(key);
   if (task?.controller.signal.aborted) {
-    scanTasks.delete(msg.url);
+    scanTasks.delete(key);
     task = undefined;
   }
   if (!task) {
     const created: ScanTask = {controller: new AbortController(), consumers: new Map(), promise: Promise.resolve(undefined as unknown as ScanResult)};
-    scanTasks.set(msg.url, created);
+    scanTasks.set(key, created);
     created.promise = executeScan(msg.url, msg.kind, settings, created, cached?.seed).finally(() => {
-      if (scanTasks.get(msg.url) === created) scanTasks.delete(msg.url);
+      if (scanTasks.get(key) === created) scanTasks.delete(key);
     });
     task = created;
   }
   task.consumers.set(msg.token, {token: msg.token, tabId: sender.tab?.id, frameId: sender.frameId});
+  if (stored && sender.tab?.id != null) {
+    chrome.tabs.sendMessage(sender.tab.id, {type: "LINKPEEK_SCAN_PROGRESS", token: msg.token, url: msg.url, result: stored.result}, {frameId: sender.frameId ?? 0}).catch(() => undefined);
+  }
   return task.promise;
 }
 
@@ -336,8 +368,20 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "LINKPEEK_CLEAR_CACHE":
       scans.clear();
       binaries.clear();
+      return respond(galleries.clear().then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_HISTORY_ADD":
+      history.add(msg.entry);
       sendResponse({ok: true});
       return false;
+    case "LINKPEEK_HISTORY_CLEAR":
+      return respond(history.clear().then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_FINGERPRINT":
+      return respond(Promise.all(msg.urls.slice(0, 64).map(url => fingerprints.print(url))).then(prints => ({prints: prints.map(print => print ?? null)})), sendResponse);
+    case "LINKPEEK_GALLERY_STATS":
+      return respond(galleries.stats(), sendResponse);
+    case "LINKPEEK_FORGET_GALLERIES":
+      scans.clear();
+      return respond(galleries.clear().then(() => ({ok: true})), sendResponse);
     default:
       return false;
   }

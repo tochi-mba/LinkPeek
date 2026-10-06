@@ -67,3 +67,31 @@ describe("the mix", () => {
     expect([mix.exploring, mix.nextLinks(1)]).toEqual([0, []]);
   });
 });
+
+describe("GIFs first", () => {
+  const mixed = (link: string, kinds: Array<"gif" | "image">): ScanResult => ({...gallery(link, kinds.length), items: kinds.map((type, n) => ({...item(link, n), type}))});
+
+  it("shows every GIF before any still picture while GIFs from other links are on offer", () => {
+    const mix = new ShuffleMix(() => false, seeded(), true);
+    mix.add("a", mixed("a", ["image", "gif"]));
+    mix.add("b", mixed("b", ["gif", "image"]));
+    mix.add("c", mixed("c", ["image", "gif"]));
+    const order = mix.take(10, true), links = order.map(entry => entry.sourceUrl);
+    expect(order.slice(0, 3).map(entry => entry.type)).toEqual(["gif", "gif", "gif"]);
+    expect(links.every((link, i) => i === 0 || link !== links[i - 1] || links.slice(i - 1).every(rest => rest === link))).toBe(true);
+  });
+
+  it("fills in with a still picture rather than repeat the link that holds the only GIFs, and never waits for one", () => {
+    const mix = new ShuffleMix(() => false, seeded(), true);
+    mix.add("a", mixed("a", ["gif", "gif"]));
+    mix.add("b", mixed("b", ["image"]));
+    expect(mix.take(3).map(entry => `${entry.sourceUrl.slice(-1)}:${entry.type}`)).toEqual(["a:gif", "b:image", "a:gif"]);
+  });
+
+  it("explores links known to hold GIFs first", () => {
+    const mix = new ShuffleMix(() => false, seeded(), true);
+    mix.explore(["p1", "p2", "gif1", "p3", "gif2"]);
+    expect(mix.nextLinks(2, link => link.startsWith("gif")).sort()).toEqual(["gif1", "gif2"]);
+    expect(mix.nextLinks(1, link => link.startsWith("gif"))).toHaveLength(1);
+  });
+});
