@@ -821,6 +821,22 @@ describe("panel controls", () => {
     click("copy");
     await flush();
     expect(toast()).toBe("Couldn’t copy the link");
+    // Plain-http pages have no clipboard at all.
+    vi.stubGlobal("navigator", {});
+    click("copy");
+    await flush();
+    expect(toast()).toBe("Couldn’t copy the link");
+    // A site that blocks clipboard writes is told so, without tripping its policy.
+    vi.stubGlobal("navigator", {clipboard: {writeText}});
+    writeText.mockClear();
+    Object.defineProperty(document, "featurePolicy", {configurable: true, value: {allowsFeature: () => false}});
+    try {
+      click("copy");
+      await flush();
+      expect([writeText.mock.calls.length, toast()]).toEqual([0, "This site doesn’t allow copying"]);
+    } finally {
+      delete (document as {featurePolicy?: unknown}).featurePolicy;
+    }
   });
 
   it("opens the post an item came from", () => {
@@ -995,8 +1011,26 @@ describe("zoom", () => {
     viewer.onDoubleClick(0, 0);
     expect(document.exitFullscreen).toHaveBeenCalled();
     Object.defineProperty(document, "fullscreenElement", {configurable: true, value: null});
+    // Refused (no user gesture, say): the panel fills the tab instead.
+    viewer.panel.requestFullscreen = vi.fn(async () => {
+      throw new Error("refused");
+    });
+    viewer.onDoubleClick(0, 0);
+    await flush();
+    expect(viewer.panel.classList.contains("lp-expanded")).toBe(true);
+    // Blocked by the site's policy: no attempt at all, and the same fallback.
+    viewer.panel.requestFullscreen = vi.fn(async () => undefined);
+    Object.defineProperty(document, "featurePolicy", {configurable: true, value: {allowsFeature: () => false}});
+    try {
+      viewer.onDoubleClick(0, 0);
+      expect(viewer.panel.requestFullscreen).not.toHaveBeenCalled();
+      expect(viewer.panel.classList.contains("lp-expanded")).toBe(false);
+    } finally {
+      delete (document as {featurePolicy?: unknown}).featurePolicy;
+    }
     (viewer.panel as Partial<HTMLElement>).requestFullscreen = undefined;
     viewer.onDoubleClick(0, 0);
+    expect(viewer.panel.classList.contains("lp-expanded")).toBe(true);
   });
 
   it("zooms from the keyboard around the middle of the stage", () => {
