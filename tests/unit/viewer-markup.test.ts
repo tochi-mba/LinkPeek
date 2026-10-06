@@ -11,7 +11,7 @@ const html = (markupString: string) => {
   el.innerHTML = markupString;
   return el;
 };
-const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, slideshowPaused: false, help: false, settings, ...patch}));
+const header = (patch: Partial<markup.HeaderState> = {}) => html(markup.headerMarkup({title: "Thread", count: 2, view: "focus", expanded: false, pinned: false, favorite: false, slideshow: false, slideshowPaused: false, popped: false, help: false, settings, ...patch}));
 
 describe("key hints", () => {
   it("show up to two bindings", () => {

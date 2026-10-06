@@ -13,7 +13,8 @@ export type DownloadAllRequest = {type: "LINKPEEK_DOWNLOAD_ALL"; folder: string;
 export type OpenTabRequest = {type: "LINKPEEK_OPEN_TAB"; url: string; active?: boolean};
 export type ClearCacheRequest = {type: "LINKPEEK_CLEAR_CACHE"};
 
-export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest;
+export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
+  | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};
@@ -39,3 +40,14 @@ export interface TabStatus {
   prepared: number;
   inspectorOpen: boolean;
 }
+
+/** From the toolbar popup: open the mirror window, or close the one that is open. */
+export type ToggleMirrorRequest = {type: "LINKPEEK_TOGGLE_MIRROR"};
+/** From the mirror window once it is listening. */
+export type MirrorReadyRequest = {type: "LINKPEEK_MIRROR_READY"};
+/** From a page at load: is a mirror window open right now? */
+export type MirrorQueryRequest = {type: "LINKPEEK_MIRROR_QUERY"};
+/** Background -> tabs: whether a mirror window is listening, so pages only send previews while one is. */
+export type MirrorOpenMessage = {type: "LINKPEEK_MIRROR_OPEN"; open: boolean};
+/** Content -> the mirror window: the gallery and position on screen right now. */
+export type MirrorStateMessage = {type: "LINKPEEK_MIRROR_STATE"; result: ScanResult; index: number};

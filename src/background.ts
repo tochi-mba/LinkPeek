@@ -233,6 +233,37 @@ async function downloadAll(msg: DownloadAllRequest) {
   return {started: msg.items.length - failed, failed};
 }
 
+let mirrorWindowId: number | undefined;
+/** Whether a mirror window is listening; pages ask at load, so late tabs mirror too. */
+let mirrorReady = false;
+
+/** Tells every tab whether a mirror window is listening, so pages only send previews while one is. */
+async function broadcastMirror(open: boolean) {
+  mirrorReady = open;
+  const tabs = await chrome.tabs.query({});
+  await Promise.allSettled(tabs.map(tab => tab.id === undefined ? Promise.resolve() : chrome.tabs.sendMessage(tab.id, {type: "LINKPEEK_MIRROR_OPEN", open})));
+  return {open};
+}
+
+/** Opens the mirror window — a second screen for previews — or closes the one that is open. */
+async function toggleMirror() {
+  if (mirrorWindowId !== undefined) {
+    const id = mirrorWindowId;
+    mirrorWindowId = undefined;
+    await chrome.windows.remove(id).catch(() => undefined);
+    return broadcastMirror(false);
+  }
+  const created = await chrome.windows.create({url: chrome.runtime.getURL("mirror.html"), type: "popup", width: 1100, height: 760});
+  mirrorWindowId = created?.id;
+  return {open: true};
+}
+
+chrome.windows.onRemoved.addListener(id => {
+  if (id !== mirrorWindowId) return;
+  mirrorWindowId = undefined;
+  void broadcastMirror(false);
+});
+
 function respond(work: Promise<unknown>, sendResponse: (response: unknown) => void, onError: (error: Error) => unknown = error => ({error: error.message})) {
   work.then(sendResponse, (error: Error) => sendResponse(onError(error)));
   return true;
@@ -269,6 +300,14 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(downloadAll(msg), sendResponse);
     case "LINKPEEK_OPEN_TAB":
       return respond(chrome.tabs.create({url: msg.url, active: Boolean(msg.active), index: sender.tab ? sender.tab.index + 1 : undefined, openerTabId: sender.tab?.id}).then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_TOGGLE_MIRROR":
+      return respond(toggleMirror(), sendResponse);
+    case "LINKPEEK_MIRROR_READY":
+      mirrorReady = true;
+      return respond(broadcastMirror(true), sendResponse);
+    case "LINKPEEK_MIRROR_QUERY":
+      sendResponse({open: mirrorReady});
+      return false;
     case "LINKPEEK_CLEAR_CACHE":
       scans.clear();
       binaries.clear();
