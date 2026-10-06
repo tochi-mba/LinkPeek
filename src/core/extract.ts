@@ -6,7 +6,7 @@
  * size and type filters, skipping avatars, emoji, icons, badges and logos.
  */
 import type {MediaItem} from "../shared/media";
-import {canonicalMediaUrl, uniqueMediaItems} from "../shared/media";
+import {canonicalMediaUrl, underSized, uniqueMediaItems} from "../shared/media";
 import type {LinkPeekSettings} from "../shared/settings";
 
 export type ExtractOptions = Pick<LinkPeekSettings,
@@ -72,8 +72,7 @@ function extensionAllowed(url: string, options: ExtractOptions) {
 }
 
 function tooSmall(tag: string, options: ExtractOptions) {
-  const width = Number(attribute(tag, "width")) || 0, height = Number(attribute(tag, "height")) || 0;
-  return (width > 0 && width < options.minWidth) || (height > 0 && height < options.minHeight);
+  return underSized(Number(attribute(tag, "width")) || 0, Number(attribute(tag, "height")) || 0, options);
 }
 
 function dimensions(tag: string) {

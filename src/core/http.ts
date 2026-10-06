@@ -123,6 +123,14 @@ export async function readBytesCapped(response: Response, maxBytes: number, mess
   return (await readChunks(response, maxBytes, new Error(message))).buffer;
 }
 
+/** Bytes as base64, in chunks small enough for the call stack. */
+export function bytesToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer), chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(binary);
+}
+
 /** A page's text, cut off after `maxBytes` and decoded with the declared charset (UTF-8 when unknown). */
 export async function readTextCapped(response: Response, maxBytes = MAX_HTML_BYTES) {
   const charset = /charset=([^;]+)/i.exec(response.headers.get("content-type") ?? "")?.[1]?.trim();
