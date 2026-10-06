@@ -264,3 +264,15 @@ input[type="range"] { accent-color: var(--signal); }
 .h-tags .h-chip { border: 1px solid var(--line, #29302A); border-radius: 999px; background: var(--raised, #181E19); }
 .h-tags .h-chip[aria-pressed="true"] { background: var(--signal, #D7FF3F); color: #111512; border-color: var(--signal, #D7FF3F); }
 .h-sort { height: 34px; padding: 0 8px; border: 1px solid var(--line, #29302A); border-radius: 10px; background: var(--raised, #181E19); color: var(--text, #F2F5EE); font: 600 12px Inter, "Segoe UI", system-ui, sans-serif; }
+
+/* Selecting many at once. */
+.h-tile { position: relative; }
+.h-pick { position: absolute; top: 7px; left: 7px; z-index: 2; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line, #29302A); background: rgba(17, 21, 18, .8); color: transparent; cursor: pointer; opacity: 0; font: 700 13px/1 Inter, "Segoe UI", system-ui, sans-serif; }
+.h-tile:hover .h-pick, .h-selecting .h-pick { opacity: 1; }
+.h-pick[aria-pressed="true"] { background: var(--signal, #D7FF3F); border-color: var(--signal, #D7FF3F); color: #111512; }
+.h-selected { outline: 2px solid var(--signal, #D7FF3F); outline-offset: 2px; border-radius: 6px; }
+.h-selbar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; gap: 10px; margin: 10px 20px 0; padding: 8px 12px; border: 1px solid var(--line, #29302A); border-radius: 12px; background: var(--raised, #181E19); box-shadow: 0 6px 24px rgba(0, 0, 0, .35); }
+.h-selbar[hidden] { display: none; }
+.h-selcount { color: var(--text, #F2F5EE); font: 700 13px Inter, "Segoe UI", system-ui, sans-serif; }
+/* The rubber band DragSelect draws. */
+.ds-selector { border: 1px solid var(--signal, #D7FF3F); background: rgba(215, 255, 63, .12); }

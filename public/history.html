@@ -33,12 +33,20 @@
       <option value="largest">Largest first</option>
     </select>
     <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
+    <button id="select" class="button ghost" type="button" aria-pressed="false" title="Select many at once: drag a box over the grid, or use the checkmarks on the tiles">Select</button>
     <button id="play" class="button ghost" type="button" title="A run of everything saved that you have never seen, GIFs first, honouring the filters, tag and search. Every slide shown is marked as seen.">▶ Play unseen</button>
     <button id="audit" class="button ghost" type="button" title="Measure every saved file, remove ones below your minimum media size, and add missing copies to Downloads / LinkPeek Library" hidden>Check saved files</button>
     <button id="saveAll" class="button ghost" type="button" title="Save every file kept on this device into Downloads / LinkPeek Library">Save all to Downloads</button>
     <button id="clear" class="button ghost" type="button">Clear history</button>
   </header>
   <div id="tags" class="h-tags" role="group" aria-label="Tags from titles" hidden></div>
+  <div id="selbar" class="h-selbar" hidden>
+    <span id="selCount" class="h-selcount"></span>
+    <span class="spacer"></span>
+    <button id="selAll" class="button ghost" type="button">Select all shown</button>
+    <button id="selDelete" class="button ghost" type="button">Delete files</button>
+    <button id="selCancel" class="button ghost" type="button">Cancel</button>
+  </div>
   <p id="summary" class="history-summary muted" role="status"></p>
   <main id="days"></main>
   <div id="more" class="history-more" aria-hidden="true"></div>

@@ -15,13 +15,44 @@ describe("mining tags from titles", () => {
     expect(tags[0]).toEqual({key: "alice", label: "Alice", count: 3});
   });
 
-  it("counts each phrase once per title, however often it repeats inside one", () => {
-    expect(take(["mia mia mia", "mia solo", "duo mia", "other things", "more other"])).toEqual(["mia"]);
+  it("offers a subject that appears in just two titles", () => {
+    expect(take(["mia mia mia", "mia solo", "duo mia", "other things", "more other"])).toEqual(["mia", "other"]);
   });
 
-  it("drops stop words, bare numbers and single letters from phrases", () => {
-    const tags = take(["The best of Mia part 1", "Mia 2 a new set", "mia 3 update", "noise here", "noise there x"]);
-    expect(tags).toEqual(["mia"]);
+  it("drops stop words, bare numbers, single letters and media noise from phrases", () => {
+    expect(take(["The best of Mia part 1", "Mia 2 a new set", "mia 3 update", "noise here", "noise there x"])).toEqual(["mia", "noise"]);
+    expect(take(["Mia 1080p rip", "mia 4k hd", "MIA s01e02 uhd", "pad qq", "pad ww"])).toEqual(["mia", "pad"]);
+  });
+
+  it("folds plurals into their singular when both occur, leaving lone endings alone", () => {
+    const tags = mineTags([
+      "Sunny beach walk", "two beaches here", "beach again now",
+      "city lights aa", "cities glow bb", "city view cc",
+      "glass houses", "glass towers", "rx7 drive", "rx7 night"
+    ]);
+    expect(tags.map(tag => tag.key)).toEqual(["beach", "city", "glass", "rx7"]);
+    expect(tags[0].count).toBe(3);
+  });
+
+  it("folds a trailing number into the word it varies, when that word occurs on its own", () => {
+    expect(take(["Mia beach", "mia2 x2 pose", "mia3 walk", "filler qq", "filler ww"])).toEqual(["mia", "filler"]);
+  });
+
+  it("splits camelCase words so run-together titles still match", () => {
+    const tags = mineTags(["AliceBeach set", "alice beach fun", "Alice beach more", "zebra", "yak", "xylo"]);
+    expect(tags.map(tag => tag.key)).toEqual(["alice beach"]);
+    expect(tags[0].label).toBe("Alice Beach");
+  });
+
+  it("cuts a separator segment repeated across titles before counting anything", () => {
+    const tags = take([
+      "Alice aa – Candid Forum", "Alice bb – Candid Forum", "Alice cc – Candid Forum",
+      "Bob dd – Candid Forum", "Bob ee", "Bob ff",
+      "Carol gg", "Carol hh", "Dave ii", "Dave jj",
+      "Candid Forum"
+    ]);
+    expect(tags).toEqual(["alice", "bob", "carol", "dave"]);
+    expect(tags).not.toContain("candid");
   });
 
   it("treats what nearly every title shares as boilerplate, not a subject", () => {
@@ -47,7 +78,34 @@ describe("mining tags from titles", () => {
     expect(both).not.toContain("beach");
   });
 
-  it("ranks by how many titles carry the tag, then alphabetically, up to the limit", () => {
+  it("picks for variety: smaller subjects come before a big subject's sub-themes", () => {
+    const tags = take([
+      "Alice beach aa", "Alice beach bb", "Alice beach cc",
+      "Alice city dd", "Alice city ee", "Alice city ff",
+      "Bob gg", "Bob hh",
+      "Carol ii", "Carol jj"
+    ], 4);
+    expect(tags).toEqual(["alice", "bob", "carol", "alice beach"]);
+  });
+
+  it("prefers the fuller phrase when a tie must break, whichever side of it stands", () => {
+    expect(take(["rose lily aa", "rose lily bb", "moss cc", "moss dd"])).toEqual(["rose lily", "moss"]);
+    expect(take(["moss cc", "moss dd", "rose lily aa", "rose lily bb"])).toEqual(["rose lily", "moss"]);
+  });
+
+  it("breaks a coverage tie by how common each phrase is", () => {
+    // After "mega big" is picked, "wide" (4 titles, damped) and "sub" (2 fresh) tie on coverage; the commoner one wins.
+    expect(take([
+      "wide mega big aa", "mega big wide bb", "mega big cc wide", "wide dd mega big",
+      "sub ee", "sub ff"
+    ])).toEqual(["mega big", "wide", "sub"]);
+  });
+
+  it("stops picking once what is left barely covers anything fresh", () => {
+    expect(take(["rose lily aa", "rose lily bb", "rose cc", "rose dd", "lily ee", "lily ff"])).toEqual(["lily", "rose"]);
+  });
+
+  it("ranks ties by how many titles carry the tag, then alphabetically, up to the limit", () => {
     const tags = mineTags([
       "zoe aa", "zoe bb", "zoe cc", "zoe dd",
       "ann ee", "ann ff", "ann gg",
@@ -58,8 +116,10 @@ describe("mining tags from titles", () => {
     expect(take(["zoe pp", "zoe qq", "zoe rr", "ann ss", "ann tt", "ann uu", "zebra", "yak", "xylo"], 1)).toEqual(["ann"]);
   });
 
-  it("reads accented and non-Latin titles", () => {
-    expect(take(["Café day", "café night", "CAFÉ noon", "zebra", "yak", "xylo", "willow", "violet"])).toEqual(["café"]);
+  it("folds accents so spelling variants are one subject", () => {
+    const tags = mineTags(["Café day", "cafe night", "CAFÉ noon", "zebra", "yak", "xylo", "willow", "violet"]);
+    expect(tags.map(tag => tag.key)).toEqual(["cafe"]);
+    expect(tags[0]).toEqual({key: "cafe", label: "Café", count: 3});
   });
 });
 
@@ -70,5 +130,16 @@ describe("matching a tag against a title", () => {
     expect(titleHasTag("beach alice", "alice beach")).toBe(false);
     expect(titleHasTag("", "alice")).toBe(false);
     expect(titleHasTag("Alice", "alice")).toBe(true);
+  });
+
+  it("matches across plural endings, attached numbers, camelCase and accents", () => {
+    expect(titleHasTag("Three beaches at dawn", "beach")).toBe(true);
+    expect(titleHasTag("the beach at dawn", "beaches")).toBe(true);
+    expect(titleHasTag("two cities by night", "city")).toBe(true);
+    expect(titleHasTag("Mia2 returns", "mia")).toBe(true);
+    expect(titleHasTag("AliceBeach day", "alice beach")).toBe(true);
+    expect(titleHasTag("CAFÉ at night", "cafe")).toBe(true);
+    expect(titleHasTag("beaten path", "beach")).toBe(false);
+    expect(titleHasTag("os map", "ox")).toBe(false);
   });
 });

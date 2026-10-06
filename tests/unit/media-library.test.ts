@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MediaLibrary, type LibraryRules} from "../../src/background/media-library";
+import {MediaLibrary, type AuditProgress, type LibraryRules} from "../../src/background/media-library";
 import {LIBRARY_CACHE, LIBRARY_INDEX, type LibraryEntry} from "../../src/shared/history";
 import {fakeCaches} from "./fake-caches";
 
@@ -202,6 +202,24 @@ describe("checking what is already saved", () => {
     await settle();
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => url)).toEqual(["https://cdn.test/t0.jpg"]);
   }, 20_000);
+
+  it("narrates its progress and eases off after a file that took real work, but always finishes", async () => {
+    store[LIBRARY_INDEX] = [["https://cdn.test/slow.jpg", {bytes: 3, at: 1}], ["https://cdn.test/quick.jpg", {bytes: 4, at: 2, w: 500, h: 500}]];
+    const cache = await caches.open(LIBRARY_CACHE);
+    await cache.put("https://cdn.test/slow.jpg", new Response(new Uint8Array(3), {headers: {"content-type": "image/jpeg"}}));
+    (createImageBitmap as ReturnType<typeof vi.fn>).mockImplementationOnce(async (blob: Blob) => {
+      // Decoding this one takes a while; the audit should rest as long afterwards (capped at a second).
+      vi.setSystemTime(Date.now() + 5000);
+      return {...(dims[blob.size] ?? {width: 500, height: 500}), close: () => undefined};
+    });
+    const ticks: AuditProgress[] = [];
+    const library = new MediaLibrary();
+    const done = library.audit(rules(), progress => ticks.push(progress));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await done).toEqual({checked: 2, removed: 0, mirrored: 0});
+    expect(ticks.map(tick => tick.resting)).toEqual([1000, 0]);
+    expect(ticks[1]).toMatchObject({checked: 2, total: 2, removed: 0, mirrored: 0, url: "https://cdn.test/quick.jpg"});
+  });
 
   it("forgets one file on request, Downloads copy included, and ignores an unknown address", async () => {
     store[LIBRARY_INDEX] = [["https://cdn.test/x.jpg", {bytes: 5, at: 2, dl: 31}]];

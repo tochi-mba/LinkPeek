@@ -10,6 +10,8 @@ export interface PageHarness {
   store: Record<string, unknown>;
   storageListeners: StorageListener[];
   messages: unknown[];
+  /** Listeners the page registered for messages from the worker. */
+  runtimeListeners: Array<(msg: unknown) => void>;
   chrome: any;
 }
 
@@ -21,7 +23,7 @@ export function loadPage(file: string) {
 }
 
 export function stubExtension(settings: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): PageHarness {
-  const harness: PageHarness = {store: {settings, settingsVersion: SETTINGS_VERSION, ...extra}, storageListeners: [], messages: [], chrome: undefined};
+  const harness: PageHarness = {store: {settings, settingsVersion: SETTINGS_VERSION, ...extra}, storageListeners: [], messages: [], runtimeListeners: [], chrome: undefined};
   harness.chrome = {
     storage: {
       local: {
@@ -39,7 +41,8 @@ export function stubExtension(settings: Record<string, unknown> = {}, extra: Rec
     runtime: {
       getURL: (path: string) => `chrome-extension://id/${path}`,
       openOptionsPage: vi.fn(async () => undefined),
-      sendMessage: vi.fn(async (message: unknown) => (harness.messages.push(message), {ok: true}))
+      sendMessage: vi.fn(async (message: unknown) => (harness.messages.push(message), {ok: true})),
+      onMessage: {addListener: vi.fn((listener: (msg: unknown) => void) => harness.runtimeListeners.push(listener))}
     },
     tabs: {
       query: vi.fn(async () => []),

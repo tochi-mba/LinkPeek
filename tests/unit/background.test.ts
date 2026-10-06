@@ -19,6 +19,7 @@ type Listener = (msg: unknown, sender: unknown, send: (value: unknown) => void) 
 let onMessage: Listener, onInstalled: (details: {reason: string}) => Promise<void>, onStorage: (changes: Record<string, unknown>, area: string) => void;
 let onWindowRemoved: (id: number) => void, onWindowBounds: (window: chrome.windows.Window) => void;
 let store: Record<string, unknown>, sessionStore: Record<string, unknown>, sent: unknown[][], created: unknown[], mirrorWindow: number | undefined;
+let broadcasts: unknown[];
 
 /** Sends a message to the worker and resolves with what it answered (and whether it answered asynchronously). */
 function send(msg: unknown, sender: unknown = {tab: {id: 3}, frameId: 2}) {
@@ -42,6 +43,7 @@ beforeEach(async () => {
   sessionStore = {};
   sent = [];
   created = [];
+  broadcasts = [];
   mirrorWindow = undefined;
   vi.stubGlobal("chrome", {
     storage: {
@@ -60,6 +62,7 @@ beforeEach(async () => {
     runtime: {
       onInstalled: {addListener: vi.fn(listener => onInstalled = listener)},
       onMessage: {addListener: vi.fn(listener => onMessage = listener)},
+      sendMessage: vi.fn(async (msg: unknown) => void broadcasts.push(msg)),
       getURL: (path: string) => `chrome-extension://id/${path}`
     },
     tabs: {
@@ -618,6 +621,32 @@ describe("history and fingerprints", () => {
     expect(chrome.downloads.removeFile).toHaveBeenCalledWith(9);
     const index = new Map(store.mediaIndex as Array<[string, {dl?: number}]>);
     expect([[...index.keys()], index.get("https://cdn.test/fine.jpg")!.dl]).toEqual([["https://cdn.test/fine.jpg"], 7]);
+    // Every change and the last file reach the page as one-line progress.
+    const ticks = broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK") as any[];
+    expect(ticks).toHaveLength(2);
+    expect(ticks[1]).toMatchObject({checked: 2, total: 2, removed: 1, mirrored: 1, url: "https://cdn.test/fine.jpg"});
+  });
+
+  it("ticks every tenth file through a quiet stretch of the check", async () => {
+    fakeCaches();
+    store.mediaIndex = Array.from({length: 11}, (_, i) => [`https://cdn.test/v${i}.mp4`, {bytes: 1, at: i, type: "video", dl: 50 + i}]);
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 11, removed: 0, mirrored: 0});
+    expect(broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK").map((msg: any) => msg.checked)).toEqual([10, 11]);
+  });
+
+  it("forgets a picked set of saved files, and strikes picked entries from the history", async () => {
+    fakeCaches();
+    store.mediaIndex = [
+      ["https://cdn.test/a.jpg", {bytes: 3, at: 1, dl: 9}],
+      ["https://cdn.test/b.jpg", {bytes: 4, at: 2}]
+    ];
+    expect((await send({type: "LINKPEEK_LIBRARY_REMOVE", urls: ["https://cdn.test/a.jpg"]})).value).toEqual({ok: true});
+    expect(chrome.downloads.removeFile).toHaveBeenCalledWith(9);
+    expect((store.mediaIndex as unknown[]).length).toBe(1);
+    store.historyMeta = {first: 0, last: 0};
+    store["history:0"] = [{a: 1, o: "https://cdn.test/a.jpg", p: "", t: "image", s: "https://x.test"}, {a: 2, o: "https://cdn.test/b.jpg", p: "", t: "image", s: "https://x.test"}];
+    expect((await send({type: "LINKPEEK_HISTORY_REMOVE", entries: [{a: 1, o: "https://cdn.test/a.jpg"}]})).value).toEqual({ok: true});
+    expect(store["history:0"]).toEqual([{a: 2, o: "https://cdn.test/b.jpg", p: "", t: "image", s: "https://x.test"}]);
   });
 
   it("cleans and migrates the saved files when the extension updates", async () => {

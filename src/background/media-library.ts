@@ -29,6 +29,8 @@ const REJECTED_MEMORY = 5000;
 export type LibraryMeta = Omit<LibraryEntry, "bytes" | "at" | "w" | "h" | "dl">;
 /** The rules of the moment: how much space, the smallest picture worth keeping, and whether Downloads gets a copy. */
 export type LibraryRules = {budget: number; minWidth: number; minHeight: number; mirror: boolean};
+/** How far the saved-files check has come, and how long it is resting to spare the machine. */
+export type AuditProgress = {checked: number; total: number; removed: number; mirrored: number; url: string; resting: number};
 type Job = {url: string; rules: LibraryRules; meta: LibraryMeta};
 
 function isEntry(value: unknown): value is [string, LibraryEntry] {
@@ -179,11 +181,12 @@ export class MediaLibrary {
    * below the minimums (Downloads copies included), and gives files saved
    * before mirroring their Downloads copy. Answers with what it did.
    */
-  async audit(rules: LibraryRules) {
+  async audit(rules: LibraryRules, onProgress?: (progress: AuditProgress) => void) {
     const index = await this.loadIndex(), entries = [...index];
-    let removed = 0, mirrored = 0;
+    let removed = 0, mirrored = 0, checked = 0;
     const cache = await caches.open(LIBRARY_CACHE);
     for (const [url, entry] of entries) {
+      const began = Date.now();
       if (entry.w === undefined && entry.type !== "video") {
         const hit = await cache.match(url);
         const size = hit && await measure(await hit.arrayBuffer(), hit.headers.get("content-type") ?? "");
@@ -193,12 +196,17 @@ export class MediaLibrary {
         this.reject(url);
         await this.remove(url);
         removed++;
-        continue;
-      }
-      if (rules.mirror && entry.dl === undefined) {
+      } else if (rules.mirror && entry.dl === undefined) {
         await this.mirror(url, entry);
         if (entry.dl !== undefined) mirrored++;
       }
+      checked++;
+      // The check always finishes, but never at the browser's expense: a file that
+      // took real work earns an equal rest, so the audit uses at most half the machine.
+      const took = Date.now() - began;
+      const resting = took > 25 ? Math.min(1000, took) : 0;
+      onProgress?.({checked, total: entries.length, removed, mirrored, url, resting});
+      if (resting) await new Promise(resolve => setTimeout(resolve, resting));
     }
     await this.saveIndex();
     return {checked: entries.length, removed, mirrored};

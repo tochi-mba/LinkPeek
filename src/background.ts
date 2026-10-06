@@ -8,13 +8,13 @@
 import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
-import {MediaLibrary, type LibraryRules} from "./background/media-library";
+import {MediaLibrary, type AuditProgress, type LibraryRules} from "./background/media-library";
 import {HistoryWriter, LIBRARY_CACHE, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {bytesToBase64, fetchWithRetry, readBytesCapped} from "./core/http";
 import type {LinkKind, ScanResult} from "./shared/media";
-import type {BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
+import type {AuditTickMessage, BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
 
 type CachedScan = {at: number; scanKey: string; result: ScanResult; seed?: DiscourseSeed};
@@ -87,6 +87,17 @@ function savePrepared(result: ScanResult, settings: LinkPeekSettings) {
       preview: item.type === "video" ? item.posterUrl : item.previewUrl
     });
   }
+}
+
+/** Streams the saved-files check to the extension pages: every removal and new copy, every tenth file, and the last. */
+function auditTicker() {
+  let milestones = 0;
+  return (progress: AuditProgress) => {
+    const milestone = progress.removed + progress.mirrored !== milestones || progress.checked % 10 === 0 || progress.checked === progress.total;
+    milestones = progress.removed + progress.mirrored;
+    if (!milestone) return;
+    chrome.runtime.sendMessage({type: "LINKPEEK_AUDIT_TICK", ...progress} satisfies AuditTickMessage).catch(() => undefined);
+  };
 }
 
 /** A gallery saved on the device earlier, when keeping them is on. */
@@ -379,7 +390,7 @@ chrome.runtime.onInstalled.addListener(async details => {
   } else if (details.reason === "update") {
     const settings = await loadSettings();
     // Files saved by an older version migrate into Downloads, and too-small ones are cleaned out.
-    if (settings.saveMediaOffline) await library.audit(libraryRules(settings)).catch(() => undefined);
+    if (settings.saveMediaOffline) await library.audit(libraryRules(settings), auditTicker()).catch(() => undefined);
   }
 });
 
@@ -435,7 +446,15 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "LINKPEEK_LIBRARY_CLEAR":
       return respond(library.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_AUDIT":
-      return respond(currentSettings().then(settings => library.audit(libraryRules(settings))), sendResponse);
+      return respond(currentSettings().then(settings => library.audit(libraryRules(settings), auditTicker())), sendResponse);
+    case "LINKPEEK_LIBRARY_REMOVE":
+      return respond((async () => {
+        for (const url of msg.urls) await library.remove(url);
+        await library.saveIndex();
+        return {ok: true};
+      })(), sendResponse);
+    case "LINKPEEK_HISTORY_REMOVE":
+      return respond(history.remove(msg.entries).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_HISTORY_CLEAR":
       return respond(history.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_FINGERPRINT":
