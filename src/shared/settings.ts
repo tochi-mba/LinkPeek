@@ -317,7 +317,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   savePreparedMedia: true,
   savedMediaBudgetMb: 2048,
   saveToDownloads: true,
-  libraryGifHover: false,
+  libraryGifHover: true,
   libraryVideoHover: true,
 
   shortcuts: DEFAULT_SHORTCUTS,

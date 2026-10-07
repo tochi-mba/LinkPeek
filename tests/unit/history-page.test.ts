@@ -15,7 +15,14 @@ vi.mock("dragselect", () => ({default: class {
     this.callbacks.set(name, callback);
   }
 }}));
-import {HISTORY_META, HISTORY_PREFIX, LIBRARY_CACHE, type HistoryEntry} from "../../src/shared/history";
+/** The still maker, under each test's control (jsdom can decode neither GIFs nor video). */
+const stillMaker = vi.hoisted(() => ({gif: vi.fn(), video: vi.fn()}));
+vi.mock("../../src/pages/stills", async () => ({
+  ...await vi.importActual<typeof import("../../src/pages/stills")>("../../src/pages/stills"),
+  gifStill: stillMaker.gif,
+  videoStill: stillMaker.video
+}));
+import {HISTORY_META, HISTORY_PREFIX, LIBRARY_CACHE, STILLS_CACHE, type HistoryEntry} from "../../src/shared/history";
 import {fakeCaches} from "./fake-caches";
 import {loadPage, stubExtension, type PageHarness} from "./page-harness";
 
@@ -46,6 +53,10 @@ beforeEach(() => {
   vi.useFakeTimers({toFake: ["Date", "setTimeout", "clearTimeout"]});
   vi.setSystemTime(new Date(2026, 9, 6, 12, 0));
   observed = [];
+  // Unless a test says otherwise, no still can be made, and nothing reaches the real web.
+  stillMaker.gif.mockReset().mockRejectedValue(new Error("no decoder"));
+  stillMaker.video.mockReset().mockRejectedValue(new Error("no decoder"));
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(4), {headers: {"content-type": "image/gif"}})));
   vi.stubGlobal("IntersectionObserver", class {
     constructor(callback: (entries: Array<{isIntersecting: boolean}>) => void) {
       observed.push(callback);
@@ -66,7 +77,9 @@ describe("the history page", () => {
     const tiles = [...document.querySelectorAll(".h-tile")];
     expect(tiles).toHaveLength(6);
     expect(tiles[5].querySelector(".h-none")!.textContent).toBe("No preview");
-    expect(tiles[0].querySelector(".h-none")!.textContent).toBe("Video");
+    // A video with no poster and no still to be made shows itself, paused at its stable point.
+    await settle();
+    expect(tiles[0].querySelector("video.h-still")!.getAttribute("src")).toMatch(/^https:\/\/cdn\.test\/5\.jpg#t=\d\.\d$/);
     expect(tiles[0].querySelector("figcaption a")!.textContent).toBe("5");
     expect(tiles[1].querySelector(".h-badge")!.textContent).toBe("GIF");
     expect(tiles[1].querySelector<HTMLAnchorElement>(".h-media")!.getAttribute("href")).toBe("https://cdn.test/4.jpg");
@@ -155,6 +168,8 @@ describe("saved media on the history page", () => {
   it("shows thumbnails from the saved copies, and from the web where there are none", async () => {
     const now = Date.now();
     await openSaved([entry(2, now - 1000), entry(1, now, {t: "gif"})], ["https://cdn.test/2-s.jpg"]);
+    await settle();
+    // The GIF's still could not be made here, so the site's own preview stands in.
     const images = [...document.querySelectorAll<HTMLImageElement>(".h-tile img")];
     expect(images.map(image => image.getAttribute("src"))).toEqual(["https://cdn.test/1-s.jpg", "blob:saved-1"]);
     // The history view is a diary, not a disk: no storage gauge here.
@@ -605,11 +620,11 @@ describe("selecting many at once, and the live check line", () => {
     $("#days").dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
     await settle();
     expect(tiles[1].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/pic.jpg");
-    // Off (the default), hovering a GIF changes nothing.
-    const off = await openWith({});
+    // With the GIF setting off, GIFs play in place and hovering changes nothing.
+    const off = await openWith({libraryGifHover: false});
     off[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
     await settle();
-    expect(off[0].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+    expect(off[0].querySelector("img")!.getAttribute("src")).toBe("blob:gif");
     // Videos play on hover by default: muted, looping, over the still, and gone again on leave.
     const clip = off[4];
     clip.dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
@@ -634,6 +649,112 @@ describe("selecting many at once, and the live check line", () => {
     quiet[4].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
     await settle();
     expect(quiet[4].querySelector("video")).toBeNull();
+  });
+
+  it("gives every GIF and video tile a still of its own, keeps it on this device, and reuses it", async () => {
+    const now = Date.now();
+    let blobs = 0;
+    const rows = [
+      ["https://cdn.test/kept.gif", {bytes: 1, at: now, seen: true, type: "gif", title: "Kept gif", original: "https://x.test/kept.gif"}],
+      ["https://cdn.test/web.gif", {bytes: 1, at: now - 1, seen: true, type: "gif", title: "Web gif", original: "https://x.test/web.gif"}],
+      ["https://cdn.test/clip.mp4", {bytes: 1, at: now - 2, seen: true, type: "video", title: "Clip", original: "https://x.test/clip.mp4"}],
+      ["https://cdn.test/gone.gif", {bytes: 1, at: now - 3, seen: true, type: "gif", title: "Gone gif", original: "https://x.test/gone.gif"}]
+    ];
+    const openStillsPage = async () => {
+      bands.all.length = 0;
+      const api = fakeCaches();
+      vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => `blob:${++blobs}`)}));
+      history.replaceState(null, "", "/history.html?view=saved");
+      vi.resetModules();
+      loadPage("history.html");
+      harness = stubExtension({});
+      harness.store[LIB] = rows;
+      await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/kept.gif", new Response("gifbytes"));
+      return api;
+    };
+    stillMaker.gif.mockResolvedValue(new Blob(["still"], {type: "image/jpeg"}));
+    stillMaker.video.mockResolvedValue(new Blob(["frame"], {type: "image/jpeg"}));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("gone") ? new Response("", {status: 404}) : new Response("webbytes")));
+    const api = await openStillsPage();
+    await import("../../src/pages/history");
+    for (let i = 0; i < 4; i++) await settle();
+    const srcs = () => [...document.querySelectorAll(".h-tile .h-media")].map(media => media.querySelector("img")?.getAttribute("src") ?? media.textContent);
+    // Saved GIFs are read from this device, others from the web; the video gets a frame; a GIF that cannot be read says so.
+    expect(srcs()).toEqual([expect.stringMatching(/^blob:/), expect.stringMatching(/^blob:/), expect.stringMatching(/^blob:/), "GIFGIF"]);
+    // The saved GIF was read from this device; only the unsaved ones went to the web.
+    const fetched = (fetch as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url));
+    expect(fetched.sort()).toEqual(["https://x.test/gone.gif", "https://x.test/web.gif"]);
+    expect(stillMaker.gif).toHaveBeenCalledTimes(2);
+    expect(stillMaker.video).toHaveBeenCalledWith("https://x.test/clip.mp4", "https://cdn.test/clip.mp4");
+    const stills = api.stores.get(STILLS_CACHE)!;
+    expect([...stills.keys()].sort()).toEqual(["https://cdn.test/clip.mp4", "https://cdn.test/kept.gif", "https://cdn.test/web.gif"]);
+    // Reopened: every still comes from this device, nothing is made again.
+    stillMaker.gif.mockClear();
+    stillMaker.video.mockClear();
+    bands.all.length = 0;
+    history.replaceState(null, "", "/history.html?view=saved");
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[LIB] = rows;
+    await import("../../src/pages/history");
+    for (let i = 0; i < 4; i++) await settle();
+    expect([stillMaker.gif.mock.calls.length, stillMaker.video.mock.calls.length]).toEqual([0, 0]);
+    expect(srcs().slice(0, 3)).toEqual([expect.stringMatching(/^blob:/), expect.stringMatching(/^blob:/), expect.stringMatching(/^blob:/)]);
+    // Redrawing reuses what is in memory, and an unreadable GIF is not fetched again this visit.
+    const goneFetches = () => (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("gone")).length;
+    const before = goneFetches();
+    chip('[data-kind="gif"]').click();
+    await settle();
+    chip('[data-kind="all"]').click();
+    for (let i = 0; i < 4; i++) await settle();
+    expect([stillMaker.gif.mock.calls.length, goneFetches()]).toEqual([0, before]);
+  });
+
+  it("keeps rare and destructive actions in a menu that closes on a click outside or Escape", async () => {
+    await openLibrary(rows(), "?view=saved");
+    const menu = $<HTMLDetailsElement>("#more");
+    menu.open = true;
+    // Working inside the menu (the two-press delete) keeps it open.
+    $("#clear").click();
+    await settle();
+    expect([menu.open, $("#clear").textContent]).toEqual([true, "Press again to delete"]);
+    document.body.click();
+    expect(menu.open).toBe(false);
+    menu.open = true;
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    expect(menu.open).toBe(false);
+    // With it closed, Escape moves on to what else is open.
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    document.body.click();
+    expect(menu.open).toBe(false);
+  });
+
+  it("makes stills a couple at a time, and skips any whose tile was redrawn away while it waited", async () => {
+    const now = Date.now(), finishers: Array<(blob: Blob) => void> = [];
+    stillMaker.video.mockImplementation(() => new Promise<Blob>(resolve => finishers.push(resolve)));
+    await openLibrary(["a", "b", "c"].map((name, i) => [`https://cdn.test/${name}.mp4`, {bytes: 1, at: now - i, seen: true, type: "video", title: `Clip ${name}`}]), "?view=saved");
+    await settle();
+    // Two at a time: the third waits its turn.
+    expect(stillMaker.video).toHaveBeenCalledTimes(2);
+    chip('[data-kind="gif"]').click();
+    await settle();
+    for (const finish of finishers) finish(new Blob(["frame"], {type: "image/jpeg"}));
+    for (let i = 0; i < 4; i++) await settle();
+    // The third tile is gone from the page, so its still is never made.
+    expect(stillMaker.video).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets go of the stills when the history is cleared", async () => {
+    const api = fakeCaches();
+    await (await api.open(STILLS_CACHE)).put("https://cdn.test/x.gif", new Response("still"));
+    history.replaceState(null, "", "/history.html");
+    await open([entry(1, Date.now(), {t: "gif"})]);
+    $("#clear").click();
+    await settle();
+    $("#clear").click();
+    await settle();
+    expect(api.delete).toHaveBeenCalledWith(STILLS_CACHE);
   });
 
   it("narrates the saved-files check on one line as the worker reports it", async () => {

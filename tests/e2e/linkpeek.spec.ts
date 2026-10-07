@@ -446,3 +446,36 @@ test("one-handed extras: fill, rotate, middle-click to a background tab and the 
     await page.keyboard.press("Escape");await expect(inspector).toHaveCount(0);await expect(page.locator("a[data-linkpeek-preload-state]")).toHaveCount(0);
   }finally{await closeExtension(context,profile)}
 });
+
+test("Library tiles hold a still of moving media until hovered, made once and kept",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;
+    await sw.evaluate(async origin=>{
+      const kept=await caches.open("linkpeek-media");
+      await kept.put(`${origin}/media/anim.gif`,await fetch(`${origin}/media/anim.gif`));
+      await chrome.storage.local.set({mediaIndex:[
+        [`${origin}/media/anim.gif`,{bytes:200,at:Date.now(),seen:true,type:"gif",title:"Saved GIF",original:`${origin}/media/anim.gif`,source:origin}],
+        [`${origin}/media/clip.mp4`,{bytes:64,at:Date.now()-1000,seen:true,type:"video",title:"Broken clip",original:`${origin}/media/clip.mp4`,source:origin}]
+      ]});
+    },base);
+    const page=await context.newPage();
+    await page.goto(`chrome-extension://${id}/history.html?view=saved`);
+    const gif=page.locator('.h-tile:has-text("Saved GIF") .h-media img');
+    // The GIF shows its first frame as a still JPEG, not the animation.
+    await expect.poll(()=>gif.getAttribute("src")).toMatch(/^blob:/);
+    const still=await gif.getAttribute("src");
+    expect(await gif.evaluate(async (img:HTMLImageElement)=>{await img.decode();const blob=await (await fetch(img.src)).blob();return [img.naturalWidth,blob.type]})).toEqual([64,"image/jpeg"]);
+    await expect.poll(()=>page.evaluate(async()=>(await (await caches.open("linkpeek-stills")).keys()).map(request=>new URL(request.url).pathname))).toEqual(["/media/anim.gif"]);
+    // Hovering plays it; leaving puts the still back.
+    await gif.hover();
+    await expect.poll(()=>gif.getAttribute("src")).not.toBe(still);
+    await page.mouse.move(2,2);
+    await expect.poll(()=>gif.getAttribute("src")).toBe(still);
+    // A clip that cannot be decoded shows itself paused rather than an empty tile.
+    await expect(page.locator('.h-tile:has-text("Broken clip") video.h-still')).toHaveCount(1);
+    // Reopened, the still comes from this device straight away.
+    await page.reload();
+    await expect.poll(()=>gif.getAttribute("src")).toMatch(/^blob:/);
+  }finally{await closeExtension(context,profile)}
+});

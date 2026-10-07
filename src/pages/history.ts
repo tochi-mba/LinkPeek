@@ -16,12 +16,13 @@
  */
 import DragSelect from "dragselect";
 import {escapeHtml} from "../shared/dom";
-import {LIBRARY_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
+import {LIBRARY_CACHE, STILLS_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
 import {linkLabel, type MediaItem} from "../shared/media";
 import type {AuditTickMessage} from "../shared/messages";
 import {SeenMedia, recordSeen} from "../shared/seen-media";
 import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {mineTags, titleHasTag, type TitleTag} from "../shared/title-tags";
+import {framePoint, gifStill, videoStill} from "./stills";
 
 /** Entries rendered per step as the list scrolls. */
 const PAGE = 240;
@@ -170,22 +171,119 @@ function shaped(picture: string, row: Row) {
 function tile(row: Row, index: number) {
   const title = displayTitle(row);
   const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "");
-  const picture = row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">${row.type === "video" ? "Video" : "No preview"}</span>`;
+  // Moving media always gets a picture of itself; a site's own preview, if any, is the fallback.
+  const fallback = row.thumb ? ` data-src="${escapeHtml(row.thumb)}"` : "";
+  const picture = row.type !== "image" ? `<img data-still${fallback} alt="" decoding="async">`
+    : row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">No preview</span>`;
   return `<figure class="h-tile${chosen.has(row) ? " h-selected" : ""}" data-row="${index}"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${shaped(picture, row)}${badges}</a>`
     + `<button type="button" class="h-pick" data-pick aria-pressed="${String(chosen.has(row))}" aria-label="Select">✓</button>`
     + `<figcaption><a href="${escapeHtml(row.source)}" target="_blank" rel="noopener" title="${escapeHtml(row.source)}">${escapeHtml(title)}</a>`
     + `<time datetime="${new Date(row.at).toISOString()}">${new Date(row.at).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}</time></figcaption></figure>`;
 }
 
-/** Shows each new thumbnail (still holding data-src) from its saved copy when there is one, else from the web. */
+// ---- Stills for moving media ----
+
+/** Object URLs of stills already made or read, so each is decoded once. */
+const stillUrls = new Map<string, string>();
+let stillsCache: Promise<Cache | undefined> | undefined;
+const stillQueue: Array<() => Promise<void>> = [];
+let stillsActive = 0;
+/** Stills made at once: enough to keep up with scrolling, few enough to leave the page smooth. */
+const STILL_WORKERS = 2;
+
+function openStills() {
+  stillsCache ??= (typeof caches === "undefined" ? Promise.resolve(undefined) : caches.open(STILLS_CACHE).catch(() => undefined));
+  return stillsCache;
+}
+
+/** Files no still could be made from this visit, so a redraw does not fetch them again. */
+const noStill = new Set<string>();
+
+/** A GIF's first frame, or a video's frame from its stable point: made once, then kept on this device. */
+async function stillFor(row: Row) {
+  const known = stillUrls.get(row.saved);
+  if (known || noStill.has(row.saved)) return known;
+  const cache = await openStills();
+  let blob = await cache?.match(row.saved).then(hit => hit?.blob());
+  if (!blob) {
+    blob = await makeStill(row).catch(() => undefined);
+    if (!blob) {
+      noStill.add(row.saved);
+      return undefined;
+    }
+    await cache?.put(row.saved, new Response(blob, {headers: {"content-type": "image/jpeg"}})).catch(() => undefined);
+  }
+  const url = URL.createObjectURL(blob);
+  stillUrls.set(row.saved, url);
+  return url;
+}
+
+/** Reads the moving file — the saved copy when there is one, else the web — and takes its still. */
+async function makeStill(row: Row) {
+  if (row.type === "gif") {
+    const kept = await (await openCache())?.match(row.saved);
+    const bytes = kept ? await kept.blob() : await fetch(row.open).then(response => response.ok ? response.blob() : Promise.reject(new Error(`HTTP ${response.status}`)));
+    return gifStill(bytes);
+  }
+  return videoStill(await savedCopy(row.saved) ?? row.open, row.saved);
+}
+
+/** Stills are made a couple at a time, top of the grid first. */
+function queueStill(job: () => Promise<void>) {
+  stillQueue.push(job);
+  pumpStills();
+}
+
+function pumpStills() {
+  while (stillsActive < STILL_WORKERS && stillQueue.length) {
+    const job = stillQueue.shift()!;
+    stillsActive++;
+    void job().finally(() => {
+      stillsActive--;
+      pumpStills();
+    });
+  }
+}
+
+/**
+ * When no still can be made (a cross-origin clip the page may not read
+ * back), the tile shows the clip itself, paused near its start.
+ */
+async function pausedFrame(image: HTMLImageElement, row: Row) {
+  const video = Object.assign(document.createElement("video"), {className: "h-still", muted: true, preload: "metadata", playsInline: true});
+  video.src = `${await savedCopy(row.saved) ?? row.open}#t=${(framePoint(row.saved) * 10).toFixed(1)}`;
+  image.replaceWith(video);
+}
+
+/** Puts the still on a tile, or the best fallback when none can be made. */
+async function placeStill(image: HTMLImageElement, row: Row, fallback: string) {
+  // The grid may have been redrawn while this waited its turn.
+  if (!image.isConnected) return;
+  const still = await stillFor(row);
+  if (still) image.src = still;
+  else if (fallback) image.src = fallback;
+  else if (row.type === "video") await pausedFrame(image, row);
+  else image.replaceWith(Object.assign(document.createElement("span"), {className: "h-none", textContent: "GIF"}));
+}
+
+/**
+ * Shows each new thumbnail. A picture's comes from its saved copy when there
+ * is one, else the web. A GIF shows its first frame while "play GIFs only on
+ * hover" is on, and plays in place while it is off; a video shows the site's
+ * own poster, or else a frame of its own.
+ */
 async function fillThumbnails() {
-  for (const image of document.querySelectorAll<HTMLImageElement>("img[data-src]")) {
-    const row = shown[Number(image.closest<HTMLElement>("[data-index]")!.dataset.index)], network = image.dataset.src!;
+  for (const image of document.querySelectorAll<HTMLImageElement>("img[data-src], img[data-still]")) {
+    const row = shown[Number(image.closest<HTMLElement>("[data-index]")!.dataset.index)], network = image.dataset.src ?? "";
+    const moving = image.hasAttribute("data-still");
     image.removeAttribute("data-src");
+    image.removeAttribute("data-still");
     // The grid may be refiltered while a saved copy is being read; a tile no longer backed by a row is left alone.
     if (!row) continue;
-    // A picture's saved copy is its thumbnail; a GIF's or video's is the original, too heavy for a tile.
-    image.src = (row.type === "image" ? await savedCopy(row.saved) : undefined) ?? network;
+    if (!moving) image.src = await savedCopy(row.saved) ?? network;
+    else if (row.type === "gif" && !settings.libraryGifHover) image.src = await savedCopy(row.saved) ?? row.open;
+    else if (row.type === "video" && network) image.src = network;
+    else queueStill(() => placeStill(image, row, network));
   }
 }
 
@@ -566,6 +664,10 @@ async function clearView() {
     }
     await chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_CLEAR"});
     seenRows = [];
+    // Stills of what was shown go too; saved files' stills are simply remade when next needed.
+    stillUrls.clear();
+    stillsCache = undefined;
+    await (typeof caches === "undefined" ? undefined : caches.delete(STILLS_CACHE).catch(() => undefined));
   } else {
     if (!clearStep.confirm("Press again to delete")) {
       const bytes = savedRows.reduce((sum, row) => sum + row.bytes!, 0);
@@ -843,7 +945,11 @@ async function saveViewed() {
 
 function onKey(event: KeyboardEvent) {
   if (viewing < 0) {
-    if (event.key === "Escape" && tagsOpen) {
+    const menu = $("more") as HTMLDetailsElement;
+    if (event.key === "Escape" && menu.open) {
+      menu.open = false;
+      event.preventDefault();
+    } else if (event.key === "Escape" && tagsOpen) {
       tagsOpen = false;
       renderTags();
       event.preventDefault();
@@ -962,7 +1068,12 @@ async function start() {
   $("tags").addEventListener("click", onTagClick);
   $("tagsAll").addEventListener("click", onTagClick);
   $("tagsFind").addEventListener("input", renderAllTags);
-  document.querySelector(".history-head")!.addEventListener("click", event => {
+  // The ⋯ menu closes on a click outside it, like any menu.
+  document.addEventListener("click", event => {
+    const menu = $("more") as HTMLDetailsElement;
+    if (menu.open && !menu.contains(event.target as Node)) menu.open = false;
+  });
+  const onChip = (event: Event) => {
     const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter],[data-kind]");
     if (!button) return;
     if (button.dataset.show) {
@@ -974,7 +1085,9 @@ async function start() {
     else filter = button.dataset.filter as Filter;
     writeAddress();
     void apply();
-  });
+  };
+  document.querySelector(".history-head")!.addEventListener("click", onChip);
+  document.querySelector(".h-toolbar")!.addEventListener("click", onChip);
   /**
    * Hover play: a GIF tile swaps its still for the animation (with "play GIFs
    * only on hover" on), and a video tile plays, muted and looping, over its

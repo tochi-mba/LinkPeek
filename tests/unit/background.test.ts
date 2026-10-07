@@ -542,17 +542,21 @@ describe("galleries kept on the device", () => {
   });
 
   it("are not used or kept while that is off, report their size, and can be forgotten", async () => {
+    // Earlier tests' workers may still flush their gallery index into this storage on a timer. Reading the
+    // stats first pins this worker's own index in memory, and everything below is measured against it.
+    const before = (await send({type: "LINKPEEK_GALLERY_STATS"})).value.count as number;
     store.settings = {rememberGalleries: false};
     onStorage({settings: {newValue: store.settings}}, "local");
     await send({type: "LINKPEEK_SCAN", url: "https://x.test/off", kind: "generic", token: "a"});
     await send({type: "LINKPEEK_PREFETCH", url: "https://x.test/off2", kind: "generic", deep: true});
     await tick();
-    expect(Object.keys(store).some(key => key.startsWith("gallery:"))).toBe(false);
+    expect([store["gallery:https://x.test/off"], store["gallery:https://x.test/off2"]]).toEqual([undefined, undefined]);
+    expect((await send({type: "LINKPEEK_GALLERY_STATS"})).value.count).toBe(before);
     store.settings = {};
     onStorage({settings: {newValue: store.settings}}, "local");
     await send({type: "LINKPEEK_SCAN", url: "https://x.test/on", kind: "generic", token: "b"});
     await tick();
-    expect((await send({type: "LINKPEEK_GALLERY_STATS"})).value).toMatchObject({count: 1});
+    expect((await send({type: "LINKPEEK_GALLERY_STATS"})).value.count).toBe(before + 1);
     expect((await send({type: "LINKPEEK_FORGET_GALLERIES"})).value).toEqual({ok: true});
     expect(store["gallery:https://x.test/on"]).toBeUndefined();
   });

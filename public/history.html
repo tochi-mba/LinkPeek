@@ -14,6 +14,19 @@
       <button type="button" class="h-chip" data-show="seen" aria-pressed="true" title="The diary: everything LinkPeek has shown you, even when its file is gone">History</button>
       <button type="button" class="h-chip" data-show="saved" aria-pressed="false" title="Every file kept on this device, preloaded ones included">Saved files</button>
     </div>
+    <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
+    <span class="spacer"></span>
+    <button id="play" class="button primary" type="button" title="A slideshow of everything saved that you have never seen, GIFs first, then videos, then pictures, honouring the kind, tags and search. Every slide shown is marked as seen.">▶ Play unseen</button>
+    <button id="select" class="button ghost" type="button" aria-pressed="false" title="Select many at once: drag a box over the grid, or use the checkmarks on the tiles">Select</button>
+    <details id="more" class="h-menu">
+      <summary class="button ghost" aria-label="More actions" title="More actions">⋯</summary>
+      <div class="h-menu-list">
+        <button id="audit" class="button ghost" type="button" title="Measure every saved file, remove ones below your minimum media size, and add missing copies to Downloads / LinkPeek Library" hidden>Check saved files</button>
+        <button id="clear" class="button ghost danger" type="button">Clear history</button>
+      </div>
+    </details>
+  </header>
+  <div class="h-toolbar">
     <div class="h-views" role="group" aria-label="Kind of media">
       <button type="button" class="h-chip" data-kind="all" aria-pressed="true">All media</button>
       <button type="button" class="h-chip" data-kind="gif" aria-pressed="false">GIFs</button>
@@ -26,19 +39,14 @@
       <button type="button" class="h-chip" data-filter="seen" aria-pressed="false">Seen</button>
     </div>
     <span class="spacer"></span>
-    <input id="tileSize" class="h-size" type="range" min="140" max="420" step="20" value="220" aria-label="Preview size" title="Preview size">
+    <label class="h-sizer" title="Preview size">▦ <input id="tileSize" class="h-size" type="range" min="140" max="420" step="20" value="220" aria-label="Preview size"></label>
     <select id="sort" class="h-sort" aria-label="Order">
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
       <option value="title">By title</option>
       <option value="largest">Largest first</option>
     </select>
-    <input id="search" class="history-search" type="search" placeholder="Search titles and addresses" aria-label="Search history" autocomplete="off">
-    <button id="select" class="button ghost" type="button" aria-pressed="false" title="Select many at once: drag a box over the grid, or use the checkmarks on the tiles">Select</button>
-    <button id="play" class="button ghost" type="button" title="A run of everything saved that you have never seen, GIFs first, honouring the filters, tag and search. Every slide shown is marked as seen.">▶ Play unseen</button>
-    <button id="audit" class="button ghost" type="button" title="Measure every saved file, remove ones below your minimum media size, and add missing copies to Downloads / LinkPeek Library" hidden>Check saved files</button>
-    <button id="clear" class="button ghost" type="button">Clear history</button>
-  </header>
+  </div>
   <div id="tags" class="h-tags" role="group" aria-label="Tags from titles" hidden></div>
   <div id="tagsAll" class="h-tagsall" hidden>
     <input id="tagsFind" class="history-search" type="search" placeholder="Filter tags" aria-label="Filter tags" autocomplete="off">
