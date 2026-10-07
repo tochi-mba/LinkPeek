@@ -61,6 +61,7 @@ describe("Tumblr download state", () => {
     const live = downloader.start("live");
     expect(downloader.start("other")).toBe(live);
     expect(await downloader.status()).toBe(live);
+    await eventually(() => typeof release === "function");
     downloader.stop();
     release();
     await eventually(() => live.phase === "stopped");
@@ -132,8 +133,9 @@ describe("Tumblr HTTP handling", () => {
     vi.mocked(fetch).mockReset();
     for (let i = 0; i < 6; i++) vi.mocked(fetch).mockResolvedValueOnce(new Response("", {status: 429, headers: {"retry-after": "bad"}}));
     const exhausted = (downloader as any).page("/limited", "t", vi.fn());
+    const rejection = expect(exhausted).rejects.toThrow("(429)");
     await vi.advanceTimersByTimeAsync(15_000 + 30_000 + 45_000 + 60_000 + 75_000);
-    await expect(exhausted).rejects.toThrow("(429)");
+    await rejection;
 
     vi.mocked(fetch).mockResolvedValueOnce(new Response("", {status: 500}));
     await expect((downloader as any).page("/broken", "t", vi.fn())).rejects.toThrow("(500)");
@@ -143,10 +145,9 @@ describe("Tumblr HTTP handling", () => {
 describe("saving and running jobs", () => {
   it("waits for successful and interrupted downloads and handles startup and search failures", async () => {
     const downloader = new TumblrDownloader();
+    vi.mocked(chrome.downloads.search).mockResolvedValueOnce([{id: 7, state: "complete"}] as chrome.downloads.DownloadItem[]);
     const successful = (downloader as any).save("demo", media());
-    await Promise.resolve();
     downloader.onDownloadChanged({id: 7, state: {current: "in_progress"}} as chrome.downloads.DownloadDelta);
-    downloader.onDownloadChanged({id: 7, state: {current: "complete"}} as chrome.downloads.DownloadDelta);
     await expect(successful).resolves.toBe(true);
     expect(chrome.downloads.download).toHaveBeenCalledWith(expect.objectContaining({
       url: media().url,
@@ -161,8 +162,7 @@ describe("saving and running jobs", () => {
 
     vi.mocked(chrome.downloads.search).mockRejectedValueOnce(new Error("gone"));
     const searched = (downloader as any).save("demo", media("d"));
-    await Promise.resolve();
-    await Promise.resolve();
+    await eventually(() => vi.mocked(chrome.downloads.search).mock.calls.length >= 3);
     downloader.onDownloadChanged({id: 7, state: {current: "interrupted"}} as chrome.downloads.DownloadDelta);
     await expect(searched).resolves.toBe(false);
   });
@@ -185,15 +185,16 @@ describe("saving and running jobs", () => {
       {type: "image", media: [{url: "https://64.media.tumblr.com/repeated.jpg", media_key: "k0"}]}
     ];
     (downloader as any).page = vi.fn()
-      .mockResolvedValueOnce({response: {total_posts: 1, posts: [
+      .mockResolvedValueOnce({response: {total_posts: 2, posts: [
         {object_type: "ad", id_string: "ad"},
-        {object_type: "post", id_string: "10", content: blocks}
+        {object_type: "post", id_string: "10", content: blocks},
+        {object_type: "post", id_string: "11", content: [{type: "image", media: [{url: "https://64.media.tumblr.com/repeated-again.jpg", media_key: "k0"}]}]}
       ], _links: {next: {href: "/next"}}}})
       .mockResolvedValueOnce({response: {total_posts: 0, posts: []}});
     (downloader as any).save = vi.fn(async (_blog: string, item: TumblrMedia) => item.key !== "k26");
     const running = downloader.start("demo");
     await eventually(() => running.phase === "done");
-    expect(running).toMatchObject({posts: 1, total: 1, found: 27, saved: 26, failed: 1, skipped: 2, collected: true});
+    expect(running).toMatchObject({posts: 2, total: 2, found: 27, saved: 26, failed: 1, skipped: 2, collected: true});
     expect((downloader as any).page).toHaveBeenCalledTimes(2);
     expect(new Set(local[TUMBLR_SAVED_PREFIX + "demo"] as string[])).toEqual(new Set(["old", ...Array.from({length: 26}, (_, i) => `k${i}`)]));
     expect(chrome.storage.local.set).toHaveBeenCalled();
