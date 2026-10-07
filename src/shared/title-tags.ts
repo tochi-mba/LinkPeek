@@ -80,11 +80,23 @@ function singulars(word: string) {
   return out;
 }
 
-/** The same word across a plural ending or attached number, so "beach" finds "beaches" and "mia" finds "mia2". */
+/** The spellings a word stands for: itself, its singulars, and the same for its digit-free base. */
+function variants(word: string) {
+  const out = new Set(singulars(word));
+  const bare = word.replace(/\d+$/, "");
+  if (bare !== word) {
+    for (const form of singulars(bare)) out.add(form);
+  }
+  return out;
+}
+
+/**
+ * The same word across a plural ending or an attached number: "beach" finds
+ * "beaches" and "mia" finds "mia2" — but only variant-to-base, so "mia2" and
+ * "mia3" stay two different things.
+ */
 function sameWord(a: string, b: string) {
-  if (a === b) return true;
-  const x = a.replace(/\d+$/, ""), y = b.replace(/\d+$/, "");
-  return x === y || singulars(x).includes(y) || singulars(y).includes(x);
+  return a === b || variants(a).has(b) || variants(b).has(a);
 }
 
 /** Whether the title contains the tag's words in a row. */
