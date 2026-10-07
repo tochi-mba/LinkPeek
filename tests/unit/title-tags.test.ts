@@ -156,3 +156,61 @@ describe("matching a tag against a title", () => {
     expect(titleHasTag("subj26 shot", "subj00")).toBe(false);
   });
 });
+
+describe("lazy greedy picking", () => {
+  /** A seeded generator, so the property check is repeatable. */
+  function random(seed: number) {
+    return () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+  }
+
+  /** The eager algorithm, re-scoring every candidate on every pick: the reference the lazy form must match. */
+  function eagerKeys(titles: string[]) {
+    const all = mineTags(titles), docs = titles.map(title => all.filter(tag => titleHasTag(title, tag.key)).map(tag => tag.key));
+    const weights = new Map<number, number>(), pool = [...all], picked: string[] = [];
+    const covers = (key: string) => docs.flatMap((keys, at) => keys.includes(key) ? [at] : []);
+    while (pool.length) {
+      let best = -1, bestScore = 0;
+      pool.forEach((tag, at) => {
+        const score = covers(tag.key).reduce((sum, doc) => sum + (weights.get(doc) ?? 1), 0);
+        const ahead = best < 0 || score > bestScore || (score === bestScore && (tag.count > pool[best].count
+          || (tag.count === pool[best].count && (tag.key.split(" ").length > pool[best].key.split(" ").length
+            || (tag.key.split(" ").length === pool[best].key.split(" ").length && tag.key < pool[best].key)))));
+        if (ahead) {
+          best = at;
+          bestScore = score;
+        }
+      });
+      if (bestScore < 1) break;
+      const [chosen] = pool.splice(best, 1);
+      for (const doc of covers(chosen.key)) weights.set(doc, (weights.get(doc) ?? 1) * 0.5);
+      picked.push(chosen.key);
+    }
+    return picked;
+  }
+
+  it("picks exactly what re-scoring everything would, on many random collections", () => {
+    const words = ["alice", "bob", "carol", "dave", "erin", "frank", "grace", "heidi", "ivan", "judy", "beach", "city", "park", "night", "studio"];
+    for (let seed = 1; seed <= 40; seed++) {
+      const next = random(seed);
+      const titles = Array.from({length: 30 + Math.floor(next() * 50)}, (_, i) =>
+        `${Array.from({length: 1 + Math.floor(next() * 3)}, () => words[Math.floor(next() * words.length)]).join(" ")} t${i}x`);
+      const lazy = mineTags(titles).map(tag => tag.key);
+      const eager = eagerKeys(titles);
+      // The lazy picks are the head of the full list, in exactly the eager order.
+      expect(lazy.slice(0, eager.length)).toEqual(eager);
+    }
+  });
+
+  it("stays quick on thousands of titles", () => {
+    const next = random(7);
+    const names = Array.from({length: 400}, (_, i) => `name${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26) % 26)}`);
+    const titles = Array.from({length: 5000}, (_, i) => `${names[Math.floor(next() * names.length)]} ${names[Math.floor(next() * names.length)]} shot${i}q`);
+    const began = performance.now();
+    const tags = mineTags(titles);
+    expect(tags.length).toBeGreaterThan(300);
+    expect(performance.now() - began).toBeLessThan(5000);
+  });
+});

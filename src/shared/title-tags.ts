@@ -184,7 +184,7 @@ export function mineTags(titles: readonly string[], limit = Infinity): TitleTag[
   // The rest still name something real; they follow the picks, the commoner first.
   const have = new Set(picked.map(tag => tag.key));
   const tail = candidates.filter(candidate => !have.has(candidate.key))
-    .sort((a, b) => b.count - a.count || (prefer(a, b) ? -1 : 1))
+    .sort((a, b) => b.count - a.count || b.key.split(" ").length - a.key.split(" ").length || (a.key < b.key ? -1 : 1))
     .map(({key, label, count}) => ({key, label, count}));
   return [...picked, ...tail].slice(0, limit);
 }
@@ -193,27 +193,76 @@ export function mineTags(titles: readonly string[], limit = Infinity): TitleTag[
  * Greedy coverage: the phrase speaking for the most still-uncovered titles
  * goes next, and every pick halves the weight of the titles it covers. Ties
  * go to the higher count, then the fuller phrase, then alphabetically.
+ *
+ * Scores only ever fall as titles get covered, so this is the lazy form: a
+ * candidate's last score is an upper bound, and it is only re-scored when it
+ * reaches the top of the heap. The picks are exactly the eager algorithm's,
+ * at a fraction of the work on large collections.
  */
 function pickDiverse(pool: Candidate[], titleCount: number, limit: number): TitleTag[] {
   const weights = new Array<number>(titleCount).fill(1);
+  const score = (candidate: Candidate) => candidate.docs.reduce((sum, doc) => sum + weights[doc], 0);
+  const heap = new Heap<{candidate: Candidate; bound: number}>((a, b) => a.bound > b.bound || (a.bound === b.bound && prefer(a.candidate, b.candidate)));
+  for (const candidate of pool) heap.push({candidate, bound: candidate.docs.length});
   const picked: TitleTag[] = [];
-  while (picked.length < limit && pool.length) {
-    let best = 0, bestScore = 0;
-    for (let at = 0; at < pool.length; at++) {
-      let score = 0;
-      for (const doc of pool[at].docs) score += weights[doc];
-      if (score > bestScore || (score === bestScore && prefer(pool[at], pool[best]))) {
-        best = at;
-        bestScore = score;
-      }
+  while (picked.length < limit && heap.size) {
+    const top = heap.pop()!;
+    top.bound = score(top.candidate);
+    const next = heap.peek();
+    // Someone else may now be ahead: put this one back with its true score and look again.
+    if (next && (next.bound > top.bound || (next.bound === top.bound && prefer(next.candidate, top.candidate)))) {
+      heap.push(top);
+      continue;
     }
     // What is left barely covers anything the picked tags do not.
-    if (bestScore < 1) break;
-    const [chosen] = pool.splice(best, 1);
-    for (const doc of chosen.docs) weights[doc] *= DIVERSITY;
-    picked.push({key: chosen.key, label: chosen.label, count: chosen.count});
+    if (top.bound < 1) break;
+    for (const doc of top.candidate.docs) weights[doc] *= DIVERSITY;
+    picked.push({key: top.candidate.key, label: top.candidate.label, count: top.candidate.count});
   }
   return picked;
+}
+
+/** A small binary heap; `before(a, b)` says a comes out first. */
+class Heap<T> {
+  private items: T[] = [];
+
+  constructor(private before: (a: T, b: T) => boolean) {}
+
+  get size() {
+    return this.items.length;
+  }
+
+  peek(): T | undefined {
+    return this.items[0];
+  }
+
+  push(item: T) {
+    const items = this.items;
+    items.push(item);
+    for (let at = items.length - 1; at > 0;) {
+      const parent = (at - 1) >> 1;
+      if (!this.before(items[at], items[parent])) break;
+      [items[at], items[parent]] = [items[parent], items[at]];
+      at = parent;
+    }
+  }
+
+  pop(): T | undefined {
+    const items = this.items, top = items[0], last = items.pop();
+    if (!items.length) return top;
+    items[0] = last!;
+    let at = 0;
+    while (true) {
+      const left = at * 2 + 1, right = left + 1;
+      let best = at;
+      if (left < items.length && this.before(items[left], items[best])) best = left;
+      if (right < items.length && this.before(items[right], items[best])) best = right;
+      if (best === at) break;
+      [items[at], items[best]] = [items[best], items[at]];
+      at = best;
+    }
+    return top;
+  }
 }
 
 function prefer(a: Candidate, b: Candidate) {

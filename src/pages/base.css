@@ -292,3 +292,8 @@ input[type="range"] { accent-color: var(--signal); }
 .h-tagsall[hidden] { display: none; }
 .h-tagsall .history-search { width: 100%; }
 .h-tagsall .h-tags { margin: 10px 0 0; max-height: 40vh; overflow: auto; }
+
+/* A video playing on hover, laid over its still. */
+.h-hoverplay { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+/* How picked tags combine. */
+.h-mode { border-style: dashed; color: var(--signal, #D7FF3F); }
