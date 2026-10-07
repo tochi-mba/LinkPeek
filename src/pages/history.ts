@@ -49,6 +49,8 @@ export interface Row {
   source: string;
   /** Opened on the web. */
   open: string;
+  /** Existing native Downloads file, when Chrome allows file: access. */
+  local?: string;
   /** Its file in the library, if kept. */
   saved: string;
   /** Still for the grid ("" when there is none). */
@@ -58,6 +60,8 @@ export interface Row {
   w?: number;
   h?: number;
   bytes?: number;
+  /** Bytes owned by the Library cache, excluding an original Tumblr download. */
+  cacheBytes?: number;
   /** Its copy in Downloads / LinkPeek Library, when one was made. */
   dl?: number;
   /** Its Downloads copy came from an explicit action and is not owned by the Library. */
@@ -71,9 +75,9 @@ export function rowFromHistory(entry: HistoryEntry): Row {
 export function rowFromLibrary([url, entry]: [string, LibraryEntry]): Row {
   const type = entry.type ?? (/\.gif(?:$|[?#])/i.test(url) ? "gif" : "image");
   return {
-    at: entry.at, type, title: entry.title, source: entry.source ?? url, open: entry.original ?? url, saved: url,
+    at: entry.at, type, title: entry.title, source: entry.source ?? url, open: entry.original ?? url, local: entry.local, saved: url,
     thumb: type === "image" ? url : entry.preview ?? "", seen: entry.seen !== false,
-    w: entry.w, h: entry.h, bytes: entry.bytes, dl: entry.dl, external: entry.external
+    w: entry.w, h: entry.h, bytes: entry.diskBytes ?? entry.bytes, cacheBytes: entry.external ? 0 : entry.bytes, dl: entry.dl, external: entry.external
   };
 }
 
@@ -159,7 +163,7 @@ function paintStorage() {
     bar.hidden = true;
     return;
   }
-  const used = savedRows.reduce((sum, row) => sum + row.bytes!, 0);
+  const used = savedRows.reduce((sum, row) => sum + (row.cacheBytes ?? row.bytes!), 0);
   const budget = settings.savedMediaBudgetMb * 1024 * 1024;
   const percent = Math.min(100, Math.round(used / budget * 100));
   bar.hidden = false;
@@ -229,10 +233,13 @@ async function stillFor(row: Row) {
 async function makeStill(row: Row) {
   if (row.type === "gif") {
     const kept = await (await openCache())?.match(row.saved);
-    const bytes = kept ? await kept.blob() : await fetch(row.open).then(response => response.ok ? response.blob() : Promise.reject(new Error(`HTTP ${response.status}`)));
+    const read = (url: string) => fetch(url).then(response => response.ok ? response.blob() : Promise.reject(new Error(`HTTP ${response.status}`)));
+    const bytes = kept ? await kept.blob() : row.local ? await read(row.local).catch(() => read(row.open)) : await read(row.open);
     return gifStill(bytes);
   }
-  return videoStill(await savedCopy(row.saved) ?? row.open, row.saved);
+  const kept = await savedCopy(row.saved);
+  if (kept) return videoStill(kept, row.saved);
+  return row.local ? videoStill(row.local, row.saved).catch(() => videoStill(row.open, row.saved)) : videoStill(row.open, row.saved);
 }
 
 /** Stills are made a couple at a time, top of the grid first. */
@@ -258,7 +265,9 @@ function pumpStills() {
  */
 async function pausedFrame(image: HTMLImageElement, row: Row) {
   const video = Object.assign(document.createElement("video"), {className: "h-still", muted: true, preload: "metadata", playsInline: true});
-  video.src = `${await savedCopy(row.saved) ?? row.open}#t=${(framePoint(row.saved) * 10).toFixed(1)}`;
+  const kept = await savedCopy(row.saved), source = kept ?? row.local ?? row.open;
+  if (!kept && row.local) video.addEventListener("error", () => video.src = `${row.open}#t=${(framePoint(row.saved) * 10).toFixed(1)}`, {once: true});
+  video.src = `${source}#t=${(framePoint(row.saved) * 10).toFixed(1)}`;
   image.replaceWith(video);
 }
 
@@ -707,7 +716,7 @@ function fileName(row: Row) {
 async function auditSaved() {
   $("summary").textContent = "Checking the saved files…";
   paintLive(0);
-  const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number; historyRemoved: number} | undefined;
+  const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number; imported: number; historyRemoved: number} | undefined;
   [seenRows, savedRows] = await Promise.all([
     readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
     readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
@@ -715,7 +724,7 @@ async function auditSaved() {
   await computeTags();
   await apply();
   $("summary").textContent = result
-    ? `Checked every saved file and the history: removed ${plural(result.removed, "duplicate or undersized file", "duplicate or undersized files")} and ${plural(result.historyRemoved, "undersized history entry", "undersized history entries")}, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
+    ? `Checked every saved file and the history: imported ${plural(result.imported ?? 0, "Tumblr download")}, removed ${plural(result.removed, "duplicate or undersized file", "duplicate or undersized files")} and ${plural(result.historyRemoved, "undersized history entry", "undersized history entries")}, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
     : "Couldn’t check the saved files.";
 }
 
@@ -882,19 +891,24 @@ async function showItem(index: number) {
   const row = list[viewing], copy = await savedCopy(row.saved);
   if (viewed()[viewing] !== row) return;
   // The saved copy works offline; without one, the original from the web. Moving media plays once in a slideshow.
-  const source = copy ?? row.open, stage = $("viewStage");
+  const source = copy ?? row.local ?? row.open, stage = $("viewStage");
   stage.innerHTML = row.type === "video"
     ? `<video src="${escapeHtml(source)}" controls autoplay ${playing ? "" : "loop "}playsinline></video>`
     : row.type === "audio" ? `<audio src="${escapeHtml(source)}" controls autoplay></audio>` : `<img src="${escapeHtml(source)}" alt="">`;
   zoom.reset();
+  const media = stage.querySelector<HTMLMediaElement | HTMLImageElement>("video, audio, img");
+  if (!copy && row.local && media) media.addEventListener("error", () => {
+    if (media.src !== row.open) media.src = row.open;
+  }, {once: true});
   const title = $("viewTitle") as HTMLAnchorElement;
   title.textContent = displayTitle(row);
   title.href = row.source;
   ($("viewOriginal") as HTMLAnchorElement).href = row.open;
   const size = row.w ? ` · ${row.w}×${row.h}` : "";
   const weight = row.bytes ? ` · ${sizeLabel(row.bytes)}` : "";
-  metaBase = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}`;
+  metaBase = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy || row.local ? " · saved on this device" : ""}`;
   $("viewMeta").textContent = metaBase + modeSuffix();
+  $("viewFolder").hidden = row.dl === undefined;
   paintFavorite(row);
   markSeen(row);
   if (playing) {
@@ -1029,6 +1043,13 @@ async function saveViewed() {
     }
   }
   await chrome.downloads.download({url: await savedCopy(row.saved) ?? row.open, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
+}
+
+/** Reveals the original Tumblr file that already exists in Downloads. */
+async function showDownloadedFile() {
+  const row = viewed()[viewing];
+  if (row?.dl === undefined) return;
+  await chrome.runtime.sendMessage({type: "LINKPEEK_DOWNLOAD_SHOW", id: row.dl}).catch(() => undefined);
 }
 
 /** D: asks first, naming exactly what goes — the Library file and any Library-owned Downloads copy, or the history entry. */
@@ -1340,15 +1361,17 @@ function wire() {
     }
     if (tile.dataset.hover) return;
     tile.dataset.hover = "1";
-    const source = await savedCopy(row.saved) ?? row.open;
+    const kept = await savedCopy(row.saved), source = kept ?? row.local ?? row.open;
     if (!tile.dataset.hover) return;
     if (row.type === "video") {
       // Muted as a property, not just an attribute: that is what lets the browser autoplay it.
       const video = Object.assign(document.createElement("video"), {className: "h-hoverplay", src: source, muted: true, loop: true, playsInline: true, autoplay: true});
+      if (!kept && row.local) video.addEventListener("error", () => video.src = row.open, {once: true});
       media.prepend(video);
     } else if (img) {
       img.dataset.still = img.src;
       img.src = source;
+      if (!kept && row.local) img.addEventListener("error", () => img.src = row.open, {once: true});
     }
   };
   for (const [name, live] of [["mouseover", true], ["mouseout", false]] as const) {
@@ -1398,6 +1421,7 @@ function wire() {
     if (event.button === 3 || event.button === 4) step(event.button === 4 ? 1 : -1);
   });
   $("viewSave").addEventListener("click", () => void saveViewed());
+  $("viewFolder").addEventListener("click", () => void showDownloadedFile());
   document.addEventListener("keydown", onKey);
   $("view").addEventListener("wheel", onWheel, {passive: false});
 }
@@ -1421,12 +1445,14 @@ async function start() {
   const stored = (await chrome.storage.local.get(FAVORITE_MEDIA).catch(() => ({})) as Record<string, unknown>)[FAVORITE_MEDIA];
   favorites = new Set(Array.isArray(stored) ? stored.filter((url): url is string => typeof url === "string") : []);
   void seenMedia.load();
+  const imported = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_IMPORTS"}).catch(() => undefined) as {imported?: number} | undefined;
   [seenRows, savedRows] = await Promise.all([
     readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
     readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
   ]);
   await computeTags();
   await apply();
+  if (imported?.imported) $("summary").textContent = `Imported ${plural(imported.imported, "Tumblr download")} from Downloads · ${summary()}`;
 }
 
 void start();

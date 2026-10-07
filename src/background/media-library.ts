@@ -141,6 +141,21 @@ export class MediaLibrary {
     this.saveIndexSoon();
   }
 
+  /** Indexes a file that already exists in Downloads without copying its bytes into Cache Storage. */
+  async importExternal(url: string, meta: LibraryMeta, at = Date.now()): Promise<"saved" | "existing" | "ignored"> {
+    if (!/^https?:/.test(url) || !meta.external || meta.dl === undefined) return "ignored";
+    const index = await this.loadIndex(), kept = index.get(url);
+    if (kept) {
+      const seen = kept.seen || meta.seen;
+      Object.assign(kept, meta, {seen, title: kept.title || meta.title, source: kept.source || meta.source});
+      this.saveIndexSoon();
+      return "existing";
+    }
+    index.set(url, {...meta, bytes: 0, at});
+    this.saveIndexSoon();
+    return "saved";
+  }
+
   /**
    * Queues a file to keep under `rules`. A file being looked at goes ahead of
    * prepared ones; a file already kept is only marked seen; a file measured
@@ -360,11 +375,11 @@ export class MediaLibrary {
   async trim(budget: number) {
     const index = await this.loadIndex();
     let total = 0;
-    for (const entry of index.values()) total += entry.bytes;
+    for (const entry of index.values()) if (!entry.external) total += entry.bytes;
     if (total <= budget) return;
     const cache = await caches.open(LIBRARY_CACHE), favorites = await favoriteFiles();
     // Favourites never go to make room, whatever the budget says.
-    const order = [...index].filter(([url]) => !favorites.has(url)).sort((a, b) => Number(a[1].seen !== false) - Number(b[1].seen !== false));
+    const order = [...index].filter(([url, entry]) => !entry.external && !favorites.has(url)).sort((a, b) => Number(a[1].seen !== false) - Number(b[1].seen !== false));
     for (const [url, entry] of order) {
       if (total <= budget) break;
       index.delete(url);
@@ -379,7 +394,7 @@ export class MediaLibrary {
   async stats() {
     const index = await this.loadIndex();
     let bytes = 0;
-    for (const entry of index.values()) bytes += entry.bytes;
+    for (const entry of index.values()) if (!entry.external) bytes += entry.bytes;
     return {count: index.size, bytes};
   }
 

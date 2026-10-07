@@ -10,6 +10,7 @@ import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
 import {MediaLibrary, favoriteFiles, type AuditProgress, type LibraryRules} from "./background/media-library";
 import {TumblrDownloader} from "./background/tumblr-job";
+import {importTumblrDownloads} from "./background/tumblr-import";
 import {HistoryWriter, LIBRARY_CACHE, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
@@ -132,12 +133,13 @@ function auditTicker(phase: AuditTickMessage["phase"]) {
  */
 async function auditAll(settings: LinkPeekSettings) {
   const rules = libraryRules(settings);
+  const imported = await importTumblrDownloads(library);
   const files = await library.audit(rules, auditTicker("files"));
   // A favourite's sightings are never judged, whatever their size.
   const favorites = await favoriteFiles();
   const past = await history.audit(entry => favorites.has(savedUrlOf(entry)) ? Promise.resolve(undefined) : library.sizeFor(savedUrlOf(entry)),
     (w, h, entry) => !favorites.has(savedUrlOf(entry)) && underSized(w, h, rules), auditTicker("history"));
-  return {...files, historyRemoved: past.removed};
+  return {...files, imported: imported.imported, historyRemoved: past.removed};
 }
 
 /** A gallery saved on the device earlier, when keeping them is on. */
@@ -502,8 +504,14 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(library.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_SEEN":
       return respond(library.markSeen(msg.url).then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_TUMBLR_IMPORTS":
+      return respond(importTumblrDownloads(library), sendResponse);
     case "LINKPEEK_LIBRARY_AUDIT":
       return respond(currentSettings().then(auditAll), sendResponse);
+    case "LINKPEEK_DOWNLOAD_SHOW":
+      chrome.downloads.show(msg.id);
+      sendResponse({ok: true});
+      return;
     case "LINKPEEK_FORGET_MEDIA":
       return respond(Promise.all([history.removeAddress(msg.original), library.remove(msg.saved)]).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_REMOVE":

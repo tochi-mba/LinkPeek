@@ -362,7 +362,7 @@ describe("the saved view", () => {
     });
     $("#audit").click();
     await settle();
-    expect($("#summary").textContent).toBe("Checked every saved file and the history: removed 1 duplicate or undersized file and 2 undersized history entries, added 0 to Downloads / LinkPeek Library.");
+    expect($("#summary").textContent).toBe("Checked every saved file and the history: imported 0 Tumblr downloads, removed 1 duplicate or undersized file and 2 undersized history entries, added 0 to Downloads / LinkPeek Library.");
     expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
     // When the worker cannot answer, the page says so instead of staying stuck on "checking".
     harness.chrome.runtime.sendMessage.mockRejectedValueOnce(new Error("gone"));
@@ -1502,6 +1502,27 @@ describe("the full-size viewer", () => {
     press("Enter");
     await settle();
     expect([$("#view").hidden, $("#summary").textContent]).toEqual([true, "Deleted from the Library; original download kept"]);
+  });
+
+  it("opens an imported Tumblr video from Downloads, falls back to Tumblr, and reveals the native file", async () => {
+    stillMaker.video.mockResolvedValue(new Blob(["frame"], {type: "image/jpeg"}));
+    const url = "https://va.media.tumblr.com/clip.mp4";
+    await openLibrary([[url, {
+      bytes: 0, diskBytes: 2048, at: Date.now(), seen: false, type: "video", title: "@demo · post 42",
+      source: "https://www.tumblr.com/demo/42", original: url, local: "file:///C:/Users/rex/Downloads/LinkPeek/Tumblr/demo/clip.mp4",
+      external: true, dl: 61
+    }]]);
+    await view(0);
+    const video = $("#viewStage video") as HTMLVideoElement;
+    expect([video.getAttribute("src"), $("#viewFolder").hidden, $("#viewMeta").textContent]).toEqual([
+      "file:///C:/Users/rex/Downloads/LinkPeek/Tumblr/demo/clip.mp4", false, expect.stringContaining("2 KB")
+    ]);
+    video.dispatchEvent(new Event("error"));
+    expect(video.src).toBe(url);
+    $("#viewFolder").click();
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_DOWNLOAD_SHOW", id: 61});
+    expect($("#progress").title).toContain("0 KB of the");
   });
 
   it("stars favourites with B, shows and filters them, and keeps the filter in the address", async () => {

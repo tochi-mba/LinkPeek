@@ -86,7 +86,7 @@ beforeEach(async () => {
       update: vi.fn(async () => undefined)
     },
     downloads: {
-      download: vi.fn(async () => 7), removeFile: vi.fn(async () => undefined), erase: vi.fn(async () => undefined), search: vi.fn(async () => []),
+      download: vi.fn(async () => 7), removeFile: vi.fn(async () => undefined), erase: vi.fn(async () => undefined), search: vi.fn(async () => []), show: vi.fn(),
       onChanged: {addListener: vi.fn(listener => onDownloadChanged = listener)}
     },
     action: {setBadgeText: vi.fn(async () => undefined)}
@@ -120,6 +120,20 @@ describe("installation", () => {
 });
 
 describe("Tumblr downloads", () => {
+  it("indexes the existing Tumblr Downloads folder and can reveal one of its files", async () => {
+    vi.mocked(chrome.downloads.search).mockResolvedValueOnce([{
+      id: 61, url: "https://va.media.tumblr.com/clip.mp4", filename: "C:\\Users\\rex\\Downloads\\LinkPeek\\Tumblr\\demo\\2026-10-07 42-1.mp4",
+      danger: "safe", incognito: false, mime: "video/mp4", startTime: "2026-10-07T10:00:00Z", state: "complete", paused: false,
+      canResume: false, bytesReceived: 1234, totalBytes: 1234, fileSize: 1234, exists: true
+    } as chrome.downloads.DownloadItem]);
+    expect((await send({type: "LINKPEEK_TUMBLR_IMPORTS"})).value).toEqual({found: 1, imported: 1});
+    expect(new Map(store.mediaIndex as Array<[string, any]>).get("https://va.media.tumblr.com/clip.mp4")).toMatchObject({
+      type: "video", source: "https://www.tumblr.com/demo/42", dl: 61, external: true, diskBytes: 1234
+    });
+    expect(await send({type: "LINKPEEK_DOWNLOAD_SHOW", id: 61})).toMatchObject({async: undefined, value: {ok: true}});
+    expect(chrome.downloads.show).toHaveBeenCalledWith(61);
+  });
+
   it("starts, reports and stops the background job, and forwards download events", async () => {
     expect(await send({type: "LINKPEEK_TUMBLR_STATUS"})).toMatchObject({async: true, value: undefined});
     let release!: () => void;
@@ -691,7 +705,7 @@ describe("history and fingerprints", () => {
       ["https://cdn.test/small.jpg", {bytes: 3, at: 1, w: 20, h: 300, dl: 9}],
       ["https://cdn.test/fine.jpg", {bytes: 4, at: 2, w: 900, h: 900}]
     ];
-    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 2, removed: 1, mirrored: 1, historyRemoved: 0});
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 2, removed: 1, mirrored: 1, imported: 0, historyRemoved: 0});
     expect(chrome.downloads.removeFile).toHaveBeenCalledWith(9);
     const index = new Map(store.mediaIndex as Array<[string, {dl?: number}]>);
     expect([[...index.keys()], index.get("https://cdn.test/fine.jpg")!.dl]).toEqual([["https://cdn.test/fine.jpg"], 7]);
@@ -712,7 +726,7 @@ describe("history and fingerprints", () => {
     ];
     const answer = (await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value;
     // The file was too small too, so it went with its sighting.
-    expect(answer).toEqual({checked: 1, removed: 1, mirrored: 0, historyRemoved: 1});
+    expect(answer).toEqual({checked: 1, removed: 1, mirrored: 0, imported: 0, historyRemoved: 1});
     expect((store["history:0"] as Array<{a: number}>).map(entry => entry.a)).toEqual([2, 3]);
     const ticks = broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK") as any[];
     expect(ticks.map(tick => tick.phase)).toEqual(["files", "history", "history"]);
@@ -752,7 +766,7 @@ describe("history and fingerprints", () => {
   it("ticks every tenth file through a quiet stretch of the check", async () => {
     fakeCaches();
     store.mediaIndex = Array.from({length: 11}, (_, i) => [`https://cdn.test/v${i}.mp4`, {bytes: 1, at: i, type: "video", dl: 50 + i}]);
-    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 11, removed: 0, mirrored: 0, historyRemoved: 0});
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 11, removed: 0, mirrored: 0, imported: 0, historyRemoved: 0});
     expect(broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK").map((msg: any) => [msg.phase, msg.checked])).toEqual([["files", 10], ["files", 11]]);
   });
 

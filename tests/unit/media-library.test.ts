@@ -99,6 +99,22 @@ describe("the media library", () => {
     expect(await new MediaLibrary().stats()).toEqual({count: 0, bytes: 0});
   });
 
+  it("indexes existing Tumblr downloads without copying or charging them to the cache budget", async () => {
+    const library = new MediaLibrary();
+    const external = {seen: false, type: "video" as const, source: "https://www.tumblr.com/demo/42", title: "@demo · post 42", original: "https://va.media.tumblr.com/clip.mp4", local: "file:///C:/Downloads/clip.mp4", dl: 42, external: true, diskBytes: 900};
+    expect(await library.importExternal("file:///clip.mp4", external)).toBe("ignored");
+    expect(await library.importExternal("https://va.media.tumblr.com/no-external.mp4", {...external, external: false})).toBe("ignored");
+    expect(await library.importExternal("https://va.media.tumblr.com/no-id.mp4", {...external, dl: undefined})).toBe("ignored");
+    expect(await library.importExternal(external.original, external, 123)).toBe("saved");
+    expect(await library.stats()).toEqual({count: 1, bytes: 0});
+    expect(fetch).not.toHaveBeenCalled();
+    await library.trim(0);
+    expect((await library.stats()).count).toBe(1);
+    expect(await library.importExternal(external.original, {...external, seen: true, title: "replacement", source: "https://replacement.test"}, 456)).toBe("existing");
+    await library.saveIndex();
+    expect(index().get(external.original)).toMatchObject({at: 123, seen: true, title: "@demo · post 42", source: "https://www.tumblr.com/demo/42", bytes: 0, diskBytes: 900});
+  });
+
   it("clears queued and in-flight saves without letting them repopulate the Library", async () => {
     const releases: Array<(response: Response) => void> = [];
     vi.mocked(fetch).mockImplementation(() => new Promise(resolve => releases.push(resolve)));

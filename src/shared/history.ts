@@ -32,6 +32,8 @@ export interface LibraryEntry {
   preview?: string;
   /** The original, for opening on the web. */
   original?: string;
+  /** Existing file in Downloads, used directly when file: access is allowed. */
+  local?: string;
   /** Measured pixel size, when the saved file could be decoded. */
   w?: number;
   h?: number;
@@ -39,6 +41,8 @@ export interface LibraryEntry {
   dl?: number;
   /** The copy came from an explicit download elsewhere and must outlive this cache entry. */
   external?: boolean;
+  /** Size of an external Downloads file; `bytes` remains the Library cache usage. */
+  diskBytes?: number;
   /** Exact content signature, used to keep byte-for-byte duplicates out. */
   digest?: string;
 }

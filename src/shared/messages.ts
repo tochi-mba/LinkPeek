@@ -24,6 +24,10 @@ export type LibraryStatsRequest = {type: "LINKPEEK_LIBRARY_STATS"};
 export type LibraryClearRequest = {type: "LINKPEEK_LIBRARY_CLEAR"};
 /** Library page: opening a saved file marks that existing row seen, independently of offline-save settings. */
 export type LibrarySeenRequest = {type: "LINKPEEK_LIBRARY_SEEN"; url: string};
+/** Library page: index existing files from Downloads / LinkPeek / Tumblr. */
+export type TumblrImportsRequest = {type: "LINKPEEK_TUMBLR_IMPORTS"};
+/** Library viewer: reveal an existing file in the operating system's file browser. */
+export type ShowDownloadRequest = {type: "LINKPEEK_DOWNLOAD_SHOW"; id: number};
 /** Library page: measure every saved file, drop ones below the minimums, and fill in missing Downloads copies. */
 export type LibraryAuditRequest = {type: "LINKPEEK_LIBRARY_AUDIT"};
 /** Worker -> the library page: the check moved along, through the saved files and then the history. */
@@ -64,7 +68,7 @@ export type TumblrClearQueueRequest = {type: "LINKPEEK_TUMBLR_CLEAR_QUEUE"};
 
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
-  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibrarySeenRequest | LibraryAuditRequest | OpenLibraryRequest
+  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibrarySeenRequest | TumblrImportsRequest | ShowDownloadRequest | LibraryAuditRequest | OpenLibraryRequest
   | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest | TumblrStatusRequest | TumblrStartRequest | TumblrStopRequest
   | TumblrRemoveQueuedRequest | TumblrClearQueueRequest;
 
