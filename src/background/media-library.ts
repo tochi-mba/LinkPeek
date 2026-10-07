@@ -15,7 +15,7 @@
  * time and never retries.
  */
 import {bytesToBase64, fetchWithRetry, readBytesCapped} from "../core/http";
-import {LIBRARY_CACHE, LIBRARY_INDEX, libraryFileName, type LibraryEntry} from "../shared/history";
+import {LIBRARY_CACHE, LIBRARY_INDEX, STILLS_CACHE, libraryFileName, type LibraryEntry} from "../shared/history";
 import {underSized} from "../shared/media";
 
 const CONCURRENCY = 2;
@@ -172,6 +172,7 @@ export class MediaLibrary {
     if (!entry) return;
     index.delete(url);
     await (await caches.open(LIBRARY_CACHE)).delete(url);
+    await (await caches.open(STILLS_CACHE)).delete(url);
     await removeMirror(entry);
     this.saveIndexSoon();
   }
@@ -225,6 +226,7 @@ export class MediaLibrary {
       index.delete(url);
       total -= entry.bytes;
       await cache.delete(url);
+      await (await caches.open(STILLS_CACHE)).delete(url);
       await removeMirror(entry);
     }
     this.saveIndexSoon();
@@ -244,6 +246,7 @@ export class MediaLibrary {
     const index = await this.loadIndex();
     for (const entry of index.values()) await removeMirror(entry);
     await caches.delete(LIBRARY_CACHE);
+    await caches.delete(STILLS_CACHE);
     index.clear();
     await this.saveIndex();
   }

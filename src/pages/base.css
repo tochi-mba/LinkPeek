@@ -219,9 +219,9 @@ input[type="range"] { accent-color: var(--signal); }
 
 /* The history page: a dark grid of everything seen, grouped by day. */
 .history { margin: 0; background: #080A09; color: var(--text, #F2F5EE); }
-.history-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: rgba(8, 10, 9, .94); border-bottom: 1px solid var(--line, #29302A); backdrop-filter: blur(12px); }
+.history-head { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 20px; background: rgba(8, 10, 9, .94); border-bottom: 1px solid var(--line, #29302A); backdrop-filter: blur(12px); }
 .history-head h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-.history-search { width: min(360px, 40vw); height: 36px; padding: 0 12px; border: 1px solid var(--line, #29302A); border-radius: 9px; background: var(--raised, #181E19); color: inherit; font: inherit; }
+.history-search { flex: 1 1 220px; max-width: 420px; height: 36px; padding: 0 12px; border: 1px solid var(--line, #29302A); border-radius: 9px; background: var(--raised, #181E19); color: inherit; font: inherit; }
 .history-search:focus { outline: 2px solid var(--signal, #D7FF3F); outline-offset: 1px; }
 .history-summary { margin: 14px 20px 0; font-size: 13px; }
 .h-day { padding: 8px 20px 4px; }
@@ -241,7 +241,9 @@ input[type="range"] { accent-color: var(--signal); }
 @media (max-width: 640px) { .history-head { flex-wrap: wrap; } .history-search { width: 100%; order: 5; } }
 
 /* The full-size viewer on the history page. */
-.h-media img[data-src] { visibility: hidden; aspect-ratio: 4 / 3; }
+.h-media img[data-src], .h-media img[data-still], .h-media img:not([src]) { visibility: hidden; aspect-ratio: 4 / 3; }
+/* A clip shown paused when no still could be made. */
+.h-still { display: block; width: 100%; height: auto; }
 /* The preview-size slider. */
 .h-size { width: 110px; accent-color: var(--signal, #D7FF3F); }
 .h-view { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 64px 1fr 64px; grid-template-rows: auto 1fr; background: rgba(5, 6, 5, .96); }
@@ -297,3 +299,14 @@ input[type="range"] { accent-color: var(--signal); }
 .h-hoverplay { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
 /* How picked tags combine. */
 .h-mode { border-style: dashed; color: var(--signal, #D7FF3F); }
+
+/* The Library's second row: what to show and how. */
+.h-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 20px 0; }
+.h-sizer { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #858D83); font-size: 13px; }
+/* The ⋯ menu: rare and destructive actions, one deliberate click away. */
+.h-menu { position: relative; }
+.h-menu > summary { list-style: none; cursor: pointer; min-width: 44px; }
+.h-menu > summary::-webkit-details-marker { display: none; }
+.h-menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 6; display: flex; flex-direction: column; gap: 4px; min-width: 220px; padding: 6px; border: 1px solid var(--line, #29302A); border-radius: 12px; background: var(--raised, #181E19); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.h-menu-list .button { justify-content: flex-start; min-height: 38px; }
+.h-menu-list .button[hidden] { display: none; }

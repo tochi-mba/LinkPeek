@@ -12,6 +12,8 @@ export const HISTORY_META = "historyMeta";
 export const LIBRARY_CACHE = "linkpeek-media";
 /** The index of saved media files, oldest first. */
 export const LIBRARY_INDEX = "mediaIndex";
+/** Still frames the library page made for GIF and video tiles, keyed like the saved files. */
+export const STILLS_CACHE = "linkpeek-stills";
 
 /** One saved file. Older entries carry only bytes and at, and count as seen (only seen media was saved then). */
 export interface LibraryEntry {
