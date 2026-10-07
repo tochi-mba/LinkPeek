@@ -172,21 +172,22 @@ export class TumblrDownloader {
   /** One page of posts, waiting out rate limits and fetching a fresh token once if the old one is refused. */
   private async page(path: string, token: string, refresh: () => Promise<string>): Promise<unknown> {
     let refreshed = false;
-    for (let attempt = 0; ; attempt++) {
+    const request = async (attempt: number): Promise<unknown> => {
       const response = await fetch(`${API}${path}`, {credentials: "include", headers: {Authorization: `Bearer ${token}`}});
       if (response.ok) return response.json();
       if ((response.status === 401 || response.status === 403) && !refreshed) {
         refreshed = true;
         token = await refresh();
-        continue;
+        return request(attempt + 1);
       }
       if (response.status === 429 && attempt < 5) {
         const after = Number(response.headers.get("retry-after"));
         await sleep(Number.isFinite(after) && after > 0 ? after * 1000 : 15_000 * (attempt + 1));
-        continue;
+        return request(attempt + 1);
       }
       throw new Error(`Tumblr refused the posts (${response.status})`);
-    }
+    };
+    return request(0);
   }
 
   /** Saves one file into Downloads and waits for it to finish; false when it could not be saved. */
