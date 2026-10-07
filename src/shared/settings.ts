@@ -566,7 +566,9 @@ export function linkMatchesKeywords(settings: Pick<LinkPeekSettings, "activation
   } catch {
     // A malformed escape: match against the raw URL instead.
   }
+  // A phrase matches an address's slug ("beach day" in /beach-day), and the raw address still matches as typed ("/media/").
+  const slug = target.replace(/[-_+./]+/g, " ");
   // Line breaks and runs of spaces in a link's text still match a phrase.
   const words = label.toLowerCase().replace(/\s+/g, " ");
-  return keywords.some(keyword => target.includes(keyword) || words.includes(keyword));
+  return keywords.some(keyword => target.includes(keyword) || slug.includes(keyword) || words.includes(keyword));
 }
