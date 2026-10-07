@@ -342,7 +342,8 @@ describe("the saved view", () => {
     await settle();
     // The kind follows across views; the history holds no videos at all.
     expect([location.search, $("#summary").textContent]).toEqual(["?media=video", "No videos in the history yet."]);
-    expect($("#audit").hidden).toBe(true);
+    // The check covers every saved file, so it is on hand in both views.
+    expect($("#audit").hidden).toBe(false);
     chip('[data-kind="all"]').click();
     await settle();
     expect(location.search).toBe("");

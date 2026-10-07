@@ -476,7 +476,6 @@ function paintControls() {
   // Only saved files know their size, so the seen view cannot order by it.
   order.querySelector<HTMLOptionElement>('option[value="largest"]')!.disabled = view === "seen";
   $("filters").hidden = view !== "saved";
-  $("audit").hidden = view !== "saved";
   $("clear").textContent = view === "seen" ? "Clear history" : "Delete saved files";
 }
 
