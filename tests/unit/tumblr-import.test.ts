@@ -19,7 +19,7 @@ beforeEach(() => {
 
 describe("existing Tumblr downloads", () => {
   it("recognises Windows and Unix file paths, dates, kinds and fallback metadata", () => {
-    expect(localFileUrl("C:\\A folder\\clip #1.mp4")).toBe("file:///C:/A%20folder/clip%20#1.mp4");
+    expect(localFileUrl("C:\\A folder\\clip #1.mp4")).toBe("file:///C:/A%20folder/clip%20%231.mp4");
     expect(localFileUrl("/home/rex/clip.mp4")).toBe("file:///home/rex/clip.mp4");
     expect(tumblrDownload(record())).toMatchObject({
       url: "https://64.media.tumblr.com/demo.mp4", local: "file:///C:/Users/rex/Downloads/LinkPeek/Tumblr/Demo-Blog/2026-10-07%20829824340399882240-1.mp4",
