@@ -285,3 +285,10 @@ input[type="range"] { accent-color: var(--signal); }
 .h-bar[hidden] { display: none; }
 .h-bar-fill { height: 100%; width: 0; border-radius: 999px; background: var(--muted, #858D83); transition: width .2s ease; }
 .h-bar-live .h-bar-fill { background: var(--signal, #D7FF3F); }
+
+/* Every tag, behind one chip. */
+.h-more { color: var(--signal, #D7FF3F); }
+.h-tagsall { margin: 8px 20px 0; padding: 10px; border: 1px solid var(--line, #29302A); border-radius: 12px; background: var(--raised, #181E19); }
+.h-tagsall[hidden] { display: none; }
+.h-tagsall .history-search { width: 100%; }
+.h-tagsall .h-tags { margin: 10px 0 0; max-height: 40vh; overflow: auto; }

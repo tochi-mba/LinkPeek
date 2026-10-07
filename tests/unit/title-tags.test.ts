@@ -101,8 +101,19 @@ describe("mining tags from titles", () => {
     ])).toEqual(["mega big", "wide", "sub"]);
   });
 
-  it("stops picking once what is left barely covers anything fresh", () => {
-    expect(take(["rose lily aa", "rose lily bb", "rose cc", "rose dd", "lily ee", "lily ff"])).toEqual(["lily", "rose"]);
+  it("holds nothing back: the diverse picks lead and the long tail follows by count", () => {
+    expect(take(["rose lily aa", "rose lily bb", "rose cc", "rose dd", "lily ee", "lily ff"])).toEqual(["lily", "rose", "rose lily"]);
+    const tags = take([
+      "rose lily aa", "rose lily bb", "rose cc", "rose dd", "lily ee", "lily ff",
+      "mint fern gg", "mint fern hh", "mint jj", "mint kk", "fern mm", "fern nn",
+      "oak elm pp", "oak elm qq", "oak elm rr", "oak ss", "oak tt", "oak uu", "elm vv", "elm ww", "elm xx"
+    ]);
+    expect(new Set(tags.slice(0, 6))).toEqual(new Set(["rose", "lily", "mint", "fern", "oak", "elm"]));
+    expect(tags.slice(6)).toEqual(["oak elm", "mint fern", "rose lily"]);
+  });
+
+  it("honours a limit by cutting the tail first", () => {
+    expect(take(["rose lily aa", "rose lily bb", "rose cc", "rose dd", "lily ee", "lily ff"], 2)).toEqual(["lily", "rose"]);
   });
 
   it("ranks ties by how many titles carry the tag, then alphabetically, up to the limit", () => {

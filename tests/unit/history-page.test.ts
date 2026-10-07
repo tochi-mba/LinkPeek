@@ -733,6 +733,69 @@ describe("tags, order and the slideshow", () => {
     expect($<HTMLInputElement>("#tileSize").value).toBe("320");
   });
 
+  it("keeps every tag behind one chip, with a filter, instead of crowding the row", async () => {
+    const now = Date.now();
+    const many = Array.from({length: 27}, (_, i) => {
+      const name = `subj${String(i).padStart(2, "0")}`;
+      return [
+        [`https://cdn.test/${name}a.jpg`, {bytes: 1, at: now - i * 2, seen: true, type: "image", title: `${name} aa${i}`}],
+        [`https://cdn.test/${name}b.jpg`, {bytes: 1, at: now - i * 2 - 1, seen: true, type: "image", title: `${name} bb${i}`}]
+      ];
+    }).flat();
+    await openLibrary(many, "?view=saved");
+    expect(document.querySelectorAll("#tags [data-tag]")).toHaveLength(24);
+    const more = () => document.getElementById("tagsMore")!;
+    expect(more().textContent).toBe("All tags (27) ▾");
+    expect($("#tagsAll").hidden).toBe(true);
+    more().click();
+    await settle();
+    expect($("#tagsAll").hidden).toBe(false);
+    expect(document.querySelectorAll("#tagsAllList [data-tag]")).toHaveLength(27);
+    expect(more().textContent).toBe("Fewer tags ▴");
+    // The filter narrows the panel as you type.
+    const find = $<HTMLInputElement>("#tagsFind");
+    find.value = "subj26";
+    find.dispatchEvent(new Event("input"));
+    expect(document.querySelectorAll("#tagsAllList [data-tag]")).toHaveLength(1);
+    find.value = "zzz";
+    find.dispatchEvent(new Event("input"));
+    expect($("#tagsAllList").textContent).toContain("No tag matches");
+    find.value = "";
+    find.dispatchEvent(new Event("input"));
+    // Picking from the panel works like the row; the panel folds once few tags remain.
+    document.querySelector<HTMLButtonElement>('#tagsAllList [data-tag="subj26"]')!.click();
+    await settle();
+    expect([new URLSearchParams(location.search).get("tag"), document.querySelectorAll(".h-tile").length]).toEqual(["subj26", 2]);
+    expect([$("#tagsAll").hidden, document.getElementById("tagsMore")]).toEqual([true, null]);
+    // Escape closes a reopened panel before it touches anything else.
+    document.querySelector<HTMLButtonElement>('#tags [data-tag="subj26"]')!.click();
+    await settle();
+    more().click();
+    await settle();
+    expect($("#tagsAll").hidden).toBe(false);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    expect($("#tagsAll").hidden).toBe(true);
+  });
+
+  it("stores the mined tags on this device, and reuses them while the titles are unchanged", async () => {
+    await openLibrary(aliceRows(), "?view=saved");
+    const write = harness.chrome.storage.local.set.mock.calls.find(([values]: any[]) => values.libraryTags);
+    expect(write[0].libraryTags.tags.map((mined: any) => mined.key)).toEqual(["alice", "bob"]);
+    const cached = harness.store.libraryTags;
+    // Reopened with the same titles: the stored copy serves, and nothing is rewritten.
+    bands.all.length = 0;
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", "/history.html?view=saved");
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({}, {libraryTags: cached, mediaIndex: aliceRows()});
+    await import("../../src/pages/history");
+    await settle();
+    expect(harness.chrome.storage.local.set.mock.calls.some(([values]: any[]) => values.libraryTags)).toBe(false);
+    expect([...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")].map(button => button.textContent)).toEqual(["Alice", "Bob"]);
+  });
+
   it("keeps an address tag as a pressed chip even when nothing offers it, and hides an empty row", async () => {
     await openLibrary(aliceRows(), "?view=saved&tag=zzz");
     // The stray tag shows exactly what is filtering, and a press takes it off.
