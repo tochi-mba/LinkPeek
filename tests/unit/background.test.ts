@@ -18,6 +18,7 @@ const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 type Listener = (msg: unknown, sender: unknown, send: (value: unknown) => void) => boolean | undefined;
 let onMessage: Listener, onInstalled: (details: {reason: string}) => Promise<void>, onStorage: (changes: Record<string, unknown>, area: string) => void;
 let onWindowRemoved: (id: number) => void, onWindowBounds: (window: chrome.windows.Window) => void;
+let onDownloadChanged: (delta: chrome.downloads.DownloadDelta) => void;
 let store: Record<string, unknown>, sessionStore: Record<string, unknown>, sent: unknown[][], created: unknown[], mirrorWindow: number | undefined;
 let broadcasts: unknown[];
 
@@ -83,7 +84,11 @@ beforeEach(async () => {
       onBoundsChanged: {addListener: vi.fn(listener => onWindowBounds = listener)},
       update: vi.fn(async () => undefined)
     },
-    downloads: {download: vi.fn(async () => 7), removeFile: vi.fn(async () => undefined), erase: vi.fn(async () => undefined)}
+    downloads: {
+      download: vi.fn(async () => 7), removeFile: vi.fn(async () => undefined), erase: vi.fn(async () => undefined), search: vi.fn(async () => []),
+      onChanged: {addListener: vi.fn(listener => onDownloadChanged = listener)}
+    },
+    action: {setBadgeText: vi.fn(async () => undefined)}
   });
   core.scanGeneric.mockImplementation(async (url: string) => result(url, "generic", 1));
   core.prefetchDiscourse.mockImplementation(async (url: string) => ({result: result(url, "discourse", 1, false), seed}));
@@ -110,6 +115,22 @@ describe("installation", () => {
     expect(store).toEqual({settings: {hoverDelay: 450, wrapAround: false}, settingsVersion: SETTINGS_VERSION});
     await onInstalled({reason: "chrome_update"});
     expect(created).toEqual([]);
+  });
+});
+
+describe("Tumblr downloads", () => {
+  it("starts, reports and stops the background job, and forwards download events", async () => {
+    expect(await send({type: "LINKPEEK_TUMBLR_STATUS"})).toMatchObject({async: true, value: undefined});
+    let release!: () => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => release = () => resolve(new Response('{"API_TOKEN":"token"}')))));
+    const started = await send({type: "LINKPEEK_TUMBLR_START", blog: "demo"});
+    expect(started).toMatchObject({async: false, value: {blog: "demo", phase: "collecting"}});
+    await tick();
+    onDownloadChanged({id: 4, state: {current: "in_progress"}} as chrome.downloads.DownloadDelta);
+    expect(await send({type: "LINKPEEK_TUMBLR_STOP"})).toMatchObject({async: false, value: {ok: true}});
+    release();
+    await tick();
+    expect((await send({type: "LINKPEEK_TUMBLR_STATUS"})).value).toMatchObject({blog: "demo", phase: "stopped"});
   });
 });
 
