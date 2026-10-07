@@ -274,11 +274,12 @@ function minedTags(titles: string[]): TitleTag[] {
 async function computeTags() {
   const titles = [...seenRows, ...savedRows].map(row => row.title ?? "");
   const key = titlesKey(titles);
-  const stored = (await chrome.storage.local.get("libraryTags"))["libraryTags"] as {key: string; tags: TitleTag[]} | undefined;
+  // A cache that cannot be read just means mining afresh.
+  const stored = (await chrome.storage.local.get("libraryTags").catch(() => ({})) as Record<string, unknown>)["libraryTags"] as {key: string; tags: TitleTag[]} | undefined;
   if (stored?.key === key) tagMineMemo.set(key, stored.tags);
   const all = minedTags(titles);
   for (const mined of all) tagLabels.set(mined.key, mined.label);
-  if (stored?.key !== key) void chrome.storage.local.set({libraryTags: {key, tags: all}});
+  if (stored?.key !== key) void chrome.storage.local.set({libraryTags: {key, tags: all}}).catch(() => undefined);
 }
 
 function chipMarkup(key: string, label: string, count: number | null) {

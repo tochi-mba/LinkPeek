@@ -152,5 +152,7 @@ describe("matching a tag against a title", () => {
     expect(titleHasTag("CAFÉ at night", "cafe")).toBe(true);
     expect(titleHasTag("beaten path", "beach")).toBe(false);
     expect(titleHasTag("os map", "ox")).toBe(false);
+    // Two different numbered variants are not the same subject.
+    expect(titleHasTag("subj26 shot", "subj00")).toBe(false);
   });
 });
