@@ -5,6 +5,12 @@ export function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, char => HTML_ESCAPES[char]);
 }
 
+/** The words a page shows for a link: its text, its title and label, and the descriptions of any pictures inside it. */
+export function linkText(anchor: HTMLAnchorElement) {
+  const pictures = [...anchor.querySelectorAll("img")].flatMap(image => [image.alt, image.title]);
+  return [anchor.textContent ?? "", anchor.title, anchor.getAttribute("aria-label") ?? "", ...pictures].join(" ").replace(/\s+/g, " ").trim();
+}
+
 type PolicyLike = {allowsFeature(feature: string): boolean; features?(): string[]};
 
 /**

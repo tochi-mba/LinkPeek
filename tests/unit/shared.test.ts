@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {escapeHtml, policyAllows} from "../../src/shared/dom";
+import {escapeHtml, linkText, policyAllows} from "../../src/shared/dom";
 import {favoriteKey, isFavorite, loadFavorites, removeFavorite, toggleFavorite} from "../../src/shared/favorites";
 import {REX, rexCss} from "../../src/shared/theme";
 
@@ -64,6 +64,15 @@ describe("helpers", () => {
     expect(policyAllows("battery", page({permissionsPolicy: {allowsFeature: () => false}, featurePolicy: policy}))).toBe(false);
     expect(policyAllows("fullscreen", page({}))).toBe(true);
     expect(policyAllows("fullscreen")).toBe(true);
+  });
+
+  it("read the words a page shows for a link, including its pictures' descriptions", () => {
+    const anchor = document.createElement("a");
+    anchor.innerHTML = `  Alice <b>beach</b>\n day <img alt="Sunset at the pier" title="Pier"><img>`;
+    anchor.title = "Thread title";
+    anchor.setAttribute("aria-label", "Open thread");
+    expect(linkText(anchor)).toBe("Alice beach day Thread title Open thread Sunset at the pier Pier");
+    expect(linkText(document.createElement("a"))).toBe("");
   });
 
   it("expose the REX palette and isolate the shadow root", () => {

@@ -257,6 +257,37 @@ describe("hover previews", () => {
     expect(anchors.map(anchor => Boolean(controller.settingsFor(anchor)))).toEqual([false, false, false, true]);
   });
 
+  it("matches keywords against a link's words too, for hovered links and for links known only by address", async () => {
+    await boot({activationKeywords: ["beach day"]});
+    const titled = link("t1", "https://dest.test/t/48213");
+    titled.textContent = "Alice's Beach\n Day";
+    const pictured = link("t2", "https://dest.test/t/48214");
+    pictured.textContent = "";
+    pictured.innerHTML = `<img alt="beach day sunset">`;
+    const plain = link("t3", "https://dest.test/t/48215");
+    expect([titled, pictured, plain].map(anchor => Boolean(controller.settingsFor(anchor)))).toEqual([true, true, false]);
+    // Page-wide work knows links by address only; their words are looked up on the page.
+    expect(Boolean(controller.settingsForUrl("https://dest.test/t/48213"))).toBe(true);
+    expect(Boolean(controller.settingsForUrl("https://dest.test/t/48215"))).toBe(false);
+    // Two links to one address: the words of either count.
+    const twin = link("t4", "https://dest.test/t/48215");
+    twin.textContent = "beach day again";
+    // A link added after the last read is found once the short refresh interval has passed.
+    const late = link("t5", "https://dest.test/t/99999");
+    late.textContent = "beach day late";
+    expect(Boolean(controller.settingsForUrl("https://dest.test/t/99999"))).toBe(false);
+    const now = performance.now(), clock = vi.spyOn(performance, "now").mockReturnValue(now + 600);
+    try {
+      expect(Boolean(controller.settingsForUrl("https://dest.test/t/99999"))).toBe(true);
+      expect(Boolean(controller.settingsForUrl("https://dest.test/t/48215"))).toBe(true);
+      // An address not on this page has only its address to go by.
+      expect(Boolean(controller.settingsForUrl("https://elsewhere.test/beach-day"))).toBe(true);
+      expect(Boolean(controller.settingsForUrl("https://elsewhere.test/other"))).toBe(false);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("follows settings changes and starts preparation over", async () => {
     await boot();
     controller.prefetcher.remember("https://dest.test/a", scan("https://dest.test/a"));

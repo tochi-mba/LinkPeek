@@ -156,4 +156,12 @@ describe("activation keywords", () => {
     expect(linkMatchesKeywords({activationKeywords: ["photos"]}, "https://x.test/a")).toBe(false);
     expect(linkMatchesKeywords({activationKeywords: ["%zz"]}, "https://x.test/%zz")).toBe(true);
   });
+
+  it("also match the link's words, so a page's title counts as much as its address", () => {
+    expect(linkMatchesKeywords({activationKeywords: ["beach day"]}, "https://x.test/t/48213", "Alice's Beach Day photos")).toBe(true);
+    // A phrase still matches across a line break or a run of spaces, on either side.
+    expect(linkMatchesKeywords({activationKeywords: ["beach   day"]}, "https://x.test/t/1", "Beach\n  day")).toBe(true);
+    expect(linkMatchesKeywords({activationKeywords: ["beach"]}, "https://x.test/t/1", "City night")).toBe(false);
+    expect(linkMatchesKeywords({activationKeywords: ["beach"]}, "https://x.test/t/1")).toBe(false);
+  });
 });

@@ -39,7 +39,7 @@ export const SECTIONS: SectionSpec[] = [
       {key: "activationMode", label: "Open previews by", help: "Hover is the one-handed default. Alt + hover only opens while Alt is held. Click opens on click; Ctrl-click still opens links normally.", control: "segmented", options: {hover: "Hovering", modifier: "Alt + hover", click: "Clicking"}},
       {key: "hoverDelay", label: "Hover delay", help: "How long the pointer rests on a link before its preview opens.", unit: "ms"},
       {key: "performanceMode", label: "Performance", help: "Auto prepares what this device can comfortably handle and eases off whenever the page or the system is busy. Data saver prepares nothing ahead. Fast prepares more on capable machines.", control: "segmented", options: {auto: "Auto (recommended)", saver: "Data saver", fast: "Fast"}},
-      {key: "activationKeywords", label: "Only links containing", help: "Optional. Words or phrases, one per line or separated by commas. When set, LinkPeek only previews links whose address contains one of them.", control: "keywords"}
+      {key: "activationKeywords", label: "Only links containing", help: "Optional. Words or phrases, one per line or separated by commas. When set, LinkPeek only previews links whose address or text contains one of them — on most sites a link's text is the title of the page it leads to. Picture links count by their picture's description.", control: "keywords"}
     ]
   },
   {
