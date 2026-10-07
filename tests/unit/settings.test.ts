@@ -163,5 +163,8 @@ describe("activation keywords", () => {
     expect(linkMatchesKeywords({activationKeywords: ["beach   day"]}, "https://x.test/t/1", "Beach\n  day")).toBe(true);
     expect(linkMatchesKeywords({activationKeywords: ["beach"]}, "https://x.test/t/1", "City night")).toBe(false);
     expect(linkMatchesKeywords({activationKeywords: ["beach"]}, "https://x.test/t/1")).toBe(false);
+    // A phrase matches an address's slug, and an address fragment still matches as typed.
+    expect(linkMatchesKeywords({activationKeywords: ["beach day"]}, "https://x.test/t/alice_beach-day.1")).toBe(true);
+    expect(linkMatchesKeywords({activationKeywords: ["/media/"]}, "https://x.test/media/a.jpg")).toBe(true);
   });
 });
