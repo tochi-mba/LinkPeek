@@ -145,7 +145,8 @@ describe("Tumblr HTTP handling", () => {
 describe("saving and running jobs", () => {
   it("waits for successful and interrupted downloads and handles startup and search failures", async () => {
     const downloader = new TumblrDownloader();
-    vi.mocked(chrome.downloads.search).mockResolvedValueOnce([{id: 7, state: "complete"}] as chrome.downloads.DownloadItem[]);
+    const search = chrome.downloads.search as unknown as ReturnType<typeof vi.fn>;
+    search.mockResolvedValueOnce([{id: 7, state: "complete"}] as chrome.downloads.DownloadItem[]);
     const successful = (downloader as any).save("demo", media());
     downloader.onDownloadChanged({id: 7, state: {current: "in_progress"}} as chrome.downloads.DownloadDelta);
     await expect(successful).resolves.toBe(true);
@@ -155,14 +156,14 @@ describe("saving and running jobs", () => {
       headers: [{name: "Accept", value: MEDIA_ACCEPT}]
     }));
 
-    vi.mocked(chrome.downloads.search).mockResolvedValueOnce([{id: 7, state: "interrupted"}] as chrome.downloads.DownloadItem[]);
+    search.mockResolvedValueOnce([{id: 7, state: "interrupted"}] as chrome.downloads.DownloadItem[]);
     await expect((downloader as any).save("demo", media("b"))).resolves.toBe(false);
     vi.mocked(chrome.downloads.download).mockRejectedValueOnce(new Error("denied"));
     await expect((downloader as any).save("demo", media("c"))).resolves.toBe(false);
 
-    vi.mocked(chrome.downloads.search).mockRejectedValueOnce(new Error("gone"));
+    search.mockRejectedValueOnce(new Error("gone"));
     const searched = (downloader as any).save("demo", media("d"));
-    await eventually(() => vi.mocked(chrome.downloads.search).mock.calls.length >= 3);
+    await eventually(() => search.mock.calls.length >= 3);
     downloader.onDownloadChanged({id: 7, state: {current: "interrupted"}} as chrome.downloads.DownloadDelta);
     await expect(searched).resolves.toBe(false);
   });
