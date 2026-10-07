@@ -78,6 +78,10 @@ let view: View = "seen";
 let filter: Filter = "all";
 let kind: Kind = "all";
 let sort: Sort = "newest";
+/** Chips shown in the row itself; the rest wait in the All-tags panel. */
+const INLINE_TAGS = 24;
+/** The All-tags panel is open. */
+let tagsOpen = false;
 /** The tags switched on, in the order they were picked; rows must carry them all. */
 let activeTags: string[] = [];
 /** The display spelling of every tag ever offered, so a pressed chip keeps its label. */
@@ -236,29 +240,92 @@ function current() {
   return base;
 }
 
-/** Remembers the display spelling of every tag the whole collection offers. */
-function computeTags() {
-  for (const mined of mineTags([...seenRows, ...savedRows].map(row => row.title ?? ""))) tagLabels.set(mined.key, mined.label);
+/** Mining is deterministic, so each set of titles is mined once per session. */
+const tagMineMemo = new Map<string, TitleTag[]>();
+
+/** A cheap fingerprint of the titles, for the memo and the stored cache. */
+function titlesKey(titles: readonly string[]) {
+  let hash = 2166136261;
+  for (const title of titles) {
+    for (let at = 0; at < title.length; at++) {
+      hash ^= title.charCodeAt(at);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash ^= 31;
+  }
+  return `${titles.length}:${(hash >>> 0).toString(36)}`;
+}
+
+function minedTags(titles: string[]): TitleTag[] {
+  const key = titlesKey(titles);
+  let mined = tagMineMemo.get(key);
+  if (!mined) {
+    tagMineMemo.set(key, mined = mineTags(titles));
+    while (tagMineMemo.size > 32) tagMineMemo.delete(tagMineMemo.keys().next().value!);
+  }
+  return mined;
+}
+
+/**
+ * Seeds the mining for the whole collection — from the copy stored on this
+ * device when the titles have not changed, so reopening the page never
+ * repeats the work — and remembers every tag's display spelling.
+ */
+async function computeTags() {
+  const titles = [...seenRows, ...savedRows].map(row => row.title ?? "");
+  const key = titlesKey(titles);
+  const stored = (await chrome.storage.local.get("libraryTags"))["libraryTags"] as {key: string; tags: TitleTag[]} | undefined;
+  if (stored?.key === key) tagMineMemo.set(key, stored.tags);
+  const all = minedTags(titles);
+  for (const mined of all) tagLabels.set(mined.key, mined.label);
+  if (stored?.key !== key) void chrome.storage.local.set({libraryTags: {key, tags: all}});
 }
 
 function chipMarkup(key: string, label: string, count: number | null) {
   return `<button type="button" class="h-chip" data-tag="${escapeHtml(key)}" aria-pressed="${String(activeTags.includes(key))}"${count === null ? "" : ` title="${count.toLocaleString()} titles"`}>${escapeHtml(label)}</button>`;
 }
 
+/** Every tag the rows that remain can offer, the active ones set aside. */
+function offeredTags() {
+  const offered = minedTags(current().map(row => row.title ?? "")).filter(mined => !activeTags.includes(mined.key));
+  for (const mined of offered) tagLabels.set(mined.key, mined.label);
+  return offered;
+}
+
 /**
  * The chips on offer: every tag switched on stays first (pressed, so it can
- * be switched off), and the rest are re-mined from the rows that remain —
- * picking a tag narrows the row to the tags that still lead anywhere.
+ * be switched off), then the strongest of the rest — picking a tag narrows
+ * the row to the tags that still lead anywhere. Everything beyond the row
+ * waits in the All-tags panel, so thousands of files never crowd the page.
  */
 function renderTags() {
-  const offered = mineTags(current().map(row => row.title ?? "")).filter(mined => !activeTags.includes(mined.key));
-  for (const mined of offered) tagLabels.set(mined.key, mined.label);
+  const offered = offeredTags();
+  if (offered.length <= INLINE_TAGS) tagsOpen = false;
   const host = $("tags");
   host.innerHTML = [
     ...activeTags.map(key => chipMarkup(key, tagLabels.get(key) ?? key, null)),
-    ...offered.map(mined => chipMarkup(mined.key, mined.label, mined.count))
+    ...offered.slice(0, INLINE_TAGS).map(mined => chipMarkup(mined.key, mined.label, mined.count)),
+    offered.length > INLINE_TAGS
+      ? `<button type="button" id="tagsMore" class="h-chip h-more" aria-expanded="${String(tagsOpen)}">${tagsOpen ? "Fewer tags ▴" : `All tags (${offered.length.toLocaleString()}) ▾`}</button>`
+      : ""
   ].join("");
   host.hidden = !host.innerHTML;
+  renderAllTags();
+}
+
+/** The panel with every tag on offer, narrowed as you type. */
+function renderAllTags() {
+  const panel = $("tagsAll");
+  if (!tagsOpen) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const find = ($("tagsFind") as HTMLInputElement).value.trim().toLowerCase();
+  const offered = offeredTags();
+  const matching = find ? offered.filter(mined => mined.key.includes(find) || mined.label.toLowerCase().includes(find)) : offered;
+  $("tagsAllList").innerHTML = matching.map(mined => chipMarkup(mined.key, mined.label, mined.count)).join("")
+    || `<span class="muted">No tag matches \u201c${escapeHtml(find)}\u201d.</span>`;
 }
 
 function summary() {
@@ -391,7 +458,7 @@ async function deleteChosen() {
     ? `Removed ${rows.length.toLocaleString()} from the history`
     : `Deleted ${rows.length.toLocaleString()} files, Downloads copies included`;
   exitSelecting();
-  computeTags();
+  await computeTags();
   await apply();
   $("summary").textContent = message;
 }
@@ -481,7 +548,7 @@ async function clearView() {
     await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_CLEAR"});
     savedRows = [];
   }
-  computeTags();
+  await computeTags();
   await apply();
 }
 
@@ -499,7 +566,7 @@ async function auditSaved() {
   paintLive(0);
   const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number} | undefined;
   savedRows = await readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => []);
-  computeTags();
+  await computeTags();
   await apply();
   $("summary").textContent = result
     ? `Checked every saved file: removed ${result.removed.toLocaleString()} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
@@ -739,7 +806,11 @@ async function saveViewed() {
 
 function onKey(event: KeyboardEvent) {
   if (viewing < 0) {
-    if (event.key === "Escape" && selecting) {
+    if (event.key === "Escape" && tagsOpen) {
+      tagsOpen = false;
+      renderTags();
+      event.preventDefault();
+    } else if (event.key === "Escape" && selecting) {
       exitSelecting();
       event.preventDefault();
     }
@@ -803,7 +874,7 @@ async function start() {
     readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
     readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
   ]);
-  computeTags();
+  await computeTags();
   await apply();
   new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting) && rendered < shown.length) void renderMore();
@@ -830,14 +901,22 @@ async function start() {
     writeAddress();
     void apply();
   });
-  $("tags").addEventListener("click", event => {
+  const onTagClick = (event: Event) => {
+    if ((event.target as Element).closest("#tagsMore")) {
+      tagsOpen = !tagsOpen;
+      renderTags();
+      return;
+    }
     const button = (event.target as Element).closest<HTMLElement>("[data-tag]");
     if (!button) return;
     const key = button.dataset.tag!;
     activeTags = activeTags.includes(key) ? activeTags.filter(active => active !== key) : [...activeTags, key];
     writeAddress();
     void apply();
-  });
+  };
+  $("tags").addEventListener("click", onTagClick);
+  $("tagsAll").addEventListener("click", onTagClick);
+  $("tagsFind").addEventListener("input", renderAllTags);
   document.querySelector(".history-head")!.addEventListener("click", event => {
     const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter],[data-kind]");
     if (!button) return;

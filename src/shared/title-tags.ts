@@ -135,8 +135,12 @@ function eachPhrase(doc: readonly string[], take: (key: string, start: number, l
   }
 }
 
-/** The tags worth offering for these titles, the most distinctive mix first. */
-export function mineTags(titles: readonly string[], limit = 24): TitleTag[] {
+/**
+ * Every tag these titles earn: the most distinctive mix first (picked for
+ * coverage), then the long tail ordered by how many titles carry it. Nothing
+ * that survived the filters is withheld — the caller decides how many to show.
+ */
+export function mineTags(titles: readonly string[], limit = Infinity): TitleTag[] {
   const distinct = [...new Set(titles.map(title => title.trim()).filter(Boolean))];
   const raw = withoutBoilerplate(distinct).map(words).filter(doc => doc.length > 0);
   if (raw.length < 3) return [];
@@ -174,7 +178,15 @@ export function mineTags(titles: readonly string[], limit = 24): TitleTag[] {
   const pool = new Map<string, Candidate>();
   for (const [key, count] of eligible) pool.set(key, {key, count, label: labels.get(key)!, docs: []});
   docs.forEach((doc, at) => eachPhrase(doc, key => pool.get(key)?.docs.push(at)));
-  return pickDiverse([...pool.values()], docs.length, limit);
+  const candidates = [...pool.values()];
+  const picked = pickDiverse([...candidates], docs.length, limit);
+  if (picked.length >= limit) return picked;
+  // The rest still name something real; they follow the picks, the commoner first.
+  const have = new Set(picked.map(tag => tag.key));
+  const tail = candidates.filter(candidate => !have.has(candidate.key))
+    .sort((a, b) => b.count - a.count || (prefer(a, b) ? -1 : 1))
+    .map(({key, label, count}) => ({key, label, count}));
+  return [...picked, ...tail].slice(0, limit);
 }
 
 /**
