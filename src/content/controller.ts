@@ -5,6 +5,7 @@
  * shortcuts that act on page links, per-gallery resume positions, the preload
  * inspector and the status the toolbar popup shows.
  */
+import {linkText} from "../shared/dom";
 import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResult} from "../shared/media";
 import type {MediaItem} from "../shared/media";
 import type {MirrorStateMessage, ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
@@ -34,6 +35,8 @@ type NavigationTarget =
   | {recursive: true; url: string; result: ScanResult; linkedSource: string; linkedList?: string[]; linkedExcluded: Set<string>};
 
 const RESUME_MEMORY = 100;
+/** How often, at most, the page's link texts are re-read for keyword matching. */
+const LINK_TEXT_REFRESH_MS = 500;
 const BRIEF_CONTINUE_MS = 1000;
 /** Links one N press may scan over the network; the next press carries on from there. */
 const MAX_NAVIGATION_PROBES = 8;
@@ -223,17 +226,38 @@ export class PreviewController {
     return this.pageCache.value;
   }
 
-  /** Settings to preview this URL with, or undefined when it should be left alone. */
-  settingsForUrl(url: string): LinkPeekSettings | undefined {
+  /**
+   * Settings to preview this URL with, or undefined when it should be left
+   * alone. With keywords set, the link's words count as much as its address;
+   * `label` gives them when the anchor is in hand, else they are looked up.
+   */
+  settingsForUrl(url: string, label?: string): LinkPeekSettings | undefined {
     const settings = this.pageSettings();
-    if (!settings.enabled || !linkMatchesKeywords(settings, url)) return undefined;
+    if (!settings.enabled) return undefined;
+    if (settings.activationKeywords.length && !linkMatchesKeywords(settings, url, label ?? this.linkWords(url))) return undefined;
     const kind = classifyLink(url);
     if (!PREVIEWABLE_KINDS.has(kind) || (kind === "direct-video" && !settings.includeVideo)) return undefined;
     return settings;
   }
 
   settingsFor(anchor: HTMLAnchorElement) {
-    return this.settingsForUrl(anchor.href);
+    return this.settingsForUrl(anchor.href, linkText(anchor));
+  }
+
+  /** Each address on the page and the words shown for it (every link to it counts), re-read when one is missing. */
+  private linkTexts = new Map<string, string>();
+  private linkTextsAt = -Infinity;
+
+  /** The words this page shows for a link it has, found without the anchor itself (page-wide preparation, the shuffle). */
+  private linkWords(url: string) {
+    if (!this.linkTexts.has(url) && performance.now() - this.linkTextsAt >= LINK_TEXT_REFRESH_MS) {
+      this.linkTextsAt = performance.now();
+      this.linkTexts.clear();
+      for (const anchor of document.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+        this.linkTexts.set(anchor.href, `${this.linkTexts.get(anchor.href) ?? ""} ${linkText(anchor)}`);
+      }
+    }
+    return this.linkTexts.get(url) ?? "";
   }
 
   private isOpenAnchor(anchor: HTMLAnchorElement) {

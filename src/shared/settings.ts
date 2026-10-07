@@ -552,9 +552,13 @@ export function effectiveSettings(settings: LinkPeekSettings, url: string): Link
   return override ? {...settings, ...override, shortcuts: settings.shortcuts, siteProfiles: settings.siteProfiles} : settings;
 }
 
-/** True when keywords are off, or the URL contains at least one keyword (case-insensitive). */
-export function linkMatchesKeywords(settings: Pick<LinkPeekSettings, "activationKeywords">, url: string) {
-  const keywords = settings.activationKeywords.map(keyword => keyword.trim().toLowerCase()).filter(Boolean);
+/**
+ * True when keywords are off, or at least one keyword appears (ignoring case)
+ * in the link's address or its label: the words the page shows for it, which
+ * on most sites is the title of the page it leads to.
+ */
+export function linkMatchesKeywords(settings: Pick<LinkPeekSettings, "activationKeywords">, url: string, label = "") {
+  const keywords = settings.activationKeywords.map(keyword => keyword.trim().toLowerCase().replace(/\s+/g, " ")).filter(Boolean);
   if (!keywords.length) return true;
   let target = url.toLowerCase();
   try {
@@ -562,5 +566,7 @@ export function linkMatchesKeywords(settings: Pick<LinkPeekSettings, "activation
   } catch {
     // A malformed escape: match against the raw URL instead.
   }
-  return keywords.some(keyword => target.includes(keyword));
+  // Line breaks and runs of spaces in a link's text still match a phrase.
+  const words = label.toLowerCase().replace(/\s+/g, " ");
+  return keywords.some(keyword => target.includes(keyword) || words.includes(keyword));
 }
