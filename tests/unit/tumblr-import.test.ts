@@ -27,6 +27,7 @@ describe("existing Tumblr downloads", () => {
     });
     expect(tumblrDownload(record({filename: "/Downloads/LinkPeek/Tumblr/demo/undated 42-2.gif", mime: "image/gif", fileSize: undefined, totalBytes: 9, endTime: "2025-02-03T04:05:06Z"}))).toMatchObject({type: "gif", bytes: 9, at: Date.parse("2025-02-03T04:05:06Z")});
     expect(tumblrDownload(record({filename: "/Downloads/LinkPeek/Tumblr/demo/undated 42-2.jif", mime: "image/jpeg", fileSize: -1, totalBytes: undefined, startTime: "broken"}))).toMatchObject({type: "image", bytes: 0});
+    expect(tumblrDownload(record({filename: "/Downloads/LinkPeek/Tumblr/demo/undated 43-1.jpg", mime: undefined, startTime: undefined, endTime: undefined}))).toMatchObject({type: "image"});
     expect(tumblrDownload(record({filename: "/Downloads/LinkPeek/Tumblr/demo/2026-01-02 42-1.m4a", mime: undefined, finalUrl: "https://va.media.tumblr.com/audio", fileSize: 4}))).toMatchObject({url: "https://va.media.tumblr.com/audio", type: "audio"});
     expect(tumblrDownload(record({filename: "/Downloads/LinkPeek/Tumblr/demo/2026-01-02 42-1.mov", mime: "application/octet-stream"}))).toMatchObject({type: "video"});
   });

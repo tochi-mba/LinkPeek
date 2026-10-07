@@ -1251,13 +1251,17 @@ describe("the full-size viewer", () => {
     ];
   };
 
-  async function openLibrary(index: unknown, search = "?view=saved", extra: Record<string, unknown> = {}) {
+  async function openLibrary(index: unknown, search = "?view=saved", extra: Record<string, unknown> = {}, imported = 0) {
     fakeCaches();
     vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
     history.replaceState(null, "", `/history.html${search}`);
     vi.resetModules();
     loadPage("history.html");
     harness = stubExtension({}, extra);
+    if (imported) harness.chrome.runtime.sendMessage.mockImplementation(async (message: {type: string}) => {
+      harness.messages.push(message);
+      return message.type === "LINKPEEK_TUMBLR_IMPORTS" ? {found: imported, imported} : {ok: true};
+    });
     harness.store[LIB] = index;
     await import("../../src/pages/history");
     await settle();
@@ -1270,6 +1274,9 @@ describe("the full-size viewer", () => {
 
   it("zooms by key, Ctrl+scroll and double-click, shows the level, and fits again on the next item", async () => {
     await openLibrary(rows());
+    $("#viewFolder").click();
+    await settle();
+    expect(harness.messages).not.toContainEqual({type: "LINKPEEK_DOWNLOAD_SHOW", id: expect.anything()});
     await view(0);
     expect($("#viewZoom").hidden).toBe(true);
     press("+");
@@ -1511,7 +1518,8 @@ describe("the full-size viewer", () => {
       bytes: 0, diskBytes: 2048, at: Date.now(), seen: false, type: "video", title: "@demo · post 42",
       source: "https://www.tumblr.com/demo/42", original: url, local: "file:///C:/Users/rex/Downloads/LinkPeek/Tumblr/demo/clip.mp4",
       external: true, dl: 61
-    }]]);
+    }]], "?view=saved", {}, 1);
+    expect($("#summary").textContent).toContain("Imported 1 Tumblr download from Downloads");
     await view(0);
     const video = $("#viewStage video") as HTMLVideoElement;
     expect([video.getAttribute("src"), $("#viewFolder").hidden, $("#viewMeta").textContent]).toEqual([

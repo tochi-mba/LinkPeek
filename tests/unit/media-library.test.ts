@@ -111,8 +111,12 @@ describe("the media library", () => {
     await library.trim(0);
     expect((await library.stats()).count).toBe(1);
     expect(await library.importExternal(external.original, {...external, seen: true, title: "replacement", source: "https://replacement.test"}, 456)).toBe("existing");
+    const untitled = "https://va.media.tumblr.com/untitled.mp4";
+    expect(await library.importExternal(untitled, {...external, original: untitled, title: undefined, source: undefined}, 789)).toBe("saved");
+    expect(await library.importExternal(untitled, {...external, original: untitled, title: "Now titled", source: "https://www.tumblr.com/demo/99"})).toBe("existing");
     await library.saveIndex();
     expect(index().get(external.original)).toMatchObject({at: 123, seen: true, title: "@demo · post 42", source: "https://www.tumblr.com/demo/42", bytes: 0, diskBytes: 900});
+    expect(index().get(untitled)).toMatchObject({title: "Now titled", source: "https://www.tumblr.com/demo/99"});
   });
 
   it("clears queued and in-flight saves without letting them repopulate the Library", async () => {

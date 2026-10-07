@@ -163,7 +163,7 @@ function paintStorage() {
     bar.hidden = true;
     return;
   }
-  const used = savedRows.reduce((sum, row) => sum + (row.cacheBytes ?? row.bytes!), 0);
+  const used = savedRows.reduce((sum, row) => sum + row.cacheBytes!, 0);
   const budget = settings.savedMediaBudgetMb * 1024 * 1024;
   const percent = Math.min(100, Math.round(used / budget * 100));
   bar.hidden = false;
@@ -233,13 +233,10 @@ async function stillFor(row: Row) {
 async function makeStill(row: Row) {
   if (row.type === "gif") {
     const kept = await (await openCache())?.match(row.saved);
-    const read = (url: string) => fetch(url).then(response => response.ok ? response.blob() : Promise.reject(new Error(`HTTP ${response.status}`)));
-    const bytes = kept ? await kept.blob() : row.local ? await read(row.local).catch(() => read(row.open)) : await read(row.open);
+    const bytes = kept ? await kept.blob() : await fetch(row.open).then(response => response.ok ? response.blob() : Promise.reject(new Error(`HTTP ${response.status}`)));
     return gifStill(bytes);
   }
-  const kept = await savedCopy(row.saved);
-  if (kept) return videoStill(kept, row.saved);
-  return row.local ? videoStill(row.local, row.saved).catch(() => videoStill(row.open, row.saved)) : videoStill(row.open, row.saved);
+  return videoStill(await savedCopy(row.saved) ?? row.open, row.saved);
 }
 
 /** Stills are made a couple at a time, top of the grid first. */
@@ -265,9 +262,7 @@ function pumpStills() {
  */
 async function pausedFrame(image: HTMLImageElement, row: Row) {
   const video = Object.assign(document.createElement("video"), {className: "h-still", muted: true, preload: "metadata", playsInline: true});
-  const kept = await savedCopy(row.saved), source = kept ?? row.local ?? row.open;
-  if (!kept && row.local) video.addEventListener("error", () => video.src = `${row.open}#t=${(framePoint(row.saved) * 10).toFixed(1)}`, {once: true});
-  video.src = `${source}#t=${(framePoint(row.saved) * 10).toFixed(1)}`;
+  video.src = `${await savedCopy(row.saved) ?? row.open}#t=${(framePoint(row.saved) * 10).toFixed(1)}`;
   image.replaceWith(video);
 }
 
@@ -1361,17 +1356,15 @@ function wire() {
     }
     if (tile.dataset.hover) return;
     tile.dataset.hover = "1";
-    const kept = await savedCopy(row.saved), source = kept ?? row.local ?? row.open;
+    const source = await savedCopy(row.saved) ?? row.open;
     if (!tile.dataset.hover) return;
     if (row.type === "video") {
       // Muted as a property, not just an attribute: that is what lets the browser autoplay it.
       const video = Object.assign(document.createElement("video"), {className: "h-hoverplay", src: source, muted: true, loop: true, playsInline: true, autoplay: true});
-      if (!kept && row.local) video.addEventListener("error", () => video.src = row.open, {once: true});
       media.prepend(video);
     } else if (img) {
       img.dataset.still = img.src;
       img.src = source;
-      if (!kept && row.local) img.addEventListener("error", () => img.src = row.open, {once: true});
     }
   };
   for (const [name, live] of [["mouseover", true], ["mouseout", false]] as const) {
