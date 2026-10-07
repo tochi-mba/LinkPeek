@@ -24,8 +24,8 @@ function tileMarkup(item: MediaItem, index: number, total: number, current: bool
   const image = item.type === "video" ? item.posterUrl : item.previewUrl;
   const media = image
     ? `<img src="${escapeHtml(image)}" alt="" loading="${visible ? "eager" : "lazy"}" decoding="async" fetchpriority="${visible ? "auto" : "low"}">`
-    : `<span class="lp-thumb-glyph" aria-hidden="true">▶</span>`;
-  const badge = item.type === "gif" ? `<span class="lp-thumb-kind">GIF</span>` : item.type === "video" ? `<span class="lp-thumb-kind">▶ VIDEO</span>` : "";
+    : `<span class="lp-thumb-glyph" aria-hidden="true">${item.type === "audio" ? "♫" : "▶"}</span>`;
+  const badge = item.type === "gif" ? `<span class="lp-thumb-kind">GIF</span>` : item.type === "video" ? `<span class="lp-thumb-kind">▶ VIDEO</span>` : item.type === "audio" ? `<span class="lp-thumb-kind">♫ AUDIO</span>` : "";
   return `<button class="lp-thumb" type="button" data-i="${index}" aria-current="${current}" aria-label="Open media ${index + 1} of ${total}" style="${style}">${media}${badge}<span class="lp-thumb-n">${index + 1}</span></button>`;
 }
 

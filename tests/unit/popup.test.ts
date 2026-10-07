@@ -77,19 +77,24 @@ describe("the popup", () => {
     $("#preloaded").click();
     expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html"});
     expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html?view=saved&filter=unseen"});
+    $("#tumblrLibrary").click();
+    expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html?view=saved"});
   });
 
   it("offers a whole-blog download only on Tumblr blog pages", async () => {
     await open();
     expect($<HTMLElement>("#tumblrCard").hidden).toBe(true);
     $("#tumblrAction").click();
+    $("#tumblrStop").click();
     expect(harness.messages).not.toContainEqual({type: "LINKPEEK_TUMBLR_START", blog: expect.anything()});
+    expect(harness.messages).not.toContainEqual({type: "LINKPEEK_TUMBLR_STOP"});
 
     await open({url: "https://www.tumblr.com/Some-Blog/post/1"});
     expect($<HTMLElement>("#tumblrCard").hidden).toBe(false);
     expect($("#tumblrBlog").textContent).toBe("@some-blog");
-    expect($("#tumblrStatus").textContent).toContain("Save every original image");
-    expect($("#tumblrAction").textContent).toBe("Download all media");
+    expect($("#tumblrStatus").textContent).toContain("Download every original image");
+    expect($("#tumblrAction").textContent).toBe("Download this blog");
+    expect($("#tumblrPhase").textContent).toBe("Ready");
     expect($<HTMLProgressElement>("#tumblrProgress").hidden).toBe(true);
 
     const collecting: TumblrJobState = {blog: "some-blog", phase: "collecting", posts: 4, total: 20, found: 7, saved: 2, failed: 1, skipped: 3, collected: false};
@@ -99,7 +104,7 @@ describe("the popup", () => {
     expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_TUMBLR_START", blog: "some-blog"});
     expect($("#tumblrStatus").textContent).toBe("Checking post 4 of 20 · 2 of 7 files saved · 3 already downloaded · 1 failed");
     expect($<HTMLProgressElement>("#tumblrProgress").value).toBe(10);
-    expect($("#tumblrAction").textContent).toBe("Stop");
+    expect([$("#tumblrAction").textContent, $<HTMLButtonElement>("#tumblrAction").disabled, $("#tumblrStop").textContent]).toEqual(["Downloading now", true, "Stop @some-blog"]);
   });
 
   it("shows live Tumblr progress, stops safely and offers to continue", async () => {
@@ -107,17 +112,17 @@ describe("the popup", () => {
     await open({url: "https://demo.tumblr.com", tumblrJob: collecting});
     expect($("#tumblrStatus").textContent).toBe("All posts checked · finishing downloads · 2 of 4 files saved");
     expect($<HTMLProgressElement>("#tumblrProgress").value).toBe(75);
-    $("#tumblrAction").click();
+    $("#tumblrStop").click();
     await settle();
     expect(harness.messages).toContainEqual({type: "LINKPEEK_TUMBLR_STOP"});
     expect($("#tumblrStatus").textContent).toBe("Stopping… 2 of 4 files saved");
-    expect($<HTMLButtonElement>("#tumblrAction").disabled).toBe(true);
+    expect($<HTMLButtonElement>("#tumblrStop").disabled).toBe(true);
 
     const stopped = {...collecting, phase: "stopped" as const, collected: false};
     for (const listener of harness.storageListeners) listener({tumblrJob: {newValue: stopped}}, "session");
     expect($("#tumblrStatus").textContent).toBe("Stopped · 2 of 4 files saved");
     expect($("#tumblrAction").textContent).toBe("Continue download");
-    expect($<HTMLButtonElement>("#tumblrAction").disabled).toBe(false);
+    expect($<HTMLButtonElement>("#tumblrStop").hidden).toBe(true);
   });
 
   it("summarises completed and failed Tumblr jobs and ignores another blog's old result", async () => {
@@ -132,13 +137,51 @@ describe("the popup", () => {
 
     await open({url: "https://www.tumblr.com/other", tumblrJob: base});
     expect($("#tumblrBlog").textContent).toBe("@other");
-    expect($("#tumblrStatus").textContent).toContain("Save every original image");
+    expect($("#tumblrStatus").textContent).toContain("Download every original image");
     for (const listener of harness.storageListeners) listener({tumblrJob: {newValue: undefined}}, "session");
-    expect($("#tumblrAction").textContent).toBe("Download all media");
+    expect($("#tumblrAction").textContent).toBe("Download this blog");
 
     await open({url: "https://www.tumblr.com/other", tumblrJob: {...base, blog: "demo", phase: "collecting", posts: 8, total: 0, found: 0, saved: 0, failed: 0, skipped: 0, collected: false}});
     expect($("#tumblrBlog").textContent).toBe("@demo");
     expect($("#tumblrStatus").textContent).toBe("Checking post 8 · no media found yet");
+    expect($("#tumblrAction").textContent).toBe("Add @other to queue");
+  });
+
+  it("queues several Tumblr blogs, shows their order, removes one and clears the waiting list", async () => {
+    const collecting: TumblrJobState = {blog: "first", phase: "collecting", posts: 2, total: 10, found: 3, saved: 1, failed: 0, skipped: 0, collected: false, queue: ["second", "third"]};
+    await open({url: "https://www.tumblr.com/second", tumblrJob: collecting});
+    expect([$("#tumblrBlog").textContent, $("#tumblrPage").textContent, $("#tumblrPhase").textContent]).toEqual(["@first", "this page: @second", "Running"]);
+    expect($("#tumblrQueue").textContent).toBe("Up next (2): 1. @second  ·  2. @third");
+    expect($("#tumblrAction").textContent).toBe("Remove from queue · #1");
+    harness.chrome.runtime.sendMessage.mockResolvedValueOnce({...collecting, queue: ["third"]});
+    $("#tumblrAction").click();
+    await settle();
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_TUMBLR_REMOVE_QUEUED", blog: "second"});
+    expect($("#tumblrAction").textContent).toBe("Add @second to queue");
+
+    harness.chrome.runtime.sendMessage.mockResolvedValueOnce({...collecting, queue: []});
+    $("#tumblrClearQueue").click();
+    await settle();
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_TUMBLR_CLEAR_QUEUE"});
+    expect($<HTMLElement>("#tumblrQueue").hidden).toBe(true);
+    $("#tumblrLibrary").click();
+    expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html?view=saved&q=second"});
+  });
+
+  it("keeps an active Tumblr queue controllable from an ordinary page", async () => {
+    const collecting: TumblrJobState = {blog: "background-blog", phase: "collecting", posts: 2, total: 10, found: 3, saved: 1, failed: 0, skipped: 0, collected: false, queue: []};
+    await open({url: "https://example.com", tumblrJob: collecting});
+    expect([$<HTMLElement>("#tumblrCard").hidden, $("#tumblrBlog").textContent, $("#tumblrPage").textContent, $<HTMLButtonElement>("#tumblrAction").hidden]).toEqual([false, "@background-blog", "running in the background", true]);
+    $("#tumblrLibrary").click();
+    expect(harness.chrome.tabs.create).toHaveBeenCalledWith({url: "chrome-extension://id/history.html?view=saved&q=background-blog"});
+    $("#tumblrStop").click();
+    await settle();
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_TUMBLR_STOP"});
+    for (const listener of harness.storageListeners) listener({tumblrJob: {newValue: {...collecting, phase: "stopped"}}}, "session");
+    const calls = harness.chrome.runtime.sendMessage.mock.calls.length;
+    $("#tumblrStop").click();
+    await settle();
+    expect(harness.chrome.runtime.sendMessage).toHaveBeenCalledTimes(calls);
   });
 
   it("opens the preload inspector on the page and gets out of the way", async () => {

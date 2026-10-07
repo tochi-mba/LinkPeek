@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MEDIA_ACCEPT, TUMBLR_JOB, TUMBLR_SAVED_PREFIX, TumblrDownloader, type TumblrJobState} from "../../src/background/tumblr-job";
+import {MEDIA_ACCEPT, TUMBLR_JOB, TUMBLR_SAVED_GLOBAL, TUMBLR_SAVED_PREFIX, TumblrDownloader, type TumblrJobState} from "../../src/background/tumblr-job";
 import type {TumblrMedia} from "../../src/core/tumblr";
 
 let local: Record<string, unknown>;
@@ -10,7 +10,7 @@ const state = (phase: TumblrJobState["phase"] = "collecting"): TumblrJobState =>
   blog: "demo", phase, posts: 0, total: 0, found: 0, saved: 0, failed: 0, skipped: 0, collected: false
 });
 const media = (key = "a"): TumblrMedia => ({
-  key, url: `https://64.media.tumblr.com/${key}.jpg`, ext: "jpg", kind: "image", postId: "10", at: 0, index: 1
+  key, url: `https://64.media.tumblr.com/${key}.jpg`, ext: "jpg", kind: "image", postId: "10", at: 0, index: 1, sourceUrl: "https://demo.tumblr.com/post/10"
 });
 const eventually = async (predicate: () => boolean) => {
   for (let i = 0; i < 100 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 0));
@@ -60,12 +60,48 @@ describe("Tumblr download state", () => {
     (downloader as any).token = vi.fn(() => new Promise<string>(resolve => release = () => resolve("token")));
     const live = downloader.start("live");
     expect(downloader.start("other")).toBe(live);
+    expect(downloader.start("other").queue).toEqual(["other"]);
     expect(await downloader.status()).toBe(live);
     await eventually(() => typeof release === "function");
     downloader.stop();
     release();
     await eventually(() => live.phase === "stopped");
     downloader.stop();
+  });
+
+  it("runs queued blogs in order, supports removal and restores a suspended queue", async () => {
+    const releases = new Map<string, () => void>();
+    const downloader = new TumblrDownloader();
+    (downloader as any).token = vi.fn((blog: string) => new Promise<string>(resolve => releases.set(blog, () => resolve("token"))));
+    (downloader as any).page = vi.fn(async () => ({response: {posts: [], total_posts: 0}}));
+    const first = downloader.start("First");
+    downloader.start("second");
+    downloader.start("third");
+    downloader.start("second");
+    expect(first.queue).toEqual(["second", "third"]);
+    await downloader.removeQueued("SECOND");
+    expect(first.queue).toEqual(["third"]);
+    await eventually(() => releases.has("first"));
+    releases.get("first")!();
+    await eventually(() => releases.has("third"));
+    expect((await downloader.status())?.blog).toBe("third");
+    await downloader.clearQueue();
+    const third = await downloader.status();
+    releases.get("third")!();
+    await eventually(() => third?.phase === "done");
+
+    session[TUMBLR_JOB] = {...state(), blog: "paused", queue: ["next", "next", "last"]};
+    const restored = new TumblrDownloader();
+    expect(await restored.status()).toMatchObject({phase: "stopped", queue: ["next", "last"]});
+    expect((await restored.removeQueued("next"))?.queue).toEqual(["last"]);
+    expect((await restored.clearQueue())?.queue).toEqual([]);
+    expect(restored.start("bad/name")).toMatchObject({phase: "failed", error: "That isn't a Tumblr blog name"});
+
+    delete session[TUMBLR_JOB];
+    const absent = new TumblrDownloader();
+    expect(await absent.removeQueued("none")).toBeUndefined();
+    const another = new TumblrDownloader();
+    expect(await another.clearQueue()).toBeUndefined();
   });
 
   it("forgets a blog and publishes both halves of progress despite storage and badge failures", async () => {
@@ -144,17 +180,23 @@ describe("Tumblr HTTP handling", () => {
 
 describe("saving and running jobs", () => {
   it("waits for successful and interrupted downloads and handles startup and search failures", async () => {
-    const downloader = new TumblrDownloader();
+    const onSaved = vi.fn();
+    const downloader = new TumblrDownloader(onSaved);
     const search = chrome.downloads.search as unknown as ReturnType<typeof vi.fn>;
     search.mockResolvedValueOnce([{id: 7, state: "complete"}] as chrome.downloads.DownloadItem[]);
     const successful = (downloader as any).save("demo", media());
     downloader.onDownloadChanged({id: 7, state: {current: "in_progress"}} as chrome.downloads.DownloadDelta);
     await expect(successful).resolves.toBe(true);
+    expect(onSaved).toHaveBeenCalledWith("demo", media(), 7);
     expect(chrome.downloads.download).toHaveBeenCalledWith(expect.objectContaining({
       url: media().url,
       filename: "LinkPeek/Tumblr/demo/undated 10-1.jpg",
       headers: [{name: "Accept", value: MEDIA_ACCEPT}]
     }));
+
+    onSaved.mockResolvedValueOnce(false);
+    search.mockResolvedValueOnce([{id: 7, state: "complete"}] as chrome.downloads.DownloadItem[]);
+    await expect((downloader as any).save("demo", media("same-bytes"))).resolves.toBe("duplicate");
 
     search.mockResolvedValueOnce([{id: 7, state: "interrupted"}] as chrome.downloads.DownloadItem[]);
     await expect((downloader as any).save("demo", media("b"))).resolves.toBe(false);
@@ -163,7 +205,7 @@ describe("saving and running jobs", () => {
 
     search.mockRejectedValueOnce(new Error("gone"));
     const searched = (downloader as any).save("demo", media("d"));
-    await eventually(() => search.mock.calls.length >= 3);
+    await eventually(() => search.mock.calls.length >= 4);
     downloader.onDownloadChanged({id: 7, state: {current: "interrupted"}} as chrome.downloads.DownloadDelta);
     await expect(searched).resolves.toBe(false);
   });
@@ -178,10 +220,12 @@ describe("saving and running jobs", () => {
 
   it("collects pages, skips ads and duplicates, saves in parallel and remembers progress", async () => {
     local[TUMBLR_SAVED_PREFIX + "demo"] = ["old"];
+    local[TUMBLR_SAVED_GLOBAL] = ["other-blog"];
     const downloader = new TumblrDownloader();
     (downloader as any).token = vi.fn(async () => "token");
     const blocks = [
       {type: "image", media: [{url: "https://64.media.tumblr.com/old.jpg", media_key: "old"}]},
+      {type: "image", media: [{url: "https://64.media.tumblr.com/global.jpg", media_key: "other-blog"}]},
       ...Array.from({length: 27}, (_, i) => ({type: "image", media: [{url: `https://64.media.tumblr.com/k${i}.jpg`, media_key: `k${i}`}]})),
       {type: "image", media: [{url: "https://64.media.tumblr.com/repeated.jpg", media_key: "k0"}]}
     ];
@@ -195,9 +239,10 @@ describe("saving and running jobs", () => {
     (downloader as any).save = vi.fn(async (_blog: string, item: TumblrMedia) => item.key !== "k26");
     const running = downloader.start("demo");
     await eventually(() => running.phase === "done");
-    expect(running).toMatchObject({posts: 2, total: 2, found: 27, saved: 26, failed: 1, skipped: 2, collected: true});
+    expect(running).toMatchObject({posts: 2, total: 2, found: 27, saved: 26, failed: 1, skipped: 3, collected: true});
     expect((downloader as any).page).toHaveBeenCalledTimes(2);
     expect(new Set(local[TUMBLR_SAVED_PREFIX + "demo"] as string[])).toEqual(new Set(["old", ...Array.from({length: 26}, (_, i) => `k${i}`)]));
+    expect(new Set(local[TUMBLR_SAVED_GLOBAL] as string[])).toEqual(new Set(["other-blog", ...Array.from({length: 26}, (_, i) => `k${i}`)]));
     expect(chrome.storage.local.set).toHaveBeenCalled();
   });
 

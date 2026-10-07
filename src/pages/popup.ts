@@ -46,7 +46,7 @@ function tumblrProgress(job: TumblrJobState) {
 }
 
 function tumblrStatus(job: TumblrJobState | undefined) {
-  if (!job) return "Save every original image, GIF, video and audio from this blog to Downloads.";
+  if (!job) return "Download every original image, GIF, video and audio. Posts also appear in the Library with captions and tags.";
   const files = job.found ? `${job.saved} of ${job.found} files saved` : "no media found yet";
   const skipped = job.skipped ? ` · ${job.skipped} already downloaded` : "";
   const failed = job.failed ? ` · ${job.failed} failed` : "";
@@ -61,19 +61,41 @@ function tumblrStatus(job: TumblrJobState | undefined) {
 
 function renderTumblr() {
   const card = $<HTMLElement>("tumblrCard");
-  card.hidden = !tumblrBlog;
-  if (!tumblrBlog) return;
-  const job = tumblrJob?.blog === tumblrBlog || tumblrJob?.phase === "collecting" ? tumblrJob : undefined;
-  $("tumblrBlog").textContent = job && job.blog !== tumblrBlog ? `@${job.blog}` : `@${tumblrBlog}`;
+  const active = tumblrJob?.phase === "collecting" ? tumblrJob : undefined;
+  card.hidden = !tumblrBlog && !active;
+  if (card.hidden) return;
+  const queue = active?.queue ?? [];
+  const queuedAt = queue.indexOf(tumblrBlog ?? "");
+  const ownResult = !active && tumblrJob?.blog === tumblrBlog ? tumblrJob : undefined;
+  const job = active ?? ownResult;
+  $("tumblrBlog").textContent = `@${active?.blog ?? tumblrBlog!}`;
+  $("tumblrPage").textContent = active
+    ? active.blog === tumblrBlog ? "downloading now" : tumblrBlog ? `this page: @${tumblrBlog}` : "running in the background"
+    : "this page";
+  const phase = $("tumblrPhase");
+  phase.classList.toggle("active", Boolean(active));
+  phase.textContent = active ? "Running" : ownResult?.phase === "done" ? "Complete" : ownResult?.phase === "failed" ? "Needs attention" : ownResult?.phase === "stopped" ? "Stopped" : "Ready";
   $("tumblrStatus").textContent = tumblrStatus(job);
   const progress = $<HTMLProgressElement>("tumblrProgress");
-  progress.hidden = !job || job.phase !== "collecting";
+  progress.hidden = !active;
   progress.value = job ? tumblrProgress(job) : 0;
+  const waiting = $("tumblrQueue");
+  waiting.hidden = !queue.length;
+  waiting.textContent = queue.length ? `Up next (${queue.length}): ${queue.map((blog, i) => `${i + 1}. @${blog}`).join("  ·  ")}` : "";
   const action = $<HTMLButtonElement>("tumblrAction");
-  action.disabled = tumblrStopping;
-  action.textContent = job?.phase === "collecting" ? (tumblrStopping ? "Stopping…" : "Stop")
-    : job?.phase === "done" ? "Check for new media"
-      : job ? "Continue download" : "Download all media";
+  action.hidden = !tumblrBlog;
+  action.disabled = Boolean(active?.blog === tumblrBlog);
+  action.textContent = active?.blog === tumblrBlog ? "Downloading now"
+    : active && queuedAt >= 0 ? `Remove from queue · #${queuedAt + 1}`
+      : active ? `Add @${tumblrBlog} to queue`
+        : ownResult?.phase === "done" ? "Check for new media"
+          : ownResult ? "Continue download" : "Download this blog";
+  const stop = $<HTMLButtonElement>("tumblrStop");
+  stop.hidden = !active;
+  stop.disabled = tumblrStopping;
+  stop.textContent = tumblrStopping ? "Stopping…" : `Stop @${active?.blog ?? ""}`;
+  const clear = $<HTMLButtonElement>("tumblrClearQueue");
+  clear.hidden = queue.length === 0;
 }
 
 function render() {
@@ -150,14 +172,23 @@ async function startShuffle() {
 
 async function toggleTumblrDownload() {
   if (!tumblrBlog) return;
-  if (tumblrJob?.phase === "collecting") {
-    tumblrStopping = true;
-    renderTumblr();
-    await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STOP"}).catch(() => undefined);
-    return;
-  }
+  const queued = tumblrJob?.phase === "collecting" && tumblrJob.queue?.includes(tumblrBlog);
   tumblrStopping = false;
-  tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_START", blog: tumblrBlog}).catch(() => undefined) as TumblrJobState | undefined;
+  tumblrJob = await chrome.runtime.sendMessage(queued
+    ? {type: "LINKPEEK_TUMBLR_REMOVE_QUEUED", blog: tumblrBlog}
+    : {type: "LINKPEEK_TUMBLR_START", blog: tumblrBlog}).catch(() => undefined) as TumblrJobState | undefined;
+  renderTumblr();
+}
+
+async function stopTumblr() {
+  if (tumblrJob?.phase !== "collecting") return;
+  tumblrStopping = true;
+  renderTumblr();
+  await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STOP"}).catch(() => undefined);
+}
+
+async function clearTumblrQueue() {
+  tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_CLEAR_QUEUE"}).catch(() => tumblrJob) as TumblrJobState | undefined;
   renderTumblr();
 }
 
@@ -170,7 +201,7 @@ async function start() {
     tabId = tab.id;
     status = await chrome.tabs.sendMessage(tab.id!, {type: "LINKPEEK_STATUS"}).catch(() => undefined) as TabStatus | undefined;
   }
-  if (tumblrBlog) tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STATUS"}).catch(() => undefined) as TumblrJobState | undefined;
+  tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STATUS"}).catch(() => undefined) as TumblrJobState | undefined;
   render();
   const mirror = await chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_QUERY"}).catch(() => undefined) as {open?: boolean} | undefined;
   if (mirror?.open) $("mirror").textContent = "Close mirror";
@@ -186,6 +217,12 @@ $("inspector").addEventListener("click", () => void toggleInspector());
 $("mirror").addEventListener("click", () => void openMirror());
 $("shuffle").addEventListener("click", () => void startShuffle());
 $("tumblrAction").addEventListener("click", () => void toggleTumblrDownload());
+$("tumblrStop").addEventListener("click", () => void stopTumblr());
+$("tumblrClearQueue").addEventListener("click", () => void clearTumblrQueue());
+$("tumblrLibrary").addEventListener("click", () => {
+  const blog = tumblrBlog ?? (tumblrJob?.phase === "collecting" ? tumblrJob.blog : undefined);
+  void chrome.tabs.create({url: chrome.runtime.getURL(`history.html?view=saved${blog ? `&q=${encodeURIComponent(blog)}` : ""}`)});
+});
 document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
   settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};
   void save();

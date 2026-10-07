@@ -147,9 +147,21 @@ input[type="range"] { accent-color: var(--signal); }
 .popup .actions .button { padding: 0 8px; font-size: 12px; }
 .popup .actions.two { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; margin-top: 0; }
 .popup .actions .button[hidden] { display: none; }
-.tumblr-card .button { width: 100%; }
-.tumblr-progress { display: block; width: 100%; height: 6px; margin: -2px 0 10px; accent-color: var(--accent); }
+.tumblr-card { position: relative; overflow: hidden; }
+.tumblr-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--accent), #ff5ea8); }
+.tumblr-head { display: flex; align-items: baseline; gap: 7px; margin-top: 7px; min-width: 0; }
+.tumblr-head strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tumblr-head .muted { font-size: 11px; white-space: nowrap; }
+.tumblr-phase { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.tumblr-phase.active { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 45%, var(--line)); background: color-mix(in srgb, var(--signal) 10%, transparent); }
+.tumblr-progress { display: block; width: 100%; height: 6px; margin: -2px 0 9px; accent-color: var(--accent); }
 .tumblr-progress[hidden] { display: none; }
+.tumblr-queue { margin: 0 0 9px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--raised); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.tumblr-actions { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+.tumblr-actions .button:only-child { grid-column: 1 / -1; }
+.tumblr-tools { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.tumblr-tools button { border: 0; padding: 0; background: transparent; color: var(--muted); font: inherit; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.tumblr-tools button:hover { color: var(--text); }
 .popup .footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 11px; }
 .favorites { display: grid; gap: 7px; margin-top: 8px; max-height: 170px; overflow: auto; }
 .favorite-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
@@ -235,6 +247,7 @@ input[type="range"] { accent-color: var(--signal); }
 .h-media { position: relative; display: block; background: #050605; }
 .h-media img { display: block; width: 100%; height: auto; }
 .h-none { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted, #858D83); font-size: 12px; }
+.h-audio { font-size: clamp(32px, 8vw, 72px); background: radial-gradient(circle at 35% 30%, var(--raised), #050605 72%); }
 .h-badge { position: absolute; top: 7px; right: 7px; padding: 1px 6px; border-radius: 6px; background: var(--signal, #D7FF3F); color: #111512; font: 800 10px ui-monospace, monospace; }
 .h-tile figcaption { display: flex; gap: 8px; align-items: baseline; padding: 7px 9px; font-size: 12px; }
 .h-tile figcaption a { flex: 1; min-width: 0; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -254,6 +267,7 @@ input[type="range"] { accent-color: var(--signal); }
 .h-view[hidden] { display: none; }
 .h-view-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; }
 .h-view-stage img, .h-view-stage video { max-width: 100vw; max-height: 100vh; object-fit: contain; transform-origin: center; will-change: transform; }
+.h-view-stage audio { width: min(640px, calc(100vw - 48px)); }
 .h-view-stage.h-zoomed { cursor: grab; }
 .h-view-stage.h-zoomed:active { cursor: grabbing; }
 .h-view-bar { position: absolute; inset: 0 0 auto 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 8px 10px 22px; background: linear-gradient(rgba(5, 6, 5, .82), rgba(5, 6, 5, 0)); transition: opacity .25s ease; }

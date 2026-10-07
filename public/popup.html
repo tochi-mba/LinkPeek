@@ -26,10 +26,19 @@
         </div>
       </section>
       <section id="tumblrCard" class="card tumblr-card" hidden>
-        <div class="row"><div class="eyebrow">Tumblr blog</div><span class="spacer"></span><span id="tumblrBlog" class="site muted"></span></div>
+        <div class="row"><div class="eyebrow">Tumblr downloader</div><span class="spacer"></span><span id="tumblrPhase" class="tumblr-phase"></span></div>
+        <div class="tumblr-head"><strong id="tumblrBlog"></strong><span id="tumblrPage" class="muted"></span></div>
         <p id="tumblrStatus" class="status" role="status"></p>
         <progress id="tumblrProgress" class="tumblr-progress" max="100" value="0" hidden></progress>
-        <button id="tumblrAction" class="button" type="button">Download all media</button>
+        <div id="tumblrQueue" class="tumblr-queue muted" hidden></div>
+        <div class="tumblr-actions">
+          <button id="tumblrAction" class="button primary" type="button">Download this blog</button>
+          <button id="tumblrStop" class="button ghost" type="button" hidden>Stop current</button>
+        </div>
+        <div class="tumblr-tools">
+          <button id="tumblrLibrary" type="button">View in Library</button>
+          <button id="tumblrClearQueue" type="button" hidden>Clear waiting</button>
+        </div>
       </section>
       <section class="card">
         <div class="eyebrow">Performance</div>

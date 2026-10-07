@@ -26,12 +26,26 @@ const MIRROR_DATA_MAX = 32 * 1024 * 1024;
 const REJECTED_MEMORY = 5000;
 
 /** What is known about a file before it is saved. */
-export type LibraryMeta = Omit<LibraryEntry, "bytes" | "at" | "w" | "h" | "dl">;
+export type LibraryMeta = Omit<LibraryEntry, "bytes" | "at" | "w" | "h">;
 /** The rules of the moment: how much space, the smallest picture worth keeping, and whether Downloads gets a copy. */
 export type LibraryRules = {budget: number; minWidth: number; minHeight: number; mirror: boolean};
 /** How far the saved-files check has come, and how long it is resting to spare the machine. */
 export type AuditProgress = {checked: number; total: number; removed: number; mirrored: number; url: string; resting: number};
-type Job = {url: string; rules: LibraryRules; meta: LibraryMeta};
+export type SaveResult = "saved" | "existing" | "duplicate" | "ignored" | "failed";
+type Job = {url: string; rules: LibraryRules; meta: LibraryMeta; generation: number; listeners: Array<(result: SaveResult) => void>};
+
+/** A full-byte content signature: length plus four independently mixed 32-bit lanes. */
+export function contentDigest(bytes: ArrayBuffer) {
+  const data = new Uint8Array(bytes);
+  let a = 0x811c9dc5, b = 0x9e3779b9, c = 0x85ebca6b, d = 0xc2b2ae35;
+  for (const byte of data) {
+    a = Math.imul(a ^ byte, 0x01000193);
+    b = Math.imul(b ^ byte, 0x27d4eb2d) + 0x165667b1;
+    c = Math.imul(c + byte, 0x85ebca6b) ^ c >>> 13;
+    d = Math.imul(d ^ byte, 0xc2b2ae35) ^ d >>> 16;
+  }
+  return `${data.byteLength.toString(36)}-${[a, b, c, d].map(value => (value >>> 0).toString(36)).join("-")}`;
+}
 
 function isEntry(value: unknown): value is [string, LibraryEntry] {
   const pair = value as [string, LibraryEntry];
@@ -58,7 +72,7 @@ export function svgSize(text: string): {w: number; h: number} | undefined {
  * pictures as octet-stream), and SVGs are sized by their own numbers.
  */
 export async function measure(bytes: ArrayBuffer, type: string): Promise<{w: number; h: number} | undefined> {
-  if (type.startsWith("video/")) return undefined;
+  if (type.startsWith("video/") || type.startsWith("audio/")) return undefined;
   const head = new TextDecoder().decode(bytes.slice(0, 2048));
   if (type.includes("svg") || /<svg\b/i.test(head)) return svgSize(new TextDecoder().decode(bytes));
   try {
@@ -75,8 +89,8 @@ export async function measure(bytes: ArrayBuffer, type: string): Promise<{w: num
 const MEASURE_MAX_BYTES = 12 * 1024 * 1024;
 
 /** Deletes an entry's Downloads copy: the file on disk, then its row in the downloads list. */
-async function removeMirror(entry: LibraryEntry) {
-  if (entry.dl === undefined) return;
+async function removeMirror(entry: LibraryEntry, includeExternal = false) {
+  if (entry.dl === undefined || (entry.external && !includeExternal)) return;
   await chrome.downloads.removeFile(entry.dl).catch(() => undefined);
   await chrome.downloads.erase({id: entry.dl}).catch(() => undefined);
 }
@@ -93,6 +107,10 @@ export class MediaLibrary {
   private queue: Job[] = [];
   private queued = new Map<string, Job>();
   private active = 0;
+  /** Serialises the short final write for equal content arriving under different addresses. */
+  private digestWrites = new Map<string, Promise<void>>();
+  /** Incremented by Clear so fetches already in flight cannot repopulate the emptied Library. */
+  private generation = 0;
   /** Files measured too small to keep, with the size that ruled them out (the history check reuses it). */
   private rejected = new Map<string, {w: number; h: number}>();
 
@@ -115,13 +133,21 @@ export class MediaLibrary {
     await chrome.storage.local.set({[LIBRARY_INDEX]: [...await this.loadIndex()]});
   }
 
+  /** Marks a file that is already in the Library seen without fetching or creating it. */
+  async markSeen(url: string) {
+    const entry = (await this.loadIndex()).get(url);
+    if (!entry || entry.seen) return;
+    entry.seen = true;
+    this.saveIndexSoon();
+  }
+
   /**
    * Queues a file to keep under `rules`. A file being looked at goes ahead of
    * prepared ones; a file already kept is only marked seen; a file measured
    * too small before is not fetched again.
    */
-  save(url: string, rules: LibraryRules, meta: LibraryMeta) {
-    if (!/^https?:/.test(url) || this.rejected.has(url)) return;
+  save(url: string, rules: LibraryRules, meta: LibraryMeta): Promise<SaveResult> {
+    if (!/^https?:/.test(url) || this.rejected.has(url)) return Promise.resolve("ignored");
     const waiting = this.queued.get(url);
     if (waiting) {
       if (meta.seen && !waiting.meta.seen) {
@@ -129,20 +155,25 @@ export class MediaLibrary {
         this.queue.splice(this.queue.indexOf(waiting), 1);
         this.queue.unshift(waiting);
       }
-      return;
+      return new Promise(resolve => waiting.listeners.push(resolve));
     }
-    const job: Job = {url, rules, meta: {...meta}};
+    let settle!: (result: SaveResult) => void;
+    const done = new Promise<SaveResult>(resolve => settle = resolve);
+    const job: Job = {url, rules, meta: {...meta}, generation: this.generation, listeners: [settle]};
     this.queued.set(url, job);
     if (meta.seen) this.queue.unshift(job);
     else this.queue.push(job);
     this.pump();
+    return done;
   }
 
   private pump() {
     while (this.active < CONCURRENCY && this.queue.length) {
       const job = this.queue.shift()!;
       this.active++;
-      void this.store(job).catch(() => undefined).finally(() => {
+      void this.store(job).catch(() => "failed" as const).then(result => {
+        for (const settle of job.listeners) settle(result);
+      }).finally(() => {
         this.active--;
         this.queued.delete(job.url);
         this.pump();
@@ -150,38 +181,85 @@ export class MediaLibrary {
     }
   }
 
-  private async store({url, rules, meta}: Job) {
+  private async store({url, rules, meta, generation}: Job) {
     const index = await this.loadIndex(), kept = index.get(url);
+    if (generation !== this.generation) return "ignored" as const;
     if (kept) {
+      if (meta.external && meta.dl !== undefined) {
+        kept.external = true;
+        kept.dl = meta.dl;
+        this.saveIndexSoon();
+      }
       if (meta.seen && !kept.seen) {
         kept.seen = true;
         this.saveIndexSoon();
       }
       // Saved before mirroring existed, or the copy failed: Downloads gets it now.
-      if (rules.mirror && kept.dl === undefined) {
+      if (rules.mirror && kept.dl === undefined && !kept.external) {
         await this.mirror(url, kept);
         this.saveIndexSoon();
       }
-      return;
+      return "existing" as const;
     }
     // One file may use at most a quarter of the budget, so a long video cannot push out everything else.
-    const {bytes, type} = await fetchWithRetry(url, {credentials: "include"}, {mode: "background", timeoutMs: 60_000, read: async response => {
+    const fetched = await fetchWithRetry(url, {credentials: "include"}, {mode: "background", timeoutMs: 60_000, read: async response => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return {bytes: await readBytesCapped(response, Math.floor(rules.budget / 4), "Too large to keep"), type: response.headers.get("content-type") ?? "application/octet-stream"};
-    }});
+    }}).catch(error => {
+      if (!meta.external) throw error;
+      return undefined;
+    });
+    if (generation !== this.generation) return "ignored" as const;
+    // An explicit Tumblr download must still have a Library row when its web
+    // copy is unavailable or too large for the cache. It remains streamable
+    // from the original address and its real file remains in Downloads.
+    if (!fetched) {
+      index.set(url, {...meta, bytes: 0, at: Date.now()});
+      this.saveIndexSoon();
+      return "saved" as const;
+    }
+    const {bytes, type} = fetched;
     const size = await measure(bytes, type);
+    if (generation !== this.generation) return "ignored" as const;
     if (size && underSized(size.w, size.h, rules)) {
       this.reject(url, size);
-      return;
+      return "ignored" as const;
     }
-    const cache = await caches.open(LIBRARY_CACHE);
-    await cache.put(url, new Response(bytes, {headers: {"content-type": type, "content-length": String(bytes.byteLength)}}));
-    const entry: LibraryEntry = {...meta, bytes: bytes.byteLength, at: Date.now(), ...size};
-    index.set(url, entry);
-    await this.trim(rules.budget);
-    // Unless it was trimmed straight back out, Downloads gets its copy.
-    if (rules.mirror && index.has(url)) await this.mirror(url, entry);
-    this.saveIndexSoon();
+    const digest = contentDigest(bytes);
+    // Fetching and measuring run concurrently, but equal files must cross the
+    // duplicate check and cache write one at a time. If the first write fails,
+    // the waiter gets its own chance instead of being discarded as a duplicate.
+    while (this.digestWrites.has(digest)) await this.digestWrites.get(digest);
+    if (generation !== this.generation) return "ignored" as const;
+    const duplicate = [...index].find(([, entry]) => entry.digest === digest);
+    if (duplicate) {
+      if (meta.seen && !duplicate[1].seen) {
+        duplicate[1].seen = true;
+        this.saveIndexSoon();
+      }
+      return "duplicate" as const;
+    }
+    let release!: () => void;
+    const writing = new Promise<void>(resolve => release = resolve);
+    this.digestWrites.set(digest, writing);
+    try {
+      const cache = await caches.open(LIBRARY_CACHE);
+      await cache.put(url, new Response(bytes, {headers: {"content-type": type, "content-length": String(bytes.byteLength)}}));
+      if (generation !== this.generation) {
+        await cache.delete(url);
+        return "ignored" as const;
+      }
+      const entry: LibraryEntry = {...meta, bytes: bytes.byteLength, at: Date.now(), digest, ...size};
+      index.set(url, entry);
+      await this.trim(rules.budget);
+      // Unless it was trimmed straight back out, Downloads gets its copy.
+      if (rules.mirror && index.has(url) && !entry.external) await this.mirror(url, entry);
+      this.saveIndexSoon();
+      return "saved" as const;
+    } finally {
+      if (this.digestWrites.get(digest) === writing) this.digestWrites.delete(digest);
+      release();
+    }
   }
 
   private reject(url: string, size: {w: number; h: number}) {
@@ -218,13 +296,13 @@ export class MediaLibrary {
   }
 
   /** Forgets one file: its saved bytes, its index entry and its Downloads copy. */
-  async remove(url: string) {
+  async remove(url: string, includeExternal = false) {
     const index = await this.loadIndex(), entry = index.get(url);
     if (!entry) return;
     index.delete(url);
     await (await caches.open(LIBRARY_CACHE)).delete(url);
     await (await caches.open(STILLS_CACHE)).delete(url);
-    await removeMirror(entry);
+    await removeMirror(entry, includeExternal);
     this.saveIndexSoon();
   }
 
@@ -236,21 +314,35 @@ export class MediaLibrary {
   async audit(rules: LibraryRules, onProgress?: (progress: AuditProgress) => void) {
     const index = await this.loadIndex(), entries = [...index], favorites = await favoriteFiles();
     let removed = 0, mirrored = 0, checked = 0;
-    const cache = await caches.open(LIBRARY_CACHE);
+    const cache = await caches.open(LIBRARY_CACHE), digests = new Map<string, [string, LibraryEntry]>();
     for (const [url, entry] of entries) {
       const began = Date.now();
-      if (entry.w === undefined && entry.type !== "video") {
-        const hit = await cache.match(url);
-        const size = hit && await measure(await hit.arrayBuffer(), hit.headers.get("content-type") ?? "");
+      let bytes: ArrayBuffer | undefined, hit: Response | undefined;
+      if ((entry.w === undefined && entry.type !== "video" && entry.type !== "audio") || !entry.digest) {
+        hit = await cache.match(url);
+        bytes = hit && await hit.arrayBuffer();
+      }
+      if (entry.w === undefined && entry.type !== "video" && entry.type !== "audio") {
+        const size = bytes && await measure(bytes, hit?.headers.get("content-type") ?? "");
         if (size) Object.assign(entry, size);
       }
+      if (!entry.digest && bytes) entry.digest = contentDigest(bytes);
       if (entry.w !== undefined && underSized(entry.w, entry.h ?? 0, rules) && !favorites.has(url)) {
         this.reject(url, {w: entry.w, h: entry.h ?? 0});
         await this.remove(url);
         removed++;
-      } else if (rules.mirror && entry.dl === undefined) {
+      } else if (entry.digest && digests.has(entry.digest)) {
+        const previous = digests.get(entry.digest)!;
+        const keepCurrent = favorites.has(url) && !favorites.has(previous[0]);
+        await this.remove(keepCurrent ? previous[0] : url, true);
+        removed++;
+        if (keepCurrent) digests.set(entry.digest, [url, entry]);
+      } else if (rules.mirror && entry.dl === undefined && !entry.external) {
+        if (entry.digest) digests.set(entry.digest, [url, entry]);
         await this.mirror(url, entry);
         if (entry.dl !== undefined) mirrored++;
+      } else if (entry.digest) {
+        digests.set(entry.digest, [url, entry]);
       }
       checked++;
       // The check always finishes, but never at the browser's expense: a file that
@@ -293,6 +385,8 @@ export class MediaLibrary {
 
   /** Forgets every saved file, Downloads copies included. */
   async clear() {
+    this.generation++;
+    for (const job of this.queue) for (const settle of job.listeners) settle("ignored");
     this.queue = [];
     this.queued.clear();
     const index = await this.loadIndex();

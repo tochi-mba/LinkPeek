@@ -122,6 +122,7 @@ export function mediaMarkup(item: MediaItem, settings: LinkPeekSettings, decoded
     const poster = item.posterUrl ? ` poster="${escapeHtml(item.posterUrl)}"` : "";
     return `<video class="lp-image lp-video" src="${escapeHtml(item.originalUrl)}"${poster} preload="metadata" ${flags}></video>`;
   }
+  if (item.type === "audio") return `<audio class="lp-audio" src="${escapeHtml(item.originalUrl)}" preload="metadata" controls autoplay></audio>`;
   if (decoded) return `<div class="lp-image-slot"></div>`;
   return `<img class="lp-image" src="${escapeHtml(item.previewUrl)}" alt="${escapeHtml(item.filename || "Preview image")}" decoding="async">`;
 }
@@ -141,6 +142,7 @@ export function captionText(item: MediaItem | undefined, result: ScanResult | un
 export function tipText(item: MediaItem | undefined) {
   if (item?.type === "gif") return "Scroll to browse · Space to pause";
   if (item?.type === "video") return "Scroll to browse · click the video for its controls";
+  if (item?.type === "audio") return "Scroll to browse · use the player for sound";
   return "Scroll to browse · Pinch to zoom";
 }
 

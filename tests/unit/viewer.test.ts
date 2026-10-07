@@ -1438,6 +1438,18 @@ describe("one-handed extras", () => {
 });
 
 describe("slideshow pacing", () => {
+  it("lets a playing audio post finish", async () => {
+    open({slideshowSeconds: 1}).show({...result(2), items: [item(0, "audio"), item(1)]});
+    const audio = q<HTMLAudioElement>(".lp-audio")!;
+    Object.defineProperty(audio, "duration", {configurable: true, value: 3});
+    Object.defineProperty(audio, "currentTime", {configurable: true, value: 1});
+    press("s");
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(count()).toBe("1 / 2");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(count()).toBe("2 / 2");
+  });
+
   it("lets a playing video finish, up to a minute, and waits for its length when it is not known yet", async () => {
     open({slideshowSeconds: 1, videoAutoplay: true}).show({...result(3), items: [item(0, "video"), item(1), item(2, "video")]});
     const video = q<HTMLVideoElement>(".lp-video")!;

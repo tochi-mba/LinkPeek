@@ -58,6 +58,9 @@ describe("Tumblr media", () => {
       object_type: "post",
       id_string: "99",
       timestamp: 100,
+      post_url: "https://demo.tumblr.com/post/99/example",
+      summary: "Example post",
+      tags: ["photography", "blonde hair"],
       content: [
         {type: "image", media: [
           {url: "https://64.media.tumblr.com/small.jpg", width: 100},
@@ -80,12 +83,12 @@ describe("Tumblr media", () => {
         {}
       ]
     })).toEqual([
-      {key: "original", url: "https://64.media.tumblr.com/original.pnj", ext: "png", kind: "image", postId: "99", at: 100000, index: 1},
-      {key: "https://64.media.tumblr.com/a.gif", url: "https://64.media.tumblr.com/a.gif", ext: "gif", kind: "gif", postId: "99", at: 100000, index: 2},
-      {key: "https://64.media.tumblr.com/mime", url: "https://64.media.tumblr.com/mime", ext: "gif", kind: "gif", postId: "99", at: 100000, index: 3},
-      {key: "https://v.tumblr.com/video_file/a/1", url: "https://v.tumblr.com/video_file/a/1", ext: "mp4", kind: "video", postId: "99", at: 100000, index: 4},
-      {key: "https://a.media.tumblr.com/sound", url: "https://a.media.tumblr.com/sound", ext: "mp3", kind: "audio", postId: "99", at: 100000, index: 5},
-      {key: "https://v.tumblr.com/video_file/fallback/2", url: "https://v.tumblr.com/video_file/fallback/2", ext: "mp4", kind: "video", postId: "99", at: 100000, index: 6}
+      {key: "original", url: "https://64.media.tumblr.com/original.pnj", ext: "png", kind: "image", postId: "99", at: 100000, index: 1, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"},
+      {key: "https://64.media.tumblr.com/a.gif", url: "https://64.media.tumblr.com/a.gif", ext: "gif", kind: "gif", postId: "99", at: 100000, index: 2, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"},
+      {key: "https://64.media.tumblr.com/mime", url: "https://64.media.tumblr.com/mime", ext: "gif", kind: "gif", postId: "99", at: 100000, index: 3, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"},
+      {key: "https://v.tumblr.com/video_file/a/1", url: "https://v.tumblr.com/video_file/a/1", ext: "mp4", kind: "video", postId: "99", at: 100000, index: 4, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"},
+      {key: "https://a.media.tumblr.com/sound", url: "https://a.media.tumblr.com/sound", ext: "mp3", kind: "audio", postId: "99", at: 100000, index: 5, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"},
+      {key: "https://v.tumblr.com/video_file/fallback/2", url: "https://v.tumblr.com/video_file/fallback/2", ext: "mp4", kind: "video", postId: "99", at: 100000, index: 6, sourceUrl: "https://demo.tumblr.com/post/99/example", title: "Example post · #photography #blonde hair"}
     ]);
   });
 
@@ -101,8 +104,26 @@ describe("Tumblr media", () => {
     expect(mediaOf({object_type: "post", id_string: "3"})).toEqual([]);
   });
 
+  it("falls back to cleaned caption blocks and ignores malformed tags", () => {
+    const item = mediaOf({
+      object_type: "post", id_string: "4", tags: ["#summer", 5, " ", "friends &amp; fun"],
+      content: [
+        {type: "text", text: "<p>Two&nbsp;blonde <b>tight</b> asses &#x1F60E; &#128526; &quot;yes&quot;</p>"},
+        {type: "image", media: [{url: "https://64.media.tumblr.com/caption.jpg"}]}
+      ],
+      trail: [{content: [{type: "text", text: "Reblogged &#39;caption&#39;"}]}]
+    })[0];
+    expect(item.title).toBe("Two blonde tight asses 😎 😎 \"yes\" Reblogged 'caption' · #summer #friends & fun");
+    const long = mediaOf({object_type: "post", id_string: "5", summary: "x".repeat(320), tags: ["kept", ...Array.from({length: 35}, (_, i) => `tag${i}`)], content: [
+      {type: "image", media: [{url: "https://64.media.tumblr.com/long.jpg"}]}
+    ]})[0].title!;
+    expect(long).toMatch(/^x{299}… · #kept #tag0/);
+    expect(long).toContain("#tag28");
+    expect(long).not.toContain("#tag29");
+  });
+
   it("builds dated and undated download names", () => {
-    const media: TumblrMedia = {key: "k", url: "https://64.media.tumblr.com/a.jpg", ext: "jpg", kind: "image", postId: "42", at: new Date(2024, 0, 2).getTime(), index: 3};
+    const media: TumblrMedia = {key: "k", url: "https://64.media.tumblr.com/a.jpg", ext: "jpg", kind: "image", postId: "42", at: new Date(2024, 0, 2).getTime(), index: 3, sourceUrl: ""};
     expect(tumblrFileName("my-blog", media)).toBe("LinkPeek/Tumblr/my-blog/2024-01-02 42-3.jpg");
     expect(tumblrFileName("my-blog", {...media, at: 0})).toBe("LinkPeek/Tumblr/my-blog/undated 42-3.jpg");
   });

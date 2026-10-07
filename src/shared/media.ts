@@ -2,7 +2,7 @@ export type LinkKind = "direct-image" | "direct-video" | "discourse" | "generic"
 
 export interface MediaItem {
   id: string;
-  type: "image" | "gif" | "video";
+  type: "image" | "gif" | "video" | "audio";
   originalUrl: string;
   previewUrl: string;
   /** Still frame shown for a video before it plays. */

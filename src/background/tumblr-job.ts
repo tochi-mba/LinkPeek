@@ -15,6 +15,8 @@ export type {TumblrJobState, TumblrPhase} from "../shared/messages";
 
 export const TUMBLR_JOB = "tumblrJob";
 export const TUMBLR_SAVED_PREFIX = "tumblrSaved:";
+/** Media keys saved from any Tumblr blog, so cross-blog reblogs are never downloaded twice. */
+export const TUMBLR_SAVED_GLOBAL = "tumblrSavedGlobal";
 /**
  * What the downloads ask for. Asked like a web page, Tumblr's media hosts
  * answer with an HTML viewer instead of the file, so this names media types
@@ -35,19 +37,47 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export class TumblrDownloader {
   private run?: {blog: string; stop: boolean; state: TumblrJobState};
   private finishing = new Map<number, (ok: boolean) => void>();
+  private queue: string[] = [];
+  private restored = false;
+  private last?: TumblrJobState;
+
+  constructor(private onSaved?: (blog: string, media: TumblrMedia, downloadId: number) => boolean | void | Promise<boolean | void>) {}
 
   /** The job running or last run, for the popup. One left mid-way by a worker that was shut down reads as stopped. */
   async status(): Promise<TumblrJobState | undefined> {
     if (this.run) return this.run.state;
     const stored = (await chrome.storage.session.get(TUMBLR_JOB))[TUMBLR_JOB] as TumblrJobState | undefined;
-    return stored?.phase === "collecting" ? {...stored, phase: "stopped"} : stored;
+    if (!this.restored) {
+      this.queue = Array.isArray(stored?.queue) ? [...new Set(stored.queue.filter(blog => typeof blog === "string"))] : [];
+      this.restored = true;
+    }
+    this.last = stored;
+    return stored?.phase === "collecting" ? {...stored, phase: "stopped", queue: [...this.queue]} : stored;
   }
 
-  /** Starts on a blog (one job at a time: while one runs, its state is the answer). */
+  /** Starts now, or appends behind the active blog. Each blog appears at most once. */
   start(blog: string): TumblrJobState {
-    if (this.run) return this.run.state;
+    blog = blog.trim().toLowerCase();
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(blog)) {
+      const invalid: TumblrJobState = {blog, phase: "failed", posts: 0, total: 0, found: 0, saved: 0, failed: 0, skipped: 0, collected: true, error: "That isn't a Tumblr blog name"};
+      this.last = invalid;
+      void this.publish(invalid);
+      return invalid;
+    }
+    if (this.run) {
+      if (blog !== this.run.blog && !this.queue.includes(blog)) this.queue.push(blog);
+      void this.publish(this.run.state);
+      return this.run.state;
+    }
+    this.queue = this.queue.filter(queued => queued !== blog);
+    return this.begin(blog);
+  }
+
+  private begin(blog: string) {
     const state: TumblrJobState = {blog, phase: "collecting", posts: 0, total: 0, found: 0, saved: 0, failed: 0, skipped: 0, collected: false};
     this.run = {blog, stop: false, state};
+    this.last = state;
+    this.restored = true;
     void this.work(this.run);
     return state;
   }
@@ -55,6 +85,24 @@ export class TumblrDownloader {
   /** Stops starting new downloads; those already under way finish. */
   stop() {
     if (this.run) this.run.stop = true;
+  }
+
+  /** Removes one waiting blog, leaving the active download alone. */
+  async removeQueued(blog: string) {
+    if (!this.restored) await this.status();
+    this.queue = this.queue.filter(queued => queued !== blog.toLowerCase());
+    if (this.run) await this.publish(this.run.state);
+    else if (this.last) await this.publish(this.last);
+    return this.run?.state ?? this.last;
+  }
+
+  /** Empties the waiting list, leaving the active download alone. */
+  async clearQueue() {
+    if (!this.restored) await this.status();
+    this.queue = [];
+    if (this.run) await this.publish(this.run.state);
+    else if (this.last) await this.publish(this.last);
+    return this.run?.state ?? this.last;
   }
 
   /** Forgets which files of a blog were saved, so the next run saves everything again. */
@@ -69,7 +117,9 @@ export class TumblrDownloader {
   }
 
   private async publish(state: TumblrJobState) {
-    await chrome.storage.session.set({[TUMBLR_JOB]: state}).catch(() => undefined);
+    state.queue = [...this.queue];
+    this.last = state;
+    await chrome.storage.session.set({[TUMBLR_JOB]: {...state, queue: [...this.queue]}}).catch(() => undefined);
     // Reading posts fills the first half of the badge, saving files the second.
     const share = state.collected ? 0.5 + 0.5 * (state.saved + state.failed) / Math.max(1, state.found) : 0.5 * state.posts / Math.max(1, state.total);
     const text = state.phase === "collecting" ? `${Math.min(99, Math.floor(share * 100))}%` : "";
@@ -81,10 +131,12 @@ export class TumblrDownloader {
     const memoryKey = TUMBLR_SAVED_PREFIX + blog;
     const stored = (await chrome.storage.local.get(memoryKey))[memoryKey];
     const saved = new Set<string>(Array.isArray(stored) ? stored : []);
+    const globalStored = (await chrome.storage.local.get(TUMBLR_SAVED_GLOBAL))[TUMBLR_SAVED_GLOBAL];
+    const savedAnywhere = new Set<string>(Array.isArray(globalStored) ? globalStored : []);
     const queue: TumblrMedia[] = [], queued = new Set<string>(), waiting: Array<() => void> = [];
     const wake = () => waiting.splice(0).forEach(resolve => resolve());
     let unsaved = 0;
-    const remember = () => chrome.storage.local.set({[memoryKey]: [...saved]}).catch(() => undefined);
+    const remember = () => chrome.storage.local.set({[memoryKey]: [...saved], [TUMBLR_SAVED_GLOBAL]: [...savedAnywhere]}).catch(() => undefined);
     const worker = async () => {
       while (!run.stop) {
         const media = queue.shift();
@@ -93,13 +145,20 @@ export class TumblrDownloader {
           await new Promise<void>(resolve => waiting.push(resolve));
           continue;
         }
-        if (await this.save(blog, media)) {
+        const outcome = await this.save(blog, media);
+        if (outcome === true) {
           state.saved++;
           saved.add(media.key);
+          savedAnywhere.add(media.key);
           if (++unsaved >= REMEMBER_EVERY) {
             unsaved = 0;
             await remember();
           }
+        } else if (outcome === "duplicate") {
+          state.skipped++;
+          saved.add(media.key);
+          savedAnywhere.add(media.key);
+          unsaved++;
         } else {
           state.failed++;
         }
@@ -120,7 +179,7 @@ export class TumblrDownloader {
           state.posts++;
           for (const media of mediaOf(post)) {
             // Saved on an earlier run, or already waiting (a reblog of a post seen earlier in this one).
-            if (saved.has(media.key) || queued.has(media.key)) {
+            if (saved.has(media.key) || savedAnywhere.has(media.key) || queued.has(media.key)) {
               state.skipped++;
               continue;
             }
@@ -142,8 +201,10 @@ export class TumblrDownloader {
     await Promise.all(workers);
     await remember();
     if (state.phase !== "failed") state.phase = run.stop ? "stopped" : "done";
-    this.run = undefined;
     await this.publish(state);
+    this.run = undefined;
+    const next = this.queue.shift();
+    if (next) this.begin(next);
   }
 
   /** The web app's token, read from the blog's own page on tumblr.com. */
@@ -195,6 +256,8 @@ export class TumblrDownloader {
     if (now?.state === "complete" || now?.state === "interrupted") this.onDownloadChanged({id, state: {current: now.state}});
     const ok = await done;
     this.finishing.delete(id);
-    return ok;
+    if (!ok) return false;
+    const kept = await Promise.resolve(this.onSaved?.(blog, media, id)).catch(() => undefined);
+    return kept === false ? "duplicate" as const : true;
   }
 }

@@ -34,11 +34,11 @@ const PLAY_MAX_MS = 60_000;
 
 type View = "seen" | "saved";
 type Filter = "all" | "unseen" | "seen";
-type Kind = "all" | "gif" | "video" | "image";
+type Kind = "all" | "gif" | "video" | "audio" | "image";
 type Sort = "newest" | "oldest" | "title" | "largest";
 
 /** What one of each kind is called, in the seen and the saved view. */
-const NOUNS: Record<Kind, [string, string]> = {all: ["item", "file"], gif: ["GIF", "GIF"], video: ["video", "video"], image: ["picture", "picture"]};
+const NOUNS: Record<Kind, [string, string]> = {all: ["item", "file"], gif: ["GIF", "GIF"], video: ["video", "video"], audio: ["audio post", "audio file"], image: ["picture", "picture"]};
 
 /** One item on the page, whichever view it came from. */
 export interface Row {
@@ -60,6 +60,8 @@ export interface Row {
   bytes?: number;
   /** Its copy in Downloads / LinkPeek Library, when one was made. */
   dl?: number;
+  /** Its Downloads copy came from an explicit action and is not owned by the Library. */
+  external?: boolean;
 }
 
 export function rowFromHistory(entry: HistoryEntry): Row {
@@ -71,7 +73,7 @@ export function rowFromLibrary([url, entry]: [string, LibraryEntry]): Row {
   return {
     at: entry.at, type, title: entry.title, source: entry.source ?? url, open: entry.original ?? url, saved: url,
     thumb: type === "image" ? url : entry.preview ?? "", seen: entry.seen !== false,
-    w: entry.w, h: entry.h, bytes: entry.bytes, dl: entry.dl
+    w: entry.w, h: entry.h, bytes: entry.bytes, dl: entry.dl, external: entry.external
   };
 }
 
@@ -134,6 +136,7 @@ function displayTitle(row: Row) {
 
 /** A size people can read: KB under a megabyte, then MB, then GB. */
 function sizeLabel(bytes: number) {
+  if (!bytes) return "0 KB";
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -173,11 +176,11 @@ function shaped(picture: string, row: Row) {
 
 function tile(row: Row, index: number) {
   const title = displayTitle(row);
-  const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "")
+  const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : row.type === "audio" ? "♫ AUDIO" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "")
     + (favorites.has(row.saved) ? `<span class="h-fav" title="Favourite">★</span>` : "");
   // Moving media always gets a picture of itself; a site's own preview, if any, is the fallback.
   const fallback = row.thumb ? ` data-src="${escapeHtml(row.thumb)}"` : "";
-  const picture = row.type !== "image" ? `<img data-still${fallback} alt="" decoding="async">`
+  const picture = row.type === "audio" ? `<span class="h-none h-audio" aria-hidden="true">♫</span>` : row.type !== "image" ? `<img data-still${fallback} alt="" decoding="async">`
     : row.thumb ? `<img data-src="${escapeHtml(row.thumb)}" alt="" decoding="async">` : `<span class="h-none">No preview</span>`;
   return `<figure class="h-tile${chosen.has(row) ? " h-selected" : ""}" data-row="${index}"><a class="h-media" href="${escapeHtml(row.open)}" target="_blank" rel="noopener" data-index="${index}" title="Open">${shaped(picture, row)}${badges}</a>`
     + `<button type="button" class="h-pick" data-pick aria-pressed="${String(chosen.has(row))}" aria-label="Select">✓</button>`
@@ -563,7 +566,10 @@ function toggleRow(el: HTMLElement) {
 function aboutToRemove(rows: Row[], what: string) {
   const names = rows.slice(0, 5).map(row => shortName(row.saved));
   const more = rows.length - names.length;
-  const where = view === "seen" ? "from the history only" : "from this device and Downloads";
+  const external = rows.filter(row => row.external).length;
+  const where = view === "seen" ? "from the history only" : external === rows.length
+    ? "from the Library; their original downloads stay in Downloads"
+    : external ? `from the Library; ${plural(external, "original download")} stays in Downloads` : "from this device and Downloads";
   return `About to remove ${what} ${where}: ${names.join(", ")}${more > 0 ? ` and ${more.toLocaleString()} more` : ""}`;
 }
 
@@ -583,9 +589,11 @@ async function deleteChosen() {
     await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_REMOVE", urls: rows.map(row => row.saved)}).catch(() => undefined);
     savedRows = savedRows.filter(row => !chosen.has(row));
   }
+  const external = rows.filter(row => row.external).length;
   const message = view === "seen"
     ? `Removed ${rows.length.toLocaleString()} from the history`
-    : `Deleted ${rows.length.toLocaleString()} files, Downloads copies included`;
+    : external ? `Deleted ${rows.length.toLocaleString()} Library files; ${plural(external, "original download")} kept`
+      : `Deleted ${rows.length.toLocaleString()} files, Downloads copies included`;
   exitSelecting();
   await computeTags();
   await apply();
@@ -676,7 +684,8 @@ async function clearView() {
   } else {
     if (!clearStep.confirm("Press again to delete")) {
       const bytes = savedRows.reduce((sum, row) => sum + row.bytes!, 0);
-      $("summary").textContent = `About to delete every saved file: ${plural(savedRows.length, "file")} (${sizeLabel(bytes)}), Downloads copies included.`;
+      const external = savedRows.filter(row => row.external).length;
+      $("summary").textContent = `About to delete every saved file: ${plural(savedRows.length, "file")} (${sizeLabel(bytes)}), Downloads copies included${external ? ` except ${plural(external, "original download")} that stays` : ""}.`;
       return;
     }
     await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_CLEAR"});
@@ -692,9 +701,8 @@ function fileName(row: Row) {
 }
 
 /**
- * Measures every saved file and every history entry, removes what is below
- * the minimum media size (Downloads copies included), and fills in missing
- * Downloads copies.
+ * Finds exact duplicate files, measures every saved file and history entry,
+ * removes what is below the minimum media size, and fills in missing copies.
  */
 async function auditSaved() {
   $("summary").textContent = "Checking the saved files…";
@@ -707,7 +715,7 @@ async function auditSaved() {
   await computeTags();
   await apply();
   $("summary").textContent = result
-    ? `Checked every saved file and the history: removed ${plural(result.removed, "file")} and ${plural(result.historyRemoved, "history entry", "history entries")} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
+    ? `Checked every saved file and the history: removed ${plural(result.removed, "duplicate or undersized file", "duplicate or undersized files")} and ${plural(result.historyRemoved, "undersized history entry", "undersized history entries")}, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
     : "Couldn’t check the saved files.";
 }
 
@@ -745,7 +753,9 @@ function onAuditTick(tick: AuditTickMessage) {
 
 /** The ids of Downloads copies whose file is still on disk. */
 async function inDownloads() {
-  const found = await (chrome.downloads.search?.({filenameRegex: "LinkPeek Library"}) ?? Promise.resolve([])).catch(() => [] as chrome.downloads.DownloadItem[]);
+  // Some library rows (Tumblr downloads) live outside the LinkPeek Library
+  // folder, but their recorded download id still prevents a duplicate copy.
+  const found = await (chrome.downloads.search?.({}) ?? Promise.resolve([])).catch(() => [] as chrome.downloads.DownloadItem[]);
   return new Set(found.filter(item => item.exists !== false).map(item => item.id));
 }
 
@@ -828,6 +838,8 @@ function markSeen(row: Row) {
   if (row.seen) return;
   row.seen = true;
   gridStale = true;
+  // This is Library state, so it persists even when history/offline saving is disabled.
+  void chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_SEEN", url: row.saved}).catch(() => undefined);
   recordSeen(seenMedia, itemOf(row), settings);
 }
 
@@ -869,11 +881,11 @@ async function showItem(index: number) {
   viewing = (index + list.length) % list.length;
   const row = list[viewing], copy = await savedCopy(row.saved);
   if (viewed()[viewing] !== row) return;
-  // The saved copy works offline; without one, the original from the web. A slideshow's video plays once.
+  // The saved copy works offline; without one, the original from the web. Moving media plays once in a slideshow.
   const source = copy ?? row.open, stage = $("viewStage");
   stage.innerHTML = row.type === "video"
     ? `<video src="${escapeHtml(source)}" controls autoplay ${playing ? "" : "loop "}playsinline></video>`
-    : `<img src="${escapeHtml(source)}" alt="">`;
+    : row.type === "audio" ? `<audio src="${escapeHtml(source)}" controls autoplay></audio>` : `<img src="${escapeHtml(source)}" alt="">`;
   zoom.reset();
   const title = $("viewTitle") as HTMLAnchorElement;
   title.textContent = displayTitle(row);
@@ -886,16 +898,16 @@ async function showItem(index: number) {
   paintFavorite(row);
   markSeen(row);
   if (playing) {
-    stage.querySelector("video")?.addEventListener("ended", () => advance(), {once: true});
+    stage.querySelector("video, audio")?.addEventListener("ended", () => advance(), {once: true});
     queueAdvance(row);
   }
 }
 
-/** Lines up the next slide: a still waits the configured seconds, a video gets to play itself out. */
+/** Lines up the next slide: a still waits the configured seconds; video and audio get to play themselves out. */
 function queueAdvance(row: Row) {
   clearTimeout(playTimer);
   if (paused) return;
-  playTimer = setTimeout(advance, row.type === "video" ? PLAY_MAX_MS : Math.max(1, settings.slideshowSeconds) * 1000);
+  playTimer = setTimeout(advance, row.type === "video" || row.type === "audio" ? PLAY_MAX_MS : Math.max(1, settings.slideshowSeconds) * 1000);
 }
 
 function advance() {
@@ -953,7 +965,7 @@ function paintPause() {
  */
 function startSlideshow() {
   const pool = unseenPool();
-  playlist = (["gif", "video", "image"] as const).flatMap(type => shuffleRows(pool.filter(row => row.type === type)));
+  playlist = (["gif", "video", "audio", "image"] as const).flatMap(type => shuffleRows(pool.filter(row => row.type === type)));
   if (!playlist.length) {
     playlist = null;
     $("summary").textContent = "Nothing new to play: everything saved that matches has been seen.";
@@ -1009,15 +1021,23 @@ function step(delta: number) {
 
 async function saveViewed() {
   const row = viewed()[viewing];
+  if (row.dl !== undefined) {
+    const [download] = await chrome.downloads.search({id: row.dl}).catch(() => [] as chrome.downloads.DownloadItem[]);
+    if (download?.exists !== false) {
+      $("viewMeta").textContent = `${metaBase} · already in Downloads${modeSuffix()}`;
+      return;
+    }
+  }
   await chrome.downloads.download({url: await savedCopy(row.saved) ?? row.open, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
 }
 
-/** D: asks first, naming exactly what goes — the file and its Downloads copy, or the history entry. */
+/** D: asks first, naming exactly what goes — the Library file and any Library-owned Downloads copy, or the history entry. */
 function askDelete() {
   if (viewing < 0 || confirming) return;
   confirming = true;
   if (playing && !paused) togglePause();
-  const row = viewed()[viewing], what = view === "seen" && !playlist ? "Remove this from the history" : "Delete this file from this device and Downloads";
+  const row = viewed()[viewing], what = view === "seen" && !playlist ? "Remove this from the history"
+    : row.external ? "Delete this file from the Library (the original download stays)" : "Delete this file from this device and Downloads";
   const box = $("viewConfirm");
   box.innerHTML = `<span>${what}: <b>${escapeHtml(shortName(row.saved))}</b>?</span>`
     + `<button type="button" class="button danger" data-confirm="yes">Delete · Enter</button>`
@@ -1051,7 +1071,7 @@ async function confirmDelete() {
   const list = viewed();
   if (!list.length) {
     closeViewer();
-    $("summary").textContent = fromHistory ? "Removed from the history" : "Deleted, Downloads copy included";
+    $("summary").textContent = fromHistory ? "Removed from the history" : row.external ? "Deleted from the Library; original download kept" : "Deleted, Downloads copy included";
     return;
   }
   await showItem(Math.min(viewing, list.length - 1));
@@ -1193,11 +1213,12 @@ function bindStage() {
 /** The view and filter in the address, so the popup and the inspector can open "what was preloaded" directly. */
 function readAddress() {
   const params = new URLSearchParams(location.search);
+  ($("search") as HTMLInputElement).value = params.get("q") ?? "";
   view = params.get("view") === "saved" ? "saved" : "seen";
   const wanted = params.get("filter");
   filter = wanted === "unseen" || wanted === "seen" ? wanted : "all";
   const media = params.get("media");
-  kind = media === "gif" || media === "video" || media === "image" ? media : "all";
+  kind = media === "gif" || media === "video" || media === "audio" || media === "image" ? media : "all";
   favoritesOnly = params.get("fav") === "1";
   const order = params.get("sort");
   sort = order === "oldest" || order === "title" || order === "largest" ? order : "newest";
@@ -1207,6 +1228,8 @@ function readAddress() {
 
 function writeAddress() {
   const params = new URLSearchParams();
+  const query = ($("search") as HTMLInputElement).value.trim();
+  if (query) params.set("q", query);
   if (view === "saved") params.set("view", "saved");
   if (view === "saved" && filter !== "all") params.set("filter", filter);
   if (kind !== "all") params.set("media", kind);
@@ -1227,7 +1250,10 @@ function wire() {
   new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting) && rendered < shown.length) void renderMore();
   }, {rootMargin: "800px 0px"}).observe($("more"));
-  $("search").addEventListener("input", () => void apply());
+  $("search").addEventListener("input", () => {
+    writeAddress();
+    void apply();
+  });
   $("clear").addEventListener("click", () => void clearView());
   $("audit").addEventListener("click", () => void auditSaved());
   $("play").addEventListener("click", startSlideshow);

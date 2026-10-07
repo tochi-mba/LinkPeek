@@ -16,6 +16,7 @@ import {scanGeneric} from "./core/generic";
 import {bytesToBase64, fetchWithRetry, readBytesCapped} from "./core/http";
 import {underSized, type LinkKind, type ScanResult} from "./shared/media";
 import type {AuditTickMessage, BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
+import {mediaKey, SEEN_PREFIX} from "./shared/seen-media";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
 
 type CachedScan = {at: number; scanKey: string; result: ScanResult; seed?: DiscourseSeed};
@@ -31,12 +32,33 @@ const galleries = new GalleryStore();
 const fingerprints = new Fingerprinter();
 const history = new HistoryWriter();
 const library = new MediaLibrary();
-const tumblr = new TumblrDownloader();
+const tumblr = new TumblrDownloader(async (blog, media, downloadId) => {
+  // The explicit Tumblr copy already lives in Downloads. Keep a second,
+  // budgeted offline copy for the Library, but never mirror it to disk again.
+  const [settings, seen] = await Promise.all([currentSettings(), seenBefore(media.url)]);
+  const result = await library.save(media.url, {...libraryRules(settings), mirror: false}, {
+    seen, type: media.kind, source: media.sourceUrl || `https://www.tumblr.com/${encodeURIComponent(blog)}/${media.postId}`,
+    title: media.title || `@${blog} · post ${media.postId}`, original: media.url, dl: downloadId, external: true
+  });
+  if (result !== "duplicate") return true;
+  // The bytes already exist under another Tumblr post or address. Remove the
+  // just-finished duplicate download as well as its row in chrome://downloads.
+  await chrome.downloads.removeFile(downloadId).catch(() => undefined);
+  await chrome.downloads.erase({id: downloadId}).catch(() => undefined);
+  return false;
+});
 const binaries = new ByteCache<BinaryEntry>();
 const scanTasks = new Map<string, ScanTask>();
 const prefetchTasks = new Map<string, Promise<ScanResult | null>>();
 const binaryTasks = new Map<string, Promise<BinaryEntry>>();
 let settingsPromise: Promise<LinkPeekSettings> | undefined;
+
+/** Whether this address is already in LinkPeek's device-wide seen memory. */
+async function seenBefore(url: string) {
+  const key = mediaKey({originalUrl: url});
+  const stored = (await chrome.storage.local.get(SEEN_PREFIX + key[0]))[SEEN_PREFIX + key[0]];
+  return Array.isArray(stored) && stored.includes(key);
+}
 
 /** Settings stay in memory until they change, instead of being read from storage on every message. */
 function currentSettings() {
@@ -439,6 +461,10 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       tumblr.stop();
       sendResponse({ok: true});
       return false;
+    case "LINKPEEK_TUMBLR_REMOVE_QUEUED":
+      return respond(tumblr.removeQueued(msg.blog), sendResponse);
+    case "LINKPEEK_TUMBLR_CLEAR_QUEUE":
+      return respond(tumblr.clearQueue(), sendResponse);
     case "LINKPEEK_OPEN_TAB":
       return respond(chrome.tabs.create({url: msg.url, active: Boolean(msg.active), index: sender.tab ? sender.tab.index + 1 : undefined, openerTabId: sender.tab?.id}).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_TOGGLE_MIRROR":
@@ -474,6 +500,8 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(library.stats(), sendResponse);
     case "LINKPEEK_LIBRARY_CLEAR":
       return respond(library.clear().then(() => ({ok: true})), sendResponse);
+    case "LINKPEEK_LIBRARY_SEEN":
+      return respond(library.markSeen(msg.url).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_AUDIT":
       return respond(currentSettings().then(auditAll), sendResponse);
     case "LINKPEEK_FORGET_MEDIA":

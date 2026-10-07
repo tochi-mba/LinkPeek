@@ -21,6 +21,9 @@ export interface TumblrMedia {
   at: number;
   /** Its place among the post's files, from 1. */
   index: number;
+  /** The Tumblr post this file belongs to, and the post's summary when Tumblr supplied one. */
+  sourceUrl: string;
+  title?: string;
 }
 
 /** Paths on www.tumblr.com that are Tumblr's own pages, not blogs. */
@@ -75,9 +78,44 @@ function tumblrHosted(url: unknown): url is string {
   return typeof url === "string" && (/^https:\/\/(?:[a-z0-9-]+\.)*media\.tumblr\.com\//i.test(url) || /^https:\/\/[a-z0-9-]+\.tumblr\.com\/video_file\//i.test(url));
 }
 
-type Block = {type?: string; media?: unknown; url?: unknown; provider?: string};
+type Block = {type?: string; media?: unknown; url?: unknown; provider?: string; text?: unknown};
 type Media = {url?: unknown; type?: string; width?: number; has_original_dimensions?: boolean; media_key?: string};
-type Post = {object_type?: string; id_string?: string; timestamp?: number; content?: Block[]; trail?: Array<{content?: Block[]}>};
+type Post = {object_type?: string; id_string?: string; timestamp?: number; post_url?: string; summary?: string; tags?: unknown; content?: Block[]; trail?: Array<{content?: Block[]}>};
+
+/** Turns NPF caption text into a short, readable library title without needing a DOM. */
+function captionText(value: unknown) {
+  if (typeof value !== "string") return "";
+  const entities: Record<string, string> = {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", "#39": "'", nbsp: " "};
+  return value
+    .replace(/<br\s*\/?>|<\/(?:p|div|li|blockquote|h[1-6])>/gi, " ")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|#39|nbsp);/gi, (_, entity: string) => {
+      const lower = entity.toLowerCase();
+      if (lower.startsWith("#x")) return String.fromCodePoint(Number.parseInt(lower.slice(2), 16));
+      if (lower.startsWith("#") && lower !== "#39") return String.fromCodePoint(Number.parseInt(lower.slice(1), 10));
+      return entities[lower];
+    })
+    .replace(/\s+/g, " ").trim();
+}
+
+/** Summary/caption plus Tumblr's explicit tags, deliberately kept in the title so the Library tag miner can use them. */
+function titleOf(post: Post, blocks: Block[]) {
+  const rawCaption = captionText(post.summary) || blocks
+    .filter(block => block.type === "text")
+    .map(block => captionText(block.text))
+    .filter(Boolean).join(" ");
+  // Captions can be entire essays. Keep cards and tag mining useful while
+  // retaining the beginning a person will recognise.
+  const caption = rawCaption.length > 300 ? `${rawCaption.slice(0, 299).trimEnd()}…` : rawCaption;
+  const tags = Array.isArray(post.tags) ? post.tags
+    .filter((tag): tag is string => typeof tag === "string")
+    .map(tag => captionText(tag).replace(/^#+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 30)
+    .map(tag => `#${tag}`) : [];
+  const title = [caption, tags.join(" ")].filter(Boolean).join(" · ");
+  return title || undefined;
+}
 
 /** The best rendition of an image block: its original if marked, else the widest. */
 function bestImage(media: Media[]) {
@@ -88,11 +126,14 @@ function bestImage(media: Media[]) {
 export function mediaOf(post: Post): TumblrMedia[] {
   if (post.object_type !== "post" || !post.id_string) return [];
   const blocks = [...post.content ?? [], ...(post.trail ?? []).flatMap(item => item.content ?? [])];
-  const out: TumblrMedia[] = [], seen = new Set<string>(), at = (post.timestamp ?? 0) * 1000;
+  const out: TumblrMedia[] = [], seen = new Set<string>(), at = (post.timestamp ?? 0) * 1000, title = titleOf(post, blocks);
   const add = (url: unknown, type: string | undefined, kind: TumblrMedia["kind"], key?: string) => {
     if (!tumblrHosted(url) || seen.has(key ?? url)) return;
     seen.add(key ?? url);
-    out.push({key: key ?? url, url, ext: extensionFor(url, type, kind), kind, postId: post.id_string!, at, index: out.length + 1});
+    out.push({
+      key: key ?? url, url, ext: extensionFor(url, type, kind), kind, postId: post.id_string!, at, index: out.length + 1,
+      sourceUrl: post.post_url ?? "", title
+    });
   };
   for (const block of blocks) {
     if (block.type === "image" && Array.isArray(block.media) && block.media.length) {

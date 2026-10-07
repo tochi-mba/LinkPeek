@@ -110,12 +110,15 @@ describe("media", () => {
     expect([video.hasAttribute("autoplay"), video.hasAttribute("muted"), video.getAttribute("poster")]).toEqual([true, true, "poster.jpg"]);
     const quiet = html(markup.mediaMarkup(item({type: "video"}), resolveSettings({videoAutoplay: false, videoMuted: false}), false)).querySelector("video")!;
     expect([quiet.hasAttribute("autoplay"), quiet.hasAttribute("muted"), quiet.hasAttribute("poster")]).toEqual([false, false, false]);
+    const audio = html(markup.mediaMarkup(item({type: "audio", originalUrl: "https://x.test/song.mp3"}), settings, false)).querySelector("audio")!;
+    expect([audio.getAttribute("src"), audio.hasAttribute("controls"), audio.hasAttribute("autoplay")]).toEqual(["https://x.test/song.mp3", true, true]);
     expect(html(markup.mediaMarkup(item(), settings, false, true)).querySelector("[data-action=open]")).not.toBeNull();
   });
 
   it("gives a tip that fits the media, when tips are on", () => {
     expect(markup.tipText(item({type: "gif"}))).toContain("Space");
     expect(markup.tipText(item({type: "video"}))).toContain("video");
+    expect(markup.tipText(item({type: "audio"}))).toContain("sound");
     expect(markup.tipText(undefined)).toContain("Pinch");
     expect(html(markup.stageMarkup(item(), settings, false)).querySelector(".lp-tip")).not.toBeNull();
     expect(html(markup.stageMarkup(item(), resolveSettings({showLearningTips: false}), false)).querySelector(".lp-tip")).toBeNull();

@@ -46,6 +46,7 @@ export const overlayCss = `${rexCss}
 .lp-image, .lp-image-slot { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: 0 0; will-change: transform; user-select: none; -webkit-user-drag: none; }
 .lp-image-slot { width: 100%; height: 100%; }
 .lp-video { width: 100%; height: 100%; background: #000; }
+.lp-audio { width: min(640px, calc(100% - 48px)); }
 .lp-stage.lp-busy::after {
   content: ""; position: absolute; top: 0; left: 0; height: 2px; width: 40%; background: ${REX.signal};
   animation: lp-busy 0.9s ease-in-out infinite;

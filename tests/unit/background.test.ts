@@ -1,6 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {fakeCaches} from "./fake-caches";
 import type {ScanResult} from "../../src/shared/media";
+import {mediaKey, SEEN_PREFIX} from "../../src/shared/seen-media";
 import {SETTINGS_VERSION} from "../../src/shared/settings";
 
 const core = vi.hoisted(() => ({scanDiscourse: vi.fn(), prefetchDiscourse: vi.fn(), scanGeneric: vi.fn()}));
@@ -126,11 +127,59 @@ describe("Tumblr downloads", () => {
     const started = await send({type: "LINKPEEK_TUMBLR_START", blog: "demo"});
     expect(started).toMatchObject({async: false, value: {blog: "demo", phase: "collecting"}});
     await tick();
+    expect((await send({type: "LINKPEEK_TUMBLR_START", blog: "other"})).value.queue).toEqual(["other"]);
+    expect((await send({type: "LINKPEEK_TUMBLR_REMOVE_QUEUED", blog: "other"})).value.queue).toEqual([]);
+    await send({type: "LINKPEEK_TUMBLR_START", blog: "third"});
+    expect((await send({type: "LINKPEEK_TUMBLR_CLEAR_QUEUE"})).value.queue).toEqual([]);
     onDownloadChanged({id: 4, state: {current: "in_progress"}} as chrome.downloads.DownloadDelta);
     expect(await send({type: "LINKPEEK_TUMBLR_STOP"})).toMatchObject({async: false, value: {ok: true}});
     release();
     await tick();
     expect((await send({type: "LINKPEEK_TUMBLR_STATUS"})).value).toMatchObject({blog: "demo", phase: "stopped"});
+  });
+
+  it("puts completed posts in the Library with captions, tags, source and device-wide seen state", async () => {
+    fakeCaches();
+    const first = "https://64.media.tumblr.com/first.jpg", second = "https://64.media.tumblr.com/second.jpg", duplicate = "https://64.media.tumblr.com/copy.jpg", untitled = "https://64.media.tumblr.com/untitled.jpg";
+    const key = mediaKey({originalUrl: first});
+    store[SEEN_PREFIX + key[0]] = [key];
+    vi.mocked(chrome.downloads.download).mockImplementationOnce(async () => 71).mockImplementationOnce(async () => 72).mockImplementationOnce(async () => 73).mockImplementationOnce(async () => 74);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "https://www.tumblr.com/demo") return new Response('{"API_TOKEN":"token"}');
+      if (url.startsWith("https://www.tumblr.com/api/")) return Response.json({response: {total_posts: 4, posts: [
+        {object_type: "post", id_string: "1", timestamp: 10, post_url: "https://demo.tumblr.com/post/1", summary: "Beach caption", tags: ["summer"], content: [{type: "image", media: [{url: first}]}]},
+        {object_type: "post", id_string: "2", timestamp: 20, post_url: "https://demo.tumblr.com/post/2", tags: ["summer", "friends"], content: [{type: "text", text: "<p>Caption from NPF</p>"}, {type: "image", media: [{url: second}]}]},
+        {object_type: "post", id_string: "3", timestamp: 30, post_url: "https://demo.tumblr.com/post/3", summary: "Same file, another URL", content: [{type: "image", media: [{url: duplicate}]}]},
+        {object_type: "post", id_string: "4", timestamp: 40, content: [{type: "image", media: [{url: untitled}]}]}
+      ]}});
+      return new Response(new Uint8Array([url === first ? 1 : url === untitled ? 4 : 2, 0, 0, 0]), {headers: {"content-type": "image/jpeg"}});
+    }));
+    await send({type: "LINKPEEK_TUMBLR_START", blog: "demo"});
+    for (let i = 0; i < 20 && vi.mocked(chrome.downloads.download).mock.calls.length < 3; i++) await tick();
+    expect(chrome.downloads.download).toHaveBeenCalledTimes(3);
+    onDownloadChanged({id: 71, state: {current: "complete"}} as chrome.downloads.DownloadDelta);
+    for (let i = 0; i < 30 && vi.mocked(chrome.downloads.download).mock.calls.length < 4; i++) await tick();
+    expect(chrome.downloads.download).toHaveBeenCalledTimes(4);
+    onDownloadChanged({id: 72, state: {current: "complete"}} as chrome.downloads.DownloadDelta);
+    onDownloadChanged({id: 73, state: {current: "complete"}} as chrome.downloads.DownloadDelta);
+    onDownloadChanged({id: 74, state: {current: "complete"}} as chrome.downloads.DownloadDelta);
+    for (let i = 0; i < 30 && (await send({type: "LINKPEEK_LIBRARY_STATS"})).value.count < 3; i++) await tick();
+    for (let i = 0; i < 30 && !vi.mocked(chrome.downloads.removeFile).mock.calls.some(([id]) => id === 73); i++) await tick();
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toMatchObject({checked: 3, removed: 0, mirrored: 0});
+    let index = new Map(store.mediaIndex as Array<[string, any]>);
+    expect(index.get(first)).toMatchObject({
+      seen: true, type: "image", source: "https://demo.tumblr.com/post/1", title: "Beach caption · #summer",
+      original: first, dl: 71, external: true
+    });
+    expect(index.get(second)).toMatchObject({seen: false, title: "Caption from NPF · #summer #friends", dl: 72, external: true});
+    expect(index.get(untitled)).toMatchObject({source: "https://www.tumblr.com/demo/4", title: "@demo · post 4", dl: 74, external: true});
+    expect(chrome.downloads.download).toHaveBeenCalledTimes(4);
+    expect(chrome.downloads.removeFile).toHaveBeenCalledWith(73);
+    expect(chrome.downloads.erase).toHaveBeenCalledWith({id: 73});
+    expect((await send({type: "LINKPEEK_LIBRARY_SEEN", url: second})).value).toEqual({ok: true});
+    await send({type: "LINKPEEK_LIBRARY_AUDIT"});
+    index = new Map(store.mediaIndex as Array<[string, any]>);
+    expect(index.get(second)!.seen).toBe(true);
   });
 });
 
@@ -600,7 +649,7 @@ describe("galleries kept on the device", () => {
 describe("history and fingerprints", () => {
   it("save a first sighting's file for offline viewing, as settings allow, and report or delete the library", async () => {
     const api = fakeCaches();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(4), {headers: {"content-type": "image/jpeg"}})));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(new Uint8Array([url.includes("1-s") ? 1 : 2, 0, 0, 0]), {headers: {"content-type": "image/jpeg"}})));
     await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 1, o: "https://cdn.test/1.jpg", p: "https://cdn.test/1-s.jpg", t: "image", s: "https://x.test"}});
     await send({type: "LINKPEEK_HISTORY_ADD", entry: {a: 2, o: "https://cdn.test/2.gif", p: "https://cdn.test/2-s.gif", t: "gif", s: "https://x.test"}});
     for (let i = 0; i < 10; i++) await tick();
@@ -618,7 +667,7 @@ describe("history and fingerprints", () => {
     const api = fakeCaches();
     store.settings = {};
     onStorage({settings: {newValue: store.settings}}, "local");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(3), {headers: {"content-type": "image/jpeg"}})));
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(new Uint8Array([url.endsWith("b.mp4") ? 2 : 1, 0, 0]), {headers: {"content-type": "image/jpeg"}})));
     core.scanGeneric.mockImplementation(async (url: string) => ({...result(url, "generic", 2), items: [
       {id: "a", type: "image", originalUrl: `${url}/a.jpg`, previewUrl: `${url}/a-s.jpg`, sourceUrl: url, sourceTitle: "Page", score: 1},
       {id: "b", type: "video", originalUrl: `${url}/b.mp4`, previewUrl: `${url}/b.mp4`, posterUrl: `${url}/b.jpg`, sourceUrl: url, score: 1}

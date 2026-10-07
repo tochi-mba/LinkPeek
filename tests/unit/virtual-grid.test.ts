@@ -4,7 +4,7 @@ import {VirtualGrid} from "../../src/ui/virtual-grid";
 
 let frames: Array<() => void>, resized: Array<() => void>, disconnected: number;
 const items = (count: number): MediaItem[] => Array.from({length: count}, (_, n) => ({
-  id: `${n}`, type: n === 1 ? "gif" : n === 2 ? "video" : "image", originalUrl: `o${n}`, previewUrl: `p${n}`,
+  id: `${n}`, type: n === 1 ? "gif" : n === 2 ? "video" : n === 3 ? "audio" : "image", originalUrl: `o${n}`, previewUrl: n === 3 ? "" : `p${n}`,
   posterUrl: n === 2 ? "poster" : undefined, sourceUrl: "s", score: 1
 }));
 
@@ -53,6 +53,7 @@ describe("the virtual grid", () => {
     expect(tiles(el)[1].textContent).toContain("GIF");
     expect(tiles(el)[2].querySelector("img")!.getAttribute("src")).toBe("poster");
     expect(tiles(el)[2].textContent).toContain("VIDEO");
+    expect([tiles(el)[3].querySelector(".lp-thumb-glyph")!.textContent, tiles(el)[3].textContent]).toEqual(["♫", expect.stringContaining("AUDIO")]);
   });
 
   it("shows a play glyph for videos without a poster", () => {

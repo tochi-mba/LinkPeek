@@ -875,13 +875,13 @@ export class Viewer {
     const base = this.settings.slideshowSeconds * 1000, item = this.result?.items[this.index];
     if (!this.settings.slideshowPlayThrough || !item) return base;
     let playing = 0;
-    if (item.type === "video") {
-      const video = this.stage?.querySelector<HTMLVideoElement>(".lp-video");
-      if (video && (video.autoplay || !video.paused) && Number.isFinite(video.duration) && video.duration > 0) {
-        playing = (video.duration - video.currentTime) * 1000;
-      } else if (video?.readyState === 0) {
+    if (item.type === "video" || item.type === "audio") {
+      const media = this.stage?.querySelector<HTMLMediaElement>(item.type === "video" ? ".lp-video" : ".lp-audio");
+      if (media && (media.autoplay || !media.paused) && Number.isFinite(media.duration) && media.duration > 0) {
+        playing = (media.duration - media.currentTime) * 1000;
+      } else if (media?.readyState === 0) {
         // Its length is not known yet: look again once it is.
-        video.addEventListener("loadedmetadata", () => {
+        media.addEventListener("loadedmetadata", () => {
           if (this.slideshow && !this.slideshowPaused && this.result?.items[this.index] === item) this.queueSlide();
         }, {once: true});
       }

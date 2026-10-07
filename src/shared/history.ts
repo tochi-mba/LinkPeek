@@ -37,6 +37,10 @@ export interface LibraryEntry {
   h?: number;
   /** Its copy in Downloads / LinkPeek Library (a chrome.downloads id), once one was made. */
   dl?: number;
+  /** The copy came from an explicit download elsewhere and must outlive this cache entry. */
+  external?: boolean;
+  /** Exact content signature, used to keep byte-for-byte duplicates out. */
+  digest?: string;
 }
 
 /** The name a saved file gets under Downloads: the LinkPeek Library folder, the day, then the time, so folders sort in order. */

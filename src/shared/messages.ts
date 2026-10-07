@@ -22,6 +22,8 @@ export type HistoryClearRequest = {type: "LINKPEEK_HISTORY_CLEAR"};
 /** Settings page: how much saved media there is, or delete it all. */
 export type LibraryStatsRequest = {type: "LINKPEEK_LIBRARY_STATS"};
 export type LibraryClearRequest = {type: "LINKPEEK_LIBRARY_CLEAR"};
+/** Library page: opening a saved file marks that existing row seen, independently of offline-save settings. */
+export type LibrarySeenRequest = {type: "LINKPEEK_LIBRARY_SEEN"; url: string};
 /** Library page: measure every saved file, drop ones below the minimums, and fill in missing Downloads copies. */
 export type LibraryAuditRequest = {type: "LINKPEEK_LIBRARY_AUDIT"};
 /** Worker -> the library page: the check moved along, through the saved files and then the history. */
@@ -51,15 +53,20 @@ export interface TumblrJobState {
   skipped: number;
   collected: boolean;
   error?: string;
+  /** Blogs waiting behind this one, in order. */
+  queue?: string[];
 }
 export type TumblrStatusRequest = {type: "LINKPEEK_TUMBLR_STATUS"};
 export type TumblrStartRequest = {type: "LINKPEEK_TUMBLR_START"; blog: string};
 export type TumblrStopRequest = {type: "LINKPEEK_TUMBLR_STOP"};
+export type TumblrRemoveQueuedRequest = {type: "LINKPEEK_TUMBLR_REMOVE_QUEUED"; blog: string};
+export type TumblrClearQueueRequest = {type: "LINKPEEK_TUMBLR_CLEAR_QUEUE"};
 
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
-  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibraryAuditRequest | OpenLibraryRequest
-  | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest | TumblrStatusRequest | TumblrStartRequest | TumblrStopRequest;
+  | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibrarySeenRequest | LibraryAuditRequest | OpenLibraryRequest
+  | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest | TumblrStatusRequest | TumblrStartRequest | TumblrStopRequest
+  | TumblrRemoveQueuedRequest | TumblrClearQueueRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};

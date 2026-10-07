@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MediaLibrary, measure, svgSize, type AuditProgress, type LibraryRules} from "../../src/background/media-library";
+import {MediaLibrary, contentDigest, measure, svgSize, type AuditProgress, type LibraryRules} from "../../src/background/media-library";
 import {LIBRARY_CACHE, LIBRARY_INDEX, type LibraryEntry} from "../../src/shared/history";
 import {fakeCaches} from "./fake-caches";
 
@@ -11,6 +11,13 @@ const saved = () => [...(cachesApi.stores.get(LIBRARY_CACHE)?.keys() ?? [])];
 const index = () => new Map(store[LIBRARY_INDEX] as Array<[string, LibraryEntry]>);
 const seen = {seen: true}, prepared = {seen: false, type: "image" as const, source: "https://x.test/page", title: "Page"};
 const rules = (budget = 1000, patch: Partial<LibraryRules> = {}): LibraryRules => ({budget, minWidth: 50, minHeight: 50, mirror: false, ...patch});
+const fixtureBytes = (url: string, size: number) => {
+  const bytes = new Uint8Array(size);
+  let hash = 2166136261;
+  for (const char of url) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  for (let i = 0; i < Math.min(4, size); i++) bytes[i] = hash >>> (i * 8);
+  return bytes;
+};
 const settle = async () => {
   for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0);
 };
@@ -26,9 +33,11 @@ beforeEach(() => {
     get: vi.fn(async (key: string) => ({[key]: store[key]})),
     set: vi.fn(async (values: Record<string, unknown>) => Object.assign(store, values))
   }}});
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("missing")
-    ? new Response("", {status: 404})
-    : new Response(new Uint8Array(sizes[url] ?? 10), {headers: url.includes("untyped") ? {} : {"content-type": "image/jpeg"}})));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("missing")) return new Response("", {status: 404});
+    const bytes = fixtureBytes(url, sizes[url] ?? 10);
+    return new Response(bytes, {headers: url.includes("untyped") ? {} : {"content-type": "image/jpeg"}});
+  }));
   vi.stubGlobal("createImageBitmap", vi.fn(async (blob: Blob) => ({...(dims[blob.size] ?? {width: 500, height: 500}), close: () => undefined})));
 });
 afterEach(() => {
@@ -89,6 +98,49 @@ describe("the media library", () => {
     store[LIBRARY_INDEX] = "corrupt";
     expect(await new MediaLibrary().stats()).toEqual({count: 0, bytes: 0});
   });
+
+  it("clears queued and in-flight saves without letting them repopulate the Library", async () => {
+    const releases: Array<(response: Response) => void> = [];
+    vi.mocked(fetch).mockImplementation(() => new Promise(resolve => releases.push(resolve)));
+    const library = new MediaLibrary();
+    const saves = ["a", "b", "c"].map(name => library.save(`https://cdn.test/${name}.jpg`, rules(), seen));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(releases).toHaveLength(2);
+    await library.clear();
+    expect(await saves[2]).toBe("ignored");
+    releases.forEach((release, i) => release(new Response(new Uint8Array([i + 1]))));
+    await settle();
+    expect(await Promise.all(saves.slice(0, 2))).toEqual(["ignored", "ignored"]);
+    expect(saved()).toEqual([]);
+    expect(await library.stats()).toEqual({count: 0, bytes: 0});
+  });
+
+  it("cancels saves cleared during decoding or while equal bytes wait to be written", async () => {
+    let finishDecode!: () => void;
+    vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise(resolve => finishDecode = () => resolve({width: 500, height: 500, close: () => undefined}))));
+    const decodingLibrary = new MediaLibrary();
+    const decoding = decodingLibrary.save("https://cdn.test/decoding.jpg", rules(), seen);
+    while (!finishDecode) await vi.advanceTimersByTimeAsync(0);
+    await decodingLibrary.clear();
+    finishDecode();
+    await settle();
+    expect(await decoding).toBe("ignored");
+
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({width: 500, height: 500, close: () => undefined})));
+    vi.mocked(fetch).mockImplementation(async () => new Response(new Uint8Array([8, 6, 7, 5]), {headers: {"content-type": "image/jpeg"}}));
+    const cache = await cachesApi.open(LIBRARY_CACHE);
+    let finishOpen!: () => void;
+    cachesApi.open.mockImplementationOnce(() => new Promise(resolve => finishOpen = () => resolve(cache)));
+    const writingLibrary = new MediaLibrary();
+    const first = writingLibrary.save("https://cdn.test/first.jpg", rules(), seen);
+    const waiting = writingLibrary.save("https://cdn.test/waiting.jpg", rules(), seen);
+    while (!finishOpen) await vi.advanceTimersByTimeAsync(0);
+    await writingLibrary.clear();
+    finishOpen();
+    await settle();
+    expect(await Promise.all([first, waiting])).toEqual(["ignored", "ignored"]);
+    expect(saved()).toEqual([]);
+  });
 });
 
 describe("the smallest picture worth keeping", () => {
@@ -109,6 +161,20 @@ describe("the smallest picture worth keeping", () => {
 });
 
 describe("copies in Downloads", () => {
+  it("keeps byte-identical media only once even when its addresses differ", async () => {
+    vi.mocked(fetch).mockImplementation(async () => new Response(new Uint8Array([1, 2, 3, 4]), {headers: {"content-type": "image/jpeg"}}));
+    const library = new MediaLibrary();
+    const first = library.save("https://cdn.test/one.jpg", rules(), prepared);
+    await settle();
+    expect(await first).toBe("saved");
+    const second = library.save("https://cdn.test/two.jpg", rules(), seen);
+    await settle();
+    expect(await second).toBe("duplicate");
+    expect(saved()).toEqual(["https://cdn.test/one.jpg"]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(index().get("https://cdn.test/one.jpg")).toMatchObject({seen: true, digest: contentDigest(new Uint8Array([1, 2, 3, 4]).buffer)});
+  });
+
   it("writes each kept file into Downloads from its bytes, falling back to its address for huge files", async () => {
     const library = new MediaLibrary();
     vi.setSystemTime(new Date(2026, 9, 6, 9, 5, 7));
@@ -117,7 +183,7 @@ describe("copies in Downloads", () => {
     library.save("https://cdn.test/a.jpg", rules(1000, {mirror: true}), seen);
     await settle();
     expect(downloads.download).toHaveBeenCalledWith({
-      url: `data:image/jpeg;base64,${btoa("\u0000".repeat(10))}`,
+      url: `data:image/jpeg;base64,${btoa(String.fromCharCode(...fixtureBytes("https://cdn.test/a.jpg", 10)))}`,
       filename: "LinkPeek Library/2026-10-06/09.05.07 a.jpg", conflictAction: "uniquify", saveAs: false
     });
     await vi.advanceTimersByTimeAsync(5000);
@@ -155,9 +221,55 @@ describe("copies in Downloads", () => {
     expect(saved()).not.toContain("https://cdn.test/old.jpg");
     expect(downloads.removeFile).toHaveBeenCalledWith(7);
   });
+
+  it("adopts an explicit download without duplicating or deleting it, and can mark it seen", async () => {
+    store[LIBRARY_INDEX] = [["https://cdn.test/tumblr.jpg", {bytes: 10, at: 1, seen: false, type: "image"}]];
+    const library = new MediaLibrary();
+    library.save("https://cdn.test/tumblr.jpg", rules(1000, {mirror: true}), {
+      seen: false, type: "image", source: "https://demo.tumblr.com/post/1", original: "https://cdn.test/tumblr.jpg", dl: 41, external: true
+    });
+    await settle();
+    await library.markSeen("https://cdn.test/tumblr.jpg");
+    await library.markSeen("https://cdn.test/missing.jpg");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(index().get("https://cdn.test/tumblr.jpg")).toMatchObject({seen: true, dl: 41, external: true});
+    expect(downloads.download).not.toHaveBeenCalled();
+    await library.remove("https://cdn.test/tumblr.jpg");
+    expect(downloads.removeFile).not.toHaveBeenCalled();
+    expect(downloads.erase).not.toHaveBeenCalled();
+  });
+
+  it("still lists an explicit download when its web copy cannot be cached", async () => {
+    const library = new MediaLibrary();
+    library.save("https://cdn.test/missing.jpg", rules(1000), {
+      seen: false, type: "image", source: "https://demo.tumblr.com/post/2", original: "https://cdn.test/missing.jpg", dl: 42, external: true
+    });
+    await settle();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(index().get("https://cdn.test/missing.jpg")).toMatchObject({bytes: 0, seen: false, dl: 42, external: true});
+    expect(saved()).not.toContain("https://cdn.test/missing.jpg");
+  });
 });
 
 describe("checking what is already saved", () => {
+  it("finds old byte-identical files, keeps the favourite, and removes even an explicit duplicate download", async () => {
+    const cache = await caches.open(LIBRARY_CACHE), bytes = new Uint8Array([9, 8, 7]);
+    await cache.put("https://cdn.test/old.jpg", new Response(bytes));
+    await cache.put("https://cdn.test/favourite.jpg", new Response(bytes));
+    await cache.put("https://cdn.test/new-copy.jpg", new Response(bytes));
+    store.favoriteMedia = ["https://cdn.test/favourite.jpg"];
+    store[LIBRARY_INDEX] = [
+      ["https://cdn.test/old.jpg", {bytes: 3, at: 1, seen: true, type: "image", w: 500, h: 500, dl: 31, external: true}],
+      ["https://cdn.test/favourite.jpg", {bytes: 3, at: 2, seen: true, type: "image", w: 500, h: 500, dl: 32, external: true}],
+      ["https://cdn.test/new-copy.jpg", {bytes: 3, at: 3, seen: true, type: "image", w: 500, h: 500, dl: 33, external: true}]
+    ];
+    expect(await new MediaLibrary().audit(rules())).toEqual({checked: 3, removed: 2, mirrored: 0});
+    expect([...index().keys()]).toEqual(["https://cdn.test/favourite.jpg"]);
+    expect(downloads.removeFile).toHaveBeenCalledWith(31);
+    expect(downloads.removeFile).toHaveBeenCalledWith(33);
+    expect(downloads.erase).toHaveBeenCalledWith({id: 31});
+  });
+
   it("measures unmeasured pictures, removes too-small ones everywhere, and fills in missing Downloads copies", async () => {
     const tiny = new Response(new Uint8Array(3), {headers: {"content-type": "image/jpeg"}});
     const good = new Response(new Uint8Array(10), {headers: {"content-type": "image/jpeg"}});
@@ -284,6 +396,7 @@ describe("measuring pictures", () => {
 
   it("tries every picture whatever its declared type, skips video, and spots an SVG served as anything", async () => {
     expect(await measure(bytes("x"), "video/mp4")).toBeUndefined();
+    expect(await measure(bytes("x"), "audio/mpeg")).toBeUndefined();
     expect(await measure(bytes(`<svg width="24" height="24"></svg>`), "application/octet-stream")).toEqual({w: 24, h: 24});
     expect(await measure(bytes(`<svg viewBox="0 0 30 20"/>`), "image/svg+xml")).toEqual({w: 30, h: 20});
     expect(await measure(bytes("png"), "")).toEqual({w: 500, h: 500});

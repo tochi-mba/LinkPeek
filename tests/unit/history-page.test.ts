@@ -39,6 +39,7 @@ const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.qu
 
 async function open(entries: HistoryEntry[] | null) {
   vi.resetModules();
+  history.replaceState(null, "", "/history.html");
   loadPage("history.html");
   harness = stubExtension({});
   if (entries) {
@@ -361,7 +362,7 @@ describe("the saved view", () => {
     });
     $("#audit").click();
     await settle();
-    expect($("#summary").textContent).toBe("Checked every saved file and the history: removed 1 file and 2 history entries below your minimum size, added 0 to Downloads / LinkPeek Library.");
+    expect($("#summary").textContent).toBe("Checked every saved file and the history: removed 1 duplicate or undersized file and 2 undersized history entries, added 0 to Downloads / LinkPeek Library.");
     expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
     // When the worker cannot answer, the page says so instead of staying stuck on "checking".
     harness.chrome.runtime.sendMessage.mockRejectedValueOnce(new Error("gone"));
@@ -536,6 +537,32 @@ describe("selecting many at once, and the live check line", () => {
     await settle();
     expect($("#summary").textContent).toBe("About to remove 7 files from this device and Downloads: m0.jpg, m1.jpg, m2.jpg, m3.jpg, m4.jpg and 2 more");
     $("#selCancel").click();
+  });
+
+  it("explains which original Tumblr downloads stay when Library rows are removed", async () => {
+    const now = Date.now();
+    const external = ["https://media.tumblr.com/a.jpg", {bytes: 1, at: now, seen: true, type: "image", external: true, dl: 41}] as const;
+    await openLibrary([external, ["https://cdn.test/b.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", dl: 42}]], "?view=saved");
+    $("#select").click();
+    $("#selAll").click();
+    $("#selDelete").click();
+    await settle();
+    expect($("#summary").textContent).toBe("About to remove 2 files from the Library; 1 original download stays in Downloads: a.jpg, b.jpg");
+    $("#selCancel").click();
+
+    await openLibrary([external], "?view=saved");
+    document.querySelector<HTMLButtonElement>("[data-pick]")!.click();
+    $("#selDelete").click();
+    await settle();
+    expect($("#summary").textContent).toBe("About to remove 1 file from the Library; their original downloads stay in Downloads: a.jpg");
+    $("#selDelete").click();
+    await settle();
+    expect($("#summary").textContent).toBe("Deleted 1 Library files; 1 original download kept");
+
+    await openLibrary([external], "?view=saved");
+    $("#clear").click();
+    await settle();
+    expect($("#summary").textContent).toBe("About to delete every saved file: 1 file (1 KB), Downloads copies included except 1 original download that stays.");
   });
 
   it("removes picked entries from the history in the seen view, and forgets picks that filters hide", async () => {
@@ -845,6 +872,41 @@ describe("tags, order and the slideshow", () => {
     chip('[data-kind="video"]').click();
     await settle();
     expect($("#summary").textContent).toBe("Nothing here carries \u201calice\u201d.");
+  });
+
+  it("shows Tumblr captions and audio, mines their tags, and marks an opened download seen everywhere", async () => {
+    const at = now();
+    await openLibrary([
+      ["https://media.tumblr.com/song.mp3", {bytes: 12, at, seen: false, type: "audio", title: "Sunset song · #summer", source: "https://demo.tumblr.com/post/1", original: "https://media.tumblr.com/song.mp3", dl: 71, external: true}],
+      ["https://media.tumblr.com/beach.jpg", {bytes: 10, at: at - 1, seen: false, type: "image", title: "Beach caption · #summer", source: "https://demo.tumblr.com/post/2"}],
+      ["https://media.tumblr.com/city.jpg", {bytes: 9, at: at - 2, seen: false, type: "image", title: "City caption · #night", source: "https://demo.tumblr.com/post/3"}],
+      ["https://media.tumblr.com/moon.jpg", {bytes: 8, at: at - 3, seen: false, type: "image", title: "Moon caption · #night", source: "https://demo.tumblr.com/post/4"}]
+    ], "?view=saved");
+    expect([...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")].map(button => button.dataset.tag)).toContain("summer");
+    chip('[data-tag="summer"]').click();
+    await settle();
+    chip('[data-kind="audio"]').click();
+    await settle();
+    expect([location.search, $("#summary").textContent, document.querySelector(".h-badge")!.textContent]).toEqual([
+      "?view=saved&media=audio&tag=summer", "1 audio file, newest first · 1 KB on this device", "♫ AUDIO"
+    ]);
+    document.querySelector<HTMLElement>('[data-index="0"]')!.click();
+    await settle();
+    expect([$("#viewStage").querySelector("audio")?.getAttribute("src"), $("#viewTitle").textContent, $("#viewTitle").getAttribute("href")]).toEqual([
+      "https://media.tumblr.com/song.mp3", "Sunset song · #summer", "https://demo.tumblr.com/post/1"
+    ]);
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_LIBRARY_SEEN", url: "https://media.tumblr.com/song.mp3"});
+    const download = vi.fn();
+    harness.chrome.downloads = {download, search: vi.fn(async () => [{id: 71, exists: true}])};
+    $("#viewSave").click();
+    await settle();
+    expect([download.mock.calls.length, $("#viewMeta").textContent]).toEqual([0, expect.stringContaining("already in Downloads")]);
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "d", bubbles: true}));
+    expect($("#viewConfirm").textContent).toContain("Delete this file from the Library (the original download stays)");
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    await settle();
+    expect(document.querySelectorAll(".h-new")).toHaveLength(0);
   });
 
   it("stacks tags, each pick narrowing the chips to what still has results", async () => {
@@ -1426,6 +1488,20 @@ describe("the full-size viewer", () => {
     // With the viewer closed, D and Enter do nothing.
     press("d");
     press("Enter");
+  });
+
+  it("keeps an original Tumblr download when its last Library row is deleted", async () => {
+    await openLibrary([["https://media.tumblr.com/only.jpg", {bytes: 1, at: Date.now(), seen: true, type: "image", title: "Tumblr post", external: true, dl: 77}]], "?view=saved");
+    const download = vi.fn(async () => 9);
+    harness.chrome.downloads = {download, search: vi.fn(async () => [{id: 77, exists: false}])};
+    await view(0);
+    $("#viewSave").click();
+    await settle();
+    expect(download).toHaveBeenCalledOnce();
+    press("d");
+    press("Enter");
+    await settle();
+    expect([$("#view").hidden, $("#summary").textContent]).toEqual([true, "Deleted from the Library; original download kept"]);
   });
 
   it("stars favourites with B, shows and filters them, and keeps the filter in the address", async () => {
