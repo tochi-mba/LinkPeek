@@ -143,17 +143,22 @@ describe("the settings page", () => {
 
   it("clears the saved note after a moment, leaving longer notes up for longer", async () => {
     await open();
-    vi.useFakeTimers({shouldAdvanceTime: true});
-    await change(field("enabled").querySelector("input")!, false);
-    vi.advanceTimersByTime(1200);
-    expect(document.querySelector("#saved")!.textContent).toBe("");
-    const form = $<HTMLFormElement>("[data-site-form]");
-    form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
-    await settle();
-    vi.advanceTimersByTime(1200);
-    expect(document.querySelector("#saved")!.textContent).toBe("Enter a site like example.com");
-    vi.advanceTimersByTime(600);
-    expect(document.querySelector("#saved")!.textContent).toBe("");
+    // The note's own timers are checked directly, so a slow machine cannot outrun them.
+    const timers = vi.spyOn(window, "setTimeout");
+    try {
+      await change(field("enabled").querySelector("input")!, false);
+      const form = $<HTMLFormElement>("[data-site-form]");
+      form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+      await settle();
+      const notes = timers.mock.calls.filter(([, delay]) => (delay ?? 0) >= 1200);
+      // A short note stays 1.2 s; a longer one 60 ms a character.
+      expect(notes.map(([, delay]) => delay)).toEqual([1200, "Enter a site like example.com".length * 60]);
+      expect(document.querySelector("#saved")!.textContent).toBe("Enter a site like example.com");
+      (notes[1][0] as () => void)();
+      expect(document.querySelector("#saved")!.textContent).toBe("");
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("ignores changes from elements that are not settings", async () => {
@@ -208,10 +213,15 @@ describe("saved media", () => {
     await settle();
     const button = () => field("saveMediaOffline").querySelector<HTMLButtonElement>("[data-clear-library]")!;
     expect(button().textContent).toBe(`Delete saved media (${(1200).toLocaleString()} · 1.50 GB)`);
+    // The note clears itself after a moment on a real timer; record what it showed instead of racing that timer.
+    const notes: string[] = [], note = document.querySelector("#saved")!;
+    const watcher = new MutationObserver(() => notes.push(note.textContent ?? ""));
+    watcher.observe(note, {childList: true, characterData: true, subtree: true});
     await click(button());
+    watcher.disconnect();
     expect(harness.chrome.runtime.sendMessage).toHaveBeenLastCalledWith({type: "LINKPEEK_LIBRARY_CLEAR"});
     expect([button().textContent, button().disabled]).toEqual(["Nothing saved yet", true]);
-    expect(document.querySelector("#saved")!.textContent).toBe("Deleted all saved media");
+    expect(notes).toContain("Deleted all saved media");
   });
 });
 
@@ -226,10 +236,14 @@ describe("what has been seen", () => {
     await import("../../src/pages/options");
     await settle();
     expect([button().textContent, button().disabled]).toEqual(["Forget what I have seen (2)", false]);
+    const notes: string[] = [], note = document.querySelector("#saved")!;
+    const watcher = new MutationObserver(() => notes.push(note.textContent ?? ""));
+    watcher.observe(note, {childList: true, characterData: true, subtree: true});
     await click(button());
+    watcher.disconnect();
     expect(harness.store["seenMedia:a"]).toBeUndefined();
     expect([button().textContent, button().disabled]).toEqual(["Nothing remembered yet", true]);
-    expect(document.querySelector("#saved")!.textContent).toBe("Forgot everything you have seen");
+    expect(notes).toContain("Forgot everything you have seen");
   });
 
   it("opens even when what was seen cannot be counted", async () => {
