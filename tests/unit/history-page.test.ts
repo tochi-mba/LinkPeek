@@ -571,7 +571,9 @@ describe("selecting many at once, and the live check line", () => {
         ["https://cdn.test/anim.gif", {bytes: 1, at: now, seen: true, type: "gif", title: "Anim", preview: "https://cdn.test/anim-s.jpg", original: "https://x.test/anim.gif"}],
         ["https://cdn.test/pic.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "Pic"}],
         ["https://cdn.test/bare.gif", {bytes: 1, at: now - 2, seen: true, type: "gif", title: "Bare"}],
-        ["https://cdn.test/web.gif", {bytes: 1, at: now - 3, seen: true, type: "gif", title: "Web", preview: "https://cdn.test/web-s.jpg", original: "https://x.test/web.gif"}]
+        ["https://cdn.test/web.gif", {bytes: 1, at: now - 3, seen: true, type: "gif", title: "Web", preview: "https://cdn.test/web-s.jpg", original: "https://x.test/web.gif"}],
+        ["https://cdn.test/clip.mp4", {bytes: 1, at: now - 4, seen: true, type: "video", title: "Clip", preview: "https://cdn.test/clip-s.jpg", original: "https://x.test/clip.mp4"}],
+        ["https://cdn.test/bare.mp4", {bytes: 1, at: now - 5, seen: true, type: "video", title: "Bare clip", original: "https://x.test/bare.mp4"}]
       ];
       await (await api.open(LIBRARY_CACHE)).put("https://cdn.test/anim.gif", new Response("gifbytes"));
       await import("../../src/pages/history");
@@ -603,11 +605,35 @@ describe("selecting many at once, and the live check line", () => {
     $("#days").dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
     await settle();
     expect(tiles[1].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/pic.jpg");
-    // Off (the default), hovering changes nothing.
+    // Off (the default), hovering a GIF changes nothing.
     const off = await openWith({});
     off[0].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
     await settle();
     expect(off[0].querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/anim-s.jpg");
+    // Videos play on hover by default: muted, looping, over the still, and gone again on leave.
+    const clip = off[4];
+    clip.dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    const playing = clip.querySelector<HTMLVideoElement>("video.h-hoverplay")!;
+    expect([playing.getAttribute("src"), playing.muted, playing.loop]).toEqual(["https://x.test/clip.mp4", true, true]);
+    expect(clip.querySelector("img")!.getAttribute("src")).toBe("https://cdn.test/clip-s.jpg");
+    clip.dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
+    expect(clip.querySelector("video")).toBeNull();
+    // A video without a still plays over its placeholder just the same.
+    off[5].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(off[5].querySelector("video.h-hoverplay")).not.toBeNull();
+    off[5].dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
+    // Leaving before the file is ready: nothing starts playing afterwards.
+    clip.dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    clip.dispatchEvent(new MouseEvent("mouseout", {bubbles: true}));
+    await settle();
+    expect(clip.querySelector("video")).toBeNull();
+    // With the video setting off, nothing plays.
+    const quiet = await openWith({libraryVideoHover: false});
+    quiet[4].dispatchEvent(new MouseEvent("mouseover", {bubbles: true}));
+    await settle();
+    expect(quiet[4].querySelector("video")).toBeNull();
   });
 
   it("narrates the saved-files check on one line as the worker reports it", async () => {
@@ -779,8 +805,12 @@ describe("tags, order and the slideshow", () => {
 
   it("stores the mined tags on this device, and reuses them while the titles are unchanged", async () => {
     await openLibrary(aliceRows(), "?view=saved");
+    // Written once things settle, not on every change.
+    expect(harness.chrome.storage.local.set.mock.calls.some(([values]: any[]) => values.libraryTags)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
     const write = harness.chrome.storage.local.set.mock.calls.find(([values]: any[]) => values.libraryTags);
-    expect(write[0].libraryTags.tags.map((mined: any) => mined.key)).toEqual(["alice", "bob"]);
+    const entries = write[0].libraryTags as Array<{key: string; tags: Array<{key: string}>}>;
+    expect(entries.some(entry => entry.tags.map(tag => tag.key).join() === "alice,bob")).toBe(true);
     const cached = harness.store.libraryTags;
     // Reopened with the same titles: the stored copy serves, and nothing is rewritten.
     bands.all.length = 0;
@@ -792,8 +822,97 @@ describe("tags, order and the slideshow", () => {
     harness = stubExtension({}, {libraryTags: cached, mediaIndex: aliceRows()});
     await import("../../src/pages/history");
     await settle();
+    await vi.advanceTimersByTimeAsync(1000);
     expect(harness.chrome.storage.local.set.mock.calls.some(([values]: any[]) => values.libraryTags)).toBe(false);
     expect([...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")].map(button => button.textContent)).toEqual(["Alice", "Bob"]);
+  });
+
+  it("ignores a stored cache it cannot use, and keeps only the most recent minings", async () => {
+    // An older format, a broken entry: both ignored, and mining works as usual.
+    bands.all.length = 0;
+    fakeCaches();
+    history.replaceState(null, "", "/history.html?view=saved");
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({}, {libraryTags: [{key: 5}, null], mediaIndex: aliceRows()});
+    await import("../../src/pages/history");
+    await settle();
+    expect([...document.querySelectorAll<HTMLButtonElement>("#tags [data-tag]")].map(button => button.textContent)).toEqual(["Alice", "Bob"]);
+  });
+
+  it("keeps only the most recent minings, however many views are visited", async () => {
+    const now = Date.now();
+    const subjects = Array.from({length: 14}, (_, i) => `subj${String(i).padStart(2, "0")}`);
+    await openLibrary(subjects.flatMap((name, i) => [
+      [`https://cdn.test/${name}a.jpg`, {bytes: 1, at: now - i * 2, seen: true, type: "image", title: `${name} aa${i}`}],
+      [`https://cdn.test/${name}b.jpg`, {bytes: 1, at: now - i * 2 - 1, seen: true, type: "image", title: `${name} bb${i}`}]
+    ]), "?view=saved");
+    // Each tag alone narrows to a different set of titles, mined once each.
+    for (const name of subjects) {
+      chip(`#tags [data-tag="${name}"]`).click();
+      await settle();
+      chip(`#tags [data-tag="${name}"]`).click();
+      await settle();
+    }
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((harness.store.libraryTags as unknown[]).length).toBe(12);
+  });
+
+  it("combines picked tags as all or any, and plays exactly what the tags let through", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/ab.jpg", {bytes: 1, at: now - 1, seen: false, type: "image", title: "Alice Bob duo"}],
+      ["https://cdn.test/a1.mp4", {bytes: 1, at: now - 2, seen: false, type: "video", title: "Alice solo one"}],
+      ["https://cdn.test/a2.gif", {bytes: 1, at: now - 3, seen: false, type: "gif", title: "Alice solo two"}],
+      ["https://cdn.test/b1.jpg", {bytes: 1, at: now - 4, seen: false, type: "image", title: "Bob alone one"}],
+      ["https://cdn.test/b2.jpg", {bytes: 1, at: now - 5, seen: true, type: "image", title: "Bob alone two"}],
+      ["https://cdn.test/c1.jpg", {bytes: 1, at: now - 6, seen: false, type: "image", title: "Carol here one"}],
+      ["https://cdn.test/c2.jpg", {bytes: 1, at: now - 7, seen: false, type: "image", title: "Carol here two"}]
+    ], "?view=saved&tag=alice,bob");
+    // Two tags on: they must both be carried, and a chip says so.
+    expect([chip("#tagMode").textContent, document.querySelectorAll(".h-tile").length]).toEqual(["Match all", 1]);
+    expect($("#play").textContent).toBe("▶ Play unseen · 1");
+    chip("#tagMode").click();
+    await settle();
+    expect(new URLSearchParams(location.search).get("match")).toBe("any");
+    expect([chip("#tagMode").textContent, document.querySelectorAll(".h-tile").length]).toEqual(["Match any", 5]);
+    // Matching any, the rest of the collection's tags stay on offer for widening.
+    expect([...document.querySelectorAll<HTMLElement>("#tags [data-tag]")].map(button => button.dataset.tag)).toContain("carol here");
+    // The play button counts only what is unseen among them.
+    expect($("#play").textContent).toBe("▶ Play unseen · 4");
+    $("#play").click();
+    await settle();
+    // Moving media leads: the GIF, then the video, then the pictures.
+    const order: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      order.push($("#viewTitle").textContent!);
+      document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight"}));
+      await settle();
+    }
+    expect(order.slice(0, 2)).toEqual(["Alice solo two", "Alice solo one"]);
+    expect(new Set(order.slice(2))).toEqual(new Set(["Alice Bob duo", "Bob alone one"]));
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape"}));
+    await settle();
+    // Everything that played is seen now, so nothing is left to count.
+    expect($("#play").textContent).toBe("▶ Play unseen");
+    expect($("#summary").textContent).not.toContain("Nothing");
+    // With nothing at all carrying the tags, the empty state says how they combine.
+    chip('[data-kind="video"]').click();
+    chip('[data-filter="unseen"]').click();
+    await settle();
+    expect($("#summary").textContent).toBe("Nothing here carries \u201calice\u201d or \u201cbob\u201d.");
+    // Back to one tag, the mode chip goes and the address forgets the mode.
+    chip('#tags [data-tag="bob"]').click();
+    await settle();
+    expect([document.getElementById("tagMode"), new URLSearchParams(location.search).get("match")]).toEqual([null, null]);
+  });
+
+  it("opens straight into match-any from the address, and flips back to match-all", async () => {
+    await openLibrary(aliceRows(), "?view=saved&tag=alice,bob&match=any");
+    expect([chip("#tagMode").textContent, document.querySelectorAll(".h-tile").length]).toEqual(["Match any", 6]);
+    chip("#tagMode").click();
+    await settle();
+    expect([chip("#tagMode").textContent, new URLSearchParams(location.search).get("match"), document.querySelectorAll(".h-tile").length]).toEqual(["Match all", null, 0]);
   });
 
   it("keeps an address tag as a pressed chip even when nothing offers it, and hides an empty row", async () => {

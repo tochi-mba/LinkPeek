@@ -158,6 +158,8 @@ export interface LinkPeekSettings {
   saveToDownloads: boolean;
   /** Library tiles hold a GIF still until the pointer rests on them. */
   libraryGifHover: boolean;
+  /** Library video tiles play, muted, while the pointer rests on them. */
+  libraryVideoHover: boolean;
 
   // Keyboard and sites
   shortcuts: Shortcuts;
@@ -316,6 +318,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   savedMediaBudgetMb: 2048,
   saveToDownloads: true,
   libraryGifHover: false,
+  libraryVideoHover: true,
 
   shortcuts: DEFAULT_SHORTCUTS,
   siteProfiles: {},

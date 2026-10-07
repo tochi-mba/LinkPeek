@@ -82,8 +82,10 @@ let sort: Sort = "newest";
 const INLINE_TAGS = 24;
 /** The All-tags panel is open. */
 let tagsOpen = false;
-/** The tags switched on, in the order they were picked; rows must carry them all. */
+/** The tags switched on, in the order they were picked. */
 let activeTags: string[] = [];
+/** Whether rows must carry every active tag, or any one of them. */
+let tagMode: "all" | "any" = "all";
 /** The display spelling of every tag ever offered, so a pressed chip keeps its label. */
 const tagLabels = new Map<string, string>();
 let settings: LinkPeekSettings = DEFAULT_SETTINGS;
@@ -232,16 +234,29 @@ function rowHasTag(row: Row, key: string) {
   return hit;
 }
 
-/** The rows of the current view, seen-state filter, kind of media and every active tag, before searching. */
-function current() {
-  let base = view === "seen" ? seenRows : filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
-  if (kind !== "all") base = base.filter(row => row.type === kind);
-  for (const key of activeTags) base = base.filter(row => rowHasTag(row, key));
-  return base;
+/** Whether a row passes the active tags: every one of them, or any, as chosen. */
+function matchesTags(row: Row) {
+  if (!activeTags.length) return true;
+  return tagMode === "all" ? activeTags.every(key => rowHasTag(row, key)) : activeTags.some(key => rowHasTag(row, key));
 }
 
-/** Mining is deterministic, so each set of titles is mined once per session. */
-const tagMineMemo = new Map<string, TitleTag[]>();
+/** The rows of the current view, seen-state filter and kind of media, before tags and searching. */
+function untagged() {
+  const base = view === "seen" ? seenRows : filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
+  return kind === "all" ? base : base.filter(row => row.type === kind);
+}
+
+/** The rows of the current view, seen-state filter, kind of media and tags, before searching. */
+function current() {
+  return untagged().filter(matchesTags);
+}
+
+type MinedEntry = {key: string; tags: TitleTag[]};
+/** How many minings are kept, in memory and on this device. */
+const MINED_KEEP = 12;
+/** Recent minings, newest first; shared with the stored copy, so reopening the page repeats none of the work. */
+let mined: MinedEntry[] = [];
+let minedSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** A cheap fingerprint of the titles, for the memo and the stored cache. */
 function titlesKey(titles: readonly string[]) {
@@ -256,40 +271,46 @@ function titlesKey(titles: readonly string[]) {
   return `${titles.length}:${(hash >>> 0).toString(36)}`;
 }
 
+/** The tags these titles earn: from a recent mining when the same titles were mined before, else mined now. */
 function minedTags(titles: string[]): TitleTag[] {
   const key = titlesKey(titles);
-  let mined = tagMineMemo.get(key);
-  if (!mined) {
-    tagMineMemo.set(key, mined = mineTags(titles));
-    while (tagMineMemo.size > 32) tagMineMemo.delete(tagMineMemo.keys().next().value!);
+  let entry = mined.find(candidate => candidate.key === key);
+  if (!entry) {
+    entry = {key, tags: mineTags(titles)};
+    mined = [entry, ...mined].slice(0, MINED_KEEP);
+    // Written once things settle, not on every filter change.
+    clearTimeout(minedSaveTimer);
+    minedSaveTimer = setTimeout(() => void chrome.storage.local.set({libraryTags: mined}).catch(() => undefined), 1000);
   }
-  return mined;
+  return entry.tags;
 }
 
 /**
- * Seeds the mining for the whole collection — from the copy stored on this
- * device when the titles have not changed, so reopening the page never
- * repeats the work — and remembers every tag's display spelling.
+ * Loads the minings stored on this device (a cache that cannot be read just
+ * means mining afresh), then mines the whole collection — usually straight
+ * from that cache — to learn every tag's display spelling.
  */
 async function computeTags() {
-  const titles = [...seenRows, ...savedRows].map(row => row.title ?? "");
-  const key = titlesKey(titles);
-  // A cache that cannot be read just means mining afresh.
-  const stored = (await chrome.storage.local.get("libraryTags").catch(() => ({})) as Record<string, unknown>)["libraryTags"] as {key: string; tags: TitleTag[]} | undefined;
-  if (stored?.key === key) tagMineMemo.set(key, stored.tags);
-  const all = minedTags(titles);
-  for (const mined of all) tagLabels.set(mined.key, mined.label);
-  if (stored?.key !== key) void chrome.storage.local.set({libraryTags: {key, tags: all}}).catch(() => undefined);
+  if (!mined.length) {
+    const stored = (await chrome.storage.local.get("libraryTags").catch(() => ({})) as Record<string, unknown>)["libraryTags"];
+    if (Array.isArray(stored)) mined = stored.filter((entry: MinedEntry) => typeof entry?.key === "string" && Array.isArray(entry.tags)).slice(0, MINED_KEEP);
+  }
+  for (const tag of minedTags([...seenRows, ...savedRows].map(row => row.title ?? ""))) tagLabels.set(tag.key, tag.label);
 }
 
 function chipMarkup(key: string, label: string, count: number | null) {
   return `<button type="button" class="h-chip" data-tag="${escapeHtml(key)}" aria-pressed="${String(activeTags.includes(key))}"${count === null ? "" : ` title="${count.toLocaleString()} titles"`}>${escapeHtml(label)}</button>`;
 }
 
-/** Every tag the rows that remain can offer, the active ones set aside. */
+/**
+ * Every tag still worth offering, the active ones set aside. Matching all,
+ * each pick narrows the rows, so the offer is re-mined from what remains;
+ * matching any, each pick widens them, so everything stays on offer.
+ */
 function offeredTags() {
-  const offered = minedTags(current().map(row => row.title ?? "")).filter(mined => !activeTags.includes(mined.key));
-  for (const mined of offered) tagLabels.set(mined.key, mined.label);
+  const rows = tagMode === "all" ? current() : untagged();
+  const offered = minedTags(rows.map(row => row.title ?? "")).filter(tag => !activeTags.includes(tag.key));
+  for (const tag of offered) tagLabels.set(tag.key, tag.label);
   return offered;
 }
 
@@ -304,6 +325,10 @@ function renderTags() {
   if (offered.length <= INLINE_TAGS) tagsOpen = false;
   const host = $("tags");
   host.innerHTML = [
+    // With two or more tags on, one chip says how they combine, and flips it.
+    activeTags.length > 1
+      ? `<button type="button" id="tagMode" class="h-chip h-mode" title="Switch between files carrying every picked tag and files carrying any of them">${tagMode === "all" ? "Match all" : "Match any"}</button>`
+      : "",
     ...activeTags.map(key => chipMarkup(key, tagLabels.get(key) ?? key, null)),
     ...offered.slice(0, INLINE_TAGS).map(mined => chipMarkup(mined.key, mined.label, mined.count)),
     offered.length > INLINE_TAGS
@@ -332,7 +357,7 @@ function renderAllTags() {
 function summary() {
   const base = current(), query = ($("search") as HTMLInputElement).value.trim(), noun = NOUNS[kind][view === "seen" ? 0 : 1];
   if (!base.length) {
-    if (activeTags.length) return `Nothing here carries ${activeTags.map(key => `\u201c${key}\u201d`).join(" + ")}.`;
+    if (activeTags.length) return `Nothing here carries ${activeTags.map(key => `\u201c${key}\u201d`).join(tagMode === "all" ? " + " : " or ")}.`;
     if (kind !== "all") return `No ${noun}s ${view === "seen" ? "in the history" : "among the saved files"} yet.`;
     if (view === "seen") return "Nothing here yet. What you open in LinkPeek appears here, newest first.";
     return filter === "unseen" ? "Nothing preloaded is waiting: everything saved has been seen." : "Nothing is saved on this device yet. Prepared and shown media is saved here as LinkPeek works.";
@@ -487,6 +512,7 @@ async function apply() {
   rendered = 0;
   paintControls();
   renderTags();
+  paintPlay();
   $("days").replaceChildren();
   $("summary").textContent = summary();
   await renderMore();
@@ -743,18 +769,28 @@ function shuffleRows(rows: Row[]) {
   return rows;
 }
 
+/** What a slideshow started now would play: saved, never seen anywhere, and passing the kind, tags and search. */
+function unseenPool() {
+  const words = searchWords();
+  return savedRows.filter(row => !row.seen && !seenMedia.has({originalUrl: row.open})
+    && (kind === "all" || row.type === kind) && matchesTags(row) && (!words.length || matchesSearch(row, words)));
+}
+
+/** Labels the play button with how much there is to play, so the tags' effect is visible before starting. */
+function paintPlay() {
+  const count = unseenPool().length;
+  $("play").textContent = count ? `▶ Play unseen · ${count.toLocaleString()}` : "▶ Play unseen";
+}
+
 /**
  * Plays everything saved but never seen — not here, not in any tab, not ever —
- * honouring the kind, tag and search filters. GIFs always come first, and
+ * honouring the kind, tags (all or any, as chosen) and search. Moving media
+ * leads: GIFs first, then videos, then pictures, each group shuffled, and
  * every slide shown is recorded as seen.
  */
 function startSlideshow() {
-  const words = searchWords();
-  let pool = savedRows.filter(row => !row.seen && !seenMedia.has({originalUrl: row.open}));
-  if (kind !== "all") pool = pool.filter(row => row.type === kind);
-  for (const key of activeTags) pool = pool.filter(row => rowHasTag(row, key));
-  if (words.length) pool = pool.filter(row => matchesSearch(row, words));
-  playlist = [...shuffleRows(pool.filter(row => row.type === "gif")), ...shuffleRows(pool.filter(row => row.type !== "gif"))];
+  const pool = unseenPool();
+  playlist = (["gif", "video", "image"] as const).flatMap(type => shuffleRows(pool.filter(row => row.type === type)));
   if (!playlist.length) {
     playlist = null;
     $("summary").textContent = "Nothing new to play: everything saved that matches has been seen.";
@@ -844,6 +880,7 @@ function readAddress() {
   const order = params.get("sort");
   sort = order === "oldest" || order === "title" || order === "largest" ? order : "newest";
   activeTags = (params.get("tag") ?? "").split(",").map(part => part.trim()).filter(Boolean);
+  tagMode = params.get("match") === "any" ? "any" : "all";
 }
 
 function writeAddress() {
@@ -853,6 +890,7 @@ function writeAddress() {
   if (kind !== "all") params.set("media", kind);
   if (sort !== "newest") params.set("sort", sort);
   if (activeTags.length) params.set("tag", activeTags.join(","));
+  if (activeTags.length > 1 && tagMode === "any") params.set("match", "any");
   history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
 }
 
@@ -908,6 +946,12 @@ async function start() {
       renderTags();
       return;
     }
+    if ((event.target as Element).closest("#tagMode")) {
+      tagMode = tagMode === "all" ? "any" : "all";
+      writeAddress();
+      void apply();
+      return;
+    }
     const button = (event.target as Element).closest<HTMLElement>("[data-tag]");
     if (!button) return;
     const key = button.dataset.tag!;
@@ -931,27 +975,44 @@ async function start() {
     writeAddress();
     void apply();
   });
-  // With "play GIFs only on hover" on, a GIF tile animates while the pointer rests on it.
-  const hoverGif = async (tile: HTMLElement, live: boolean) => {
+  /**
+   * Hover play: a GIF tile swaps its still for the animation (with "play GIFs
+   * only on hover" on), and a video tile plays, muted and looping, over its
+   * still (with "play videos on hover" on). Leaving puts the still back. The
+   * pointer may leave while the file is still being read, so a tile only
+   * starts playing if it is still hovered when the file is ready.
+   */
+  const hoverPlay = async (tile: HTMLElement, live: boolean) => {
     const row = shown[Number(tile.dataset.row)];
-    if (!row || row.type !== "gif") return;
-    const img = tile.querySelector("img");
-    if (!img) return;
-    if (live) {
-      img.dataset.still ??= img.src;
-      const source = await savedCopy(row.saved) ?? row.open;
-      // The pointer may have left while the copy was being read; a stilled tile stays still.
-      if (img.dataset.still !== undefined) img.src = source;
-    } else if (img.dataset.still) {
-      img.src = img.dataset.still;
-      delete img.dataset.still;
+    const wanted = row && ((row.type === "gif" && settings.libraryGifHover) || (row.type === "video" && settings.libraryVideoHover));
+    if (!wanted) return;
+    const img = tile.querySelector("img"), media = tile.querySelector<HTMLElement>(".h-media")!;
+    if (!live) {
+      delete tile.dataset.hover;
+      media.querySelector(".h-hoverplay")?.remove();
+      if (img?.dataset.still) {
+        img.src = img.dataset.still;
+        delete img.dataset.still;
+      }
+      return;
+    }
+    if (tile.dataset.hover) return;
+    tile.dataset.hover = "1";
+    const source = await savedCopy(row.saved) ?? row.open;
+    if (!tile.dataset.hover) return;
+    if (row.type === "video") {
+      // Muted as a property, not just an attribute: that is what lets the browser autoplay it.
+      const video = Object.assign(document.createElement("video"), {className: "h-hoverplay", src: source, muted: true, loop: true, playsInline: true, autoplay: true});
+      media.prepend(video);
+    } else if (img) {
+      img.dataset.still = img.src;
+      img.src = source;
     }
   };
   for (const [name, live] of [["mouseover", true], ["mouseout", false]] as const) {
     $("days").addEventListener(name, event => {
-      if (!settings.libraryGifHover) return;
       const tile = (event.target as Element).closest<HTMLElement>(".h-tile");
-      if (tile && !tile.contains((event as MouseEvent).relatedTarget as Node)) void hoverGif(tile, live);
+      if (tile && !tile.contains((event as MouseEvent).relatedTarget as Node)) void hoverPlay(tile, live);
     });
   }
   $("days").addEventListener("click", event => {
