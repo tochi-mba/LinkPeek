@@ -121,7 +121,7 @@ describe("installation", () => {
 
 describe("Tumblr downloads", () => {
   it("indexes the existing Tumblr Downloads folder and can reveal one of its files", async () => {
-    vi.mocked(chrome.downloads.search).mockResolvedValueOnce([{
+    (chrome.downloads.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{
       id: 61, url: "https://va.media.tumblr.com/clip.mp4", filename: "C:\\Users\\rex\\Downloads\\LinkPeek\\Tumblr\\demo\\2026-10-07 42-1.mp4",
       danger: "safe", incognito: false, mime: "video/mp4", startTime: "2026-10-07T10:00:00Z", state: "complete", paused: false,
       canResume: false, bytesReceived: 1234, totalBytes: 1234, fileSize: 1234, exists: true
