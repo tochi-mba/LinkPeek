@@ -1117,12 +1117,18 @@ function onKey(event: KeyboardEvent) {
   else if (key === "b") void toggleFavorite();
   else if (key === "f") toggleFullscreen();
   else if (key === "?") help.hidden = false;
+  // Zoomed, the arrows look around the media; fitted, they step through.
+  else if (key in moves && key !== " " && zoom.zoomed) zoom.panBy(key === "ArrowLeft" ? ARROW_PAN : key === "ArrowRight" ? -ARROW_PAN : 0, key === "ArrowUp" ? ARROW_PAN : key === "ArrowDown" ? -ARROW_PAN : 0);
   else if (key in moves) step(moves[key]);
   else return;
   event.preventDefault();
 }
 
-/** Scroll steps through; Ctrl+scroll (and a trackpad pinch, which arrives as one) zooms at the pointer. */
+/**
+ * Ctrl+scroll (and a trackpad pinch, which arrives as one) zooms at the
+ * pointer. Zoomed, a swipe or the wheel moves around the media (Shift turns
+ * the wheel sideways); fitted, a swipe or the wheel either way steps through.
+ */
 function onWheel(event: WheelEvent) {
   if (viewing < 0) return;
   event.preventDefault();
@@ -1131,10 +1137,21 @@ function onWheel(event: WheelEvent) {
     if (event.deltaY) zoomBy(Math.exp(-event.deltaY * 0.0025), event.clientX, event.clientY);
     return;
   }
-  if (Date.now() - lastWheel < WHEEL_STEP_MS || !event.deltaY) return;
+  // A line or page of scroll (a mouse wheel) counts as a good stretch of pixels.
+  const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 400 : 1;
+  const dx = (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * unit, dy = (event.shiftKey && !event.deltaX ? 0 : event.deltaY) * unit;
+  if (zoom.zoomed) {
+    zoom.panBy(-dx, -dy);
+    return;
+  }
+  const along = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+  if (Date.now() - lastWheel < WHEEL_STEP_MS || !along) return;
   lastWheel = Date.now();
-  step(event.deltaY > 0 ? 1 : -1);
+  step(along > 0 ? 1 : -1);
 }
+
+/** How far an arrow key moves zoomed media. */
+const ARROW_PAN = 80;
 
 /**
  * Zoomed media is dragged to pan. A press that barely moves is a click: on a

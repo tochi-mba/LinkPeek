@@ -538,5 +538,10 @@ test("Library holds up at every browser zoom level, and its viewer zooms media",
     await page.keyboard.up("Control");
     await expect(page.locator("#viewZoom")).toBeVisible();
     expect(await page.evaluate(()=>window.visualViewport?.scale??1)).toBe(1);
+    // Zoomed, a swipe or the wheel moves around the picture instead of moving on.
+    const title=await page.locator("#viewTitle").textContent(),before=await media.evaluate(img=>(img as HTMLElement).style.transform);
+    await page.mouse.wheel(150,200);
+    await expect.poll(()=>media.evaluate(img=>(img as HTMLElement).style.transform)).not.toBe(before);
+    await expect(page.locator("#viewTitle")).toHaveText(title!);
   }finally{await closeExtension(context,profile)}
 });

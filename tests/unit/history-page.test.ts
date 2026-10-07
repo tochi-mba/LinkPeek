@@ -1233,10 +1233,55 @@ describe("the full-size viewer", () => {
     expect($("#viewZoom").hidden).toBe(true);
     press("_");
     expect($("#viewZoom").hidden).toBe(true);
+    // Zoomed, the arrows look around; the Next button still moves on, and the next item starts fitted.
     press("+");
-    press("ArrowRight");
+    document.querySelector<HTMLButtonElement>('[data-view="next"]')!.click();
     await settle();
     expect([$("#viewTitle").textContent, $("#viewZoom").hidden]).toEqual(["Bravo", true]);
+  });
+
+  it("pans zoomed media with a swipe, the wheel or the arrows, and steps with a swipe either way when fitted", async () => {
+    await openLibrary(rows());
+    await view(0);
+    const wheel = (init: WheelEventInit) => $("#view").dispatchEvent(new WheelEvent("wheel", {cancelable: true, ...init}));
+    // Fitted: a sideways swipe steps too, whichever axis it leans on.
+    wheel({deltaX: 120, deltaY: 10});
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Bravo");
+    vi.advanceTimersByTime(300);
+    wheel({deltaX: -120, deltaY: 5});
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Alpha");
+    vi.advanceTimersByTime(300);
+    wheel({deltaX: 0, deltaY: 0});
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Alpha");
+    // Zoomed: the same gestures move around the media instead.
+    Object.defineProperty(media(), "offsetWidth", {configurable: true, value: 1000});
+    Object.defineProperty(media(), "offsetHeight", {configurable: true, value: 1000});
+    press("+");
+    vi.advanceTimersByTime(300);
+    // Swiping up looks further down, as scrolling a long page would.
+    wheel({deltaX: 30, deltaY: 100});
+    expect([$("#viewTitle").textContent, media().style.transform]).toEqual(["Alpha", "translate(-30px, -100px) scale(1.25)"]);
+    // A mouse wheel counts in lines; Shift turns it sideways.
+    wheel({deltaY: 1, deltaMode: 1});
+    expect(media().style.transform).toBe("translate(-30px, -140px) scale(1.25)");
+    wheel({deltaY: 1, deltaMode: 2, shiftKey: true});
+    expect(media().style.transform).toBe("translate(-430px, -140px) scale(1.25)");
+    // A trackpad already sending sideways movement keeps it, Shift or not.
+    wheel({deltaX: 10, deltaY: 20, shiftKey: true});
+    expect(media().style.transform).toBe("translate(-440px, -160px) scale(1.25)");
+    // The arrows pan too while zoomed; Space still steps.
+    press("ArrowLeft");
+    press("ArrowUp");
+    expect(media().style.transform).toBe("translate(-360px, -80px) scale(1.25)");
+    press("ArrowRight");
+    press("ArrowDown");
+    expect(media().style.transform).toBe("translate(-440px, -160px) scale(1.25)");
+    press(" ");
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Bravo");
   });
 
   it("drags zoomed media around, and a still click on a zoomed video plays or pauses it", async () => {
