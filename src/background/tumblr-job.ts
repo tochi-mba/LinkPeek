@@ -9,6 +9,9 @@
  * it) and on the toolbar badge.
  */
 import {apiTokenFrom, firstPostsPath, mediaOf, readPostsPage, tumblrFileName, type TumblrMedia} from "../core/tumblr";
+import type {TumblrJobState, TumblrPhase} from "../shared/messages";
+
+export type {TumblrJobState, TumblrPhase} from "../shared/messages";
 
 export const TUMBLR_JOB = "tumblrJob";
 export const TUMBLR_SAVED_PREFIX = "tumblrSaved:";
@@ -18,23 +21,6 @@ export const TUMBLR_SAVED_PREFIX = "tumblrSaved:";
  * first (and the formats files are named after before newer ones).
  */
 export const MEDIA_ACCEPT = "image/png,image/jpeg,image/gif,video/mp4,video/quicktime,image/*;q=0.8,video/*;q=0.8,audio/*;q=0.8,*/*;q=0.5";
-
-export type TumblrPhase = "collecting" | "done" | "stopped" | "failed";
-export interface TumblrJobState {
-  blog: string;
-  phase: TumblrPhase;
-  /** Posts read so far, of the blog's total. */
-  posts: number;
-  total: number;
-  /** Files found that still needed saving, then those saved, failed, and skipped as saved before. */
-  found: number;
-  saved: number;
-  failed: number;
-  skipped: number;
-  /** All posts read; what remains is finishing the downloads. */
-  collected: boolean;
-  error?: string;
-}
 
 /** Downloads saved at once: enough to keep busy, few enough to leave the connection usable. */
 const WORKERS = 3;

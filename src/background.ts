@@ -9,6 +9,7 @@ import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
 import {MediaLibrary, favoriteFiles, type AuditProgress, type LibraryRules} from "./background/media-library";
+import {TumblrDownloader} from "./background/tumblr-job";
 import {HistoryWriter, LIBRARY_CACHE, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
@@ -30,6 +31,7 @@ const galleries = new GalleryStore();
 const fingerprints = new Fingerprinter();
 const history = new HistoryWriter();
 const library = new MediaLibrary();
+const tumblr = new TumblrDownloader();
 const binaries = new ByteCache<BinaryEntry>();
 const scanTasks = new Map<string, ScanTask>();
 const prefetchTasks = new Map<string, Promise<ScanResult | null>>();
@@ -390,6 +392,8 @@ chrome.windows.onRemoved.addListener(id => {
   });
 });
 
+chrome.downloads.onChanged.addListener(delta => tumblr.onDownloadChanged(delta));
+
 function respond(work: Promise<unknown>, sendResponse: (response: unknown) => void, onError: (error: Error) => unknown = error => ({error: error.message})) {
   work.then(sendResponse, (error: Error) => sendResponse(onError(error)));
   return true;
@@ -426,6 +430,15 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return respond(download(msg.url, msg.filename).then(id => ({id})), sendResponse);
     case "LINKPEEK_DOWNLOAD_ALL":
       return respond(downloadAll(msg), sendResponse);
+    case "LINKPEEK_TUMBLR_STATUS":
+      return respond(tumblr.status(), sendResponse);
+    case "LINKPEEK_TUMBLR_START":
+      sendResponse(tumblr.start(msg.blog));
+      return false;
+    case "LINKPEEK_TUMBLR_STOP":
+      tumblr.stop();
+      sendResponse({ok: true});
+      return false;
     case "LINKPEEK_OPEN_TAB":
       return respond(chrome.tabs.create({url: msg.url, active: Boolean(msg.active), index: sender.tab ? sender.tab.index + 1 : undefined, openerTabId: sender.tab?.id}).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_TOGGLE_MIRROR":

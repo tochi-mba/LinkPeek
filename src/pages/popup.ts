@@ -1,13 +1,17 @@
 /** The toolbar popup: on/off, this site, performance and opening style at a glance, and saved links. */
 import {escapeHtml} from "../shared/dom";
 import {loadFavorites, removeFavorite} from "../shared/favorites";
-import type {TabStatus} from "../shared/messages";
+import {tumblrBlogFrom} from "../core/tumblr";
+import type {TabStatus, TumblrJobState} from "../shared/messages";
 import {loadSettings, saveSettings, siteProfileFor, type LinkPeekSettings} from "../shared/settings";
 
 let settings: LinkPeekSettings;
 let host = "";
 let status: TabStatus | undefined;
 let tabId: number | undefined;
+let tumblrBlog: string | undefined;
+let tumblrJob: TumblrJobState | undefined;
+let tumblrStopping = false;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -34,6 +38,44 @@ function renderSegments(name: "mode" | "open", value: string) {
   });
 }
 
+function tumblrProgress(job: TumblrJobState) {
+  const share = job.collected
+    ? 0.5 + 0.5 * (job.saved + job.failed) / Math.max(1, job.found)
+    : 0.5 * job.posts / Math.max(1, job.total);
+  return Math.min(100, Math.floor(share * 100));
+}
+
+function tumblrStatus(job: TumblrJobState | undefined) {
+  if (!job) return "Save every original image, GIF, video and audio from this blog to Downloads.";
+  const files = job.found ? `${job.saved} of ${job.found} files saved` : "no media found yet";
+  const skipped = job.skipped ? ` · ${job.skipped} already downloaded` : "";
+  const failed = job.failed ? ` · ${job.failed} failed` : "";
+  if (job.phase === "failed") return `Couldn't finish: ${job.error ?? "Tumblr stopped responding"}. ${files}${failed}`;
+  if (job.phase === "done") return `Done · ${files}${skipped}${failed}`;
+  if (job.phase === "stopped") return `Stopped · ${files}${skipped}${failed}`;
+  if (tumblrStopping) return `Stopping… ${files}`;
+  if (job.collected) return `All posts checked · finishing downloads · ${files}${failed}`;
+  const posts = job.total ? `${job.posts} of ${job.total}` : String(job.posts);
+  return `Checking post ${posts} · ${files}${skipped}${failed}`;
+}
+
+function renderTumblr() {
+  const card = $<HTMLElement>("tumblrCard");
+  card.hidden = !tumblrBlog;
+  if (!tumblrBlog) return;
+  const job = tumblrJob?.blog === tumblrBlog || tumblrJob?.phase === "collecting" ? tumblrJob : undefined;
+  $("tumblrBlog").textContent = job && job.blog !== tumblrBlog ? `@${job.blog}` : `@${tumblrBlog}`;
+  $("tumblrStatus").textContent = tumblrStatus(job);
+  const progress = $<HTMLProgressElement>("tumblrProgress");
+  progress.hidden = !job || job.phase !== "collecting";
+  progress.value = job ? tumblrProgress(job) : 0;
+  const action = $<HTMLButtonElement>("tumblrAction");
+  action.disabled = tumblrStopping;
+  action.textContent = job?.phase === "collecting" ? (tumblrStopping ? "Stopping…" : "Stop")
+    : job?.phase === "done" ? "Check for new media"
+      : job ? "Continue download" : "Download all media";
+}
+
 function render() {
   ($("enabled") as HTMLInputElement).checked = settings.enabled;
   $("site").textContent = host || "Not a web page";
@@ -46,6 +88,7 @@ function render() {
   ($("shuffle") as HTMLButtonElement).hidden = !status?.enabled || !settings.shuffleSlideshow;
   inspector.textContent = status?.inspectorOpen ? "Hide inspector" : "Inspector";
   inspector.setAttribute("aria-pressed", String(Boolean(status?.inspectorOpen)));
+  renderTumblr();
   renderSegments("mode", settings.performanceMode);
   renderSegments("open", settings.activationMode);
 }
@@ -105,14 +148,29 @@ async function startShuffle() {
   if (answer) window.close();
 }
 
+async function toggleTumblrDownload() {
+  if (!tumblrBlog) return;
+  if (tumblrJob?.phase === "collecting") {
+    tumblrStopping = true;
+    renderTumblr();
+    await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STOP"}).catch(() => undefined);
+    return;
+  }
+  tumblrStopping = false;
+  tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_START", blog: tumblrBlog}).catch(() => undefined) as TumblrJobState | undefined;
+  renderTumblr();
+}
+
 async function start() {
   settings = await loadSettings();
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   if (tab?.url?.startsWith("http")) {
     host = new URL(tab.url).hostname;
+    tumblrBlog = tumblrBlogFrom(tab.url);
     tabId = tab.id;
     status = await chrome.tabs.sendMessage(tab.id!, {type: "LINKPEEK_STATUS"}).catch(() => undefined) as TabStatus | undefined;
   }
+  if (tumblrBlog) tumblrJob = await chrome.runtime.sendMessage({type: "LINKPEEK_TUMBLR_STATUS"}).catch(() => undefined) as TumblrJobState | undefined;
   render();
   const mirror = await chrome.runtime.sendMessage({type: "LINKPEEK_MIRROR_QUERY"}).catch(() => undefined) as {open?: boolean} | undefined;
   if (mirror?.open) $("mirror").textContent = "Close mirror";
@@ -127,6 +185,7 @@ $("pauseSite").addEventListener("click", () => void togglePause());
 $("inspector").addEventListener("click", () => void toggleInspector());
 $("mirror").addEventListener("click", () => void openMirror());
 $("shuffle").addEventListener("click", () => void startShuffle());
+$("tumblrAction").addEventListener("click", () => void toggleTumblrDownload());
 document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
   settings = {...settings, performanceMode: button.dataset.mode as LinkPeekSettings["performanceMode"]};
   void save();
@@ -148,6 +207,11 @@ $("clear").addEventListener("click", async () => {
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.favorites) void renderFavorites();
+  if (area === "session" && changes.tumblrJob) {
+    tumblrJob = changes.tumblrJob.newValue as TumblrJobState | undefined;
+    tumblrStopping = false;
+    renderTumblr();
+  }
 });
 
 void start();

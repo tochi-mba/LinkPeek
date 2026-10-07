@@ -38,10 +38,28 @@ export type OpenLibraryRequest = {type: "LINKPEEK_OPEN_LIBRARY"; view?: "seen" |
 export type FingerprintRequest = {type: "LINKPEEK_FINGERPRINT"; urls: string[]};
 export type ForgetGalleriesRequest = {type: "LINKPEEK_FORGET_GALLERIES"};
 
+export type TumblrPhase = "collecting" | "done" | "stopped" | "failed";
+/** Progress for the Tumblr blog download shown in the toolbar popup. */
+export interface TumblrJobState {
+  blog: string;
+  phase: TumblrPhase;
+  posts: number;
+  total: number;
+  found: number;
+  saved: number;
+  failed: number;
+  skipped: number;
+  collected: boolean;
+  error?: string;
+}
+export type TumblrStatusRequest = {type: "LINKPEEK_TUMBLR_STATUS"};
+export type TumblrStartRequest = {type: "LINKPEEK_TUMBLR_START"; blog: string};
+export type TumblrStopRequest = {type: "LINKPEEK_TUMBLR_STOP"};
+
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
   | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibraryAuditRequest | OpenLibraryRequest
-  | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest;
+  | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest | TumblrStatusRequest | TumblrStartRequest | TumblrStopRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};

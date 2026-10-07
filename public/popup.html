@@ -25,6 +25,12 @@
           <button id="mirror" class="button ghost" type="button" title="A window that shows your previews — drag it to a second monitor, minimise it, or press F11 there for full screen">Mirror</button>
         </div>
       </section>
+      <section id="tumblrCard" class="card tumblr-card" hidden>
+        <div class="row"><div class="eyebrow">Tumblr blog</div><span class="spacer"></span><span id="tumblrBlog" class="site muted"></span></div>
+        <p id="tumblrStatus" class="status" role="status"></p>
+        <progress id="tumblrProgress" class="tumblr-progress" max="100" value="0" hidden></progress>
+        <button id="tumblrAction" class="button" type="button">Download all media</button>
+      </section>
       <section class="card">
         <div class="eyebrow">Performance</div>
         <div class="segmented full" role="radiogroup" aria-label="Performance">
