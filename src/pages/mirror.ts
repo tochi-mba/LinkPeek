@@ -9,7 +9,7 @@
  */
 import type {Budget} from "../content/resource-governor";
 import type {MirrorStateMessage} from "../shared/messages";
-import {SeenMedia, recordSeen} from "../shared/seen-media";
+import {SeenMedia, forgetRejected, recordSeen} from "../shared/seen-media";
 import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {Viewer} from "../ui/viewer";
 
@@ -89,6 +89,7 @@ async function start() {
     if (!applying) browsingHere = true;
   };
   viewer.onSeen = item => recordSeen(seen, item, settings);
+  viewer.onRejected = forgetRejected;
   void seen.load();
   chrome.runtime.onMessage.addListener((msg: {type?: string}) => {
     if (msg?.type === "LINKPEEK_MIRROR_STATE") show(msg as MirrorStateMessage);

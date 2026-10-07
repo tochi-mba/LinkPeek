@@ -29,6 +29,7 @@ vi.mock("../../src/ui/viewer", () => ({
     onSlideshowStart?: () => boolean;
     onNeedMore?: () => void;
     onSeen?: (item: unknown) => void;
+    onRejected?: (item: unknown) => void;
     error = vi.fn();
     scheduleClose = vi.fn();
     cancelClose = vi.fn();
@@ -1152,6 +1153,9 @@ describe("the shuffle", () => {
     viewer.close(true);
     const a = link("a");
     viewer.onSeen(scan(a.href, 2).items[0]);
+    // Shown, then ruled too small: its history and saved file are taken back.
+    viewer.onRejected!(scan(a.href, 2).items[1]);
+    expect(messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_FORGET_MEDIA", original: scan(a.href, 2).items[1].originalUrl}));
     respond = msg => msg.type === "LINKPEEK_PREFETCH" ? scan(msg.url!, 2) : {ok: true};
     key("s");
     await flush();

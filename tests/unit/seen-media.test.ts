@@ -169,3 +169,18 @@ describe("recording what was shown", () => {
     expect(await fingerprintsFor([item(1)])).toEqual([undefined]);
   });
 });
+
+describe("taking back a rejected item", () => {
+  it("asks the worker to forget its history and saved file", async () => {
+    const {forgetRejected} = await import("../../src/shared/seen-media");
+    const sendMessage = vi.fn(async () => ({ok: true}));
+    vi.stubGlobal("chrome", {runtime: {sendMessage}});
+    forgetRejected({id: "e", type: "image", originalUrl: "https://cdn.test/e.png", previewUrl: "https://cdn.test/e-s.png", sourceUrl: "https://x.test", score: 1});
+    expect(sendMessage).toHaveBeenCalledWith({type: "LINKPEEK_FORGET_MEDIA", original: "https://cdn.test/e.png", saved: "https://cdn.test/e-s.png"});
+    sendMessage.mockRejectedValueOnce(new Error("gone"));
+    forgetRejected({id: "g", type: "gif", originalUrl: "https://cdn.test/g.gif", previewUrl: "https://cdn.test/g-s.jpg", sourceUrl: "https://x.test", score: 1});
+    expect(sendMessage).toHaveBeenLastCalledWith({type: "LINKPEEK_FORGET_MEDIA", original: "https://cdn.test/g.gif", saved: "https://cdn.test/g.gif"});
+    vi.unstubAllGlobals();
+  });
+});
+

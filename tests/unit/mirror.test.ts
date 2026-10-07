@@ -15,6 +15,7 @@ vi.mock("../../src/ui/viewer", () => ({
     onPosition?: () => void;
     onExpand?: () => boolean;
     onSeen?: (item: unknown) => void;
+    onRejected?: (item: unknown) => void;
     constructor(public options: unknown) {
       viewers.push(this);
     }
@@ -105,6 +106,8 @@ describe("the mirror window", () => {
     viewer.onSeen({id: "x", type: "image", originalUrl: "https://forum.test/x.jpg", previewUrl: "https://forum.test/x.jpg", sourceUrl: "https://forum.test", score: 1});
     await settle();
     expect(harness.messages).toContainEqual(expect.objectContaining({type: "LINKPEEK_HISTORY_ADD"}));
+    viewer.onRejected!({id: "y", type: "image", originalUrl: "https://forum.test/y.png", previewUrl: "https://forum.test/y.png", sourceUrl: "https://forum.test", score: 1});
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_FORGET_MEDIA", original: "https://forum.test/y.png", saved: "https://forum.test/y.png"});
   });
 
   it("supports F11 fullscreen and forwards other keys to the viewer", async () => {

@@ -9,9 +9,9 @@
  * kilobytes, not the whole history. Writes are batched, merged with what other
  * tabs stored meanwhile, and each bucket keeps only its newest entries.
  */
-import {historyEntry} from "./history";
+import {historyEntry, savedUrlOfItem} from "./history";
 import {canonicalMediaUrl, type MediaItem} from "./media";
-import type {FingerprintRequest, HistoryAddRequest} from "./messages";
+import type {FingerprintRequest, ForgetMediaRequest, HistoryAddRequest} from "./messages";
 import {isFingerprint, samePicture} from "./picture";
 import type {LinkPeekSettings} from "./settings";
 
@@ -196,6 +196,15 @@ export function recordSeen(seen: SeenMedia, item: MediaItem, settings: Pick<Link
   void fingerprintsFor([item]).then(([print]) => {
     if (print) seen.addPicture(print);
   });
+}
+
+/**
+ * Takes back what was recorded for an item the preview showed and then
+ * rejected as too small: its history entries and its saved file. (It stays
+ * remembered as seen, so the shuffle does not offer it again.)
+ */
+export function forgetRejected(item: MediaItem) {
+  chrome.runtime.sendMessage({type: "LINKPEEK_FORGET_MEDIA", original: item.originalUrl, saved: savedUrlOfItem(item)} satisfies ForgetMediaRequest).catch(() => undefined);
 }
 
 /** Forgets everything seen, addresses and pictures, in every tab. */

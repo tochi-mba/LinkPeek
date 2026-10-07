@@ -479,3 +479,64 @@ test("Library tiles hold a still of moving media until hovered, made once and ke
     await expect.poll(()=>gif.getAttribute("src")).toMatch(/^blob:/);
   }finally{await closeExtension(context,profile)}
 });
+
+test("Library holds up at every browser zoom level, and its viewer zooms media",async()=>{
+  const {context,profile}=await launchExtension();
+  try{
+    const sw=context.serviceWorkers()[0];expect(sw).toBeTruthy();const id=new URL(sw.url()).host;
+    await sw.evaluate(async origin=>{
+      const kept=await caches.open("linkpeek-media");
+      const index:Array<[string,unknown]>=[];
+      for(let i=0;i<24;i++){
+        const url=`${origin}/media/zoom-${i}.jpg`;
+        await kept.put(url,await fetch(url));
+        index.push([url,{bytes:400,at:Date.now()-i*1000,seen:true,type:"image",title:`A fairly long title for picture number ${i} to see how it wraps`,w:690,h:388}]);
+      }
+      await chrome.storage.local.set({mediaIndex:index});
+    },base);
+    const page=await context.newPage();
+    // Ctrl + and Ctrl - shrink the page's CSS viewport: 1920×1080 at 100%, 200%, 300% and 400%.
+    for(const [width,height] of [[1920,1080],[960,540],[640,360],[480,270]]){
+      await page.setViewportSize({width,height});
+      await page.goto(`chrome-extension://${id}/history.html?view=saved`);
+      await expect(page.locator(".h-tile").first()).toBeVisible();
+      const layout=await page.evaluate(()=>({
+        overflow:document.documentElement.scrollWidth-document.documentElement.clientWidth,
+        header:document.querySelector(".history-head")!.getBoundingClientRect().height,
+        sticky:getComputedStyle(document.querySelector(".history-head")!).position
+      }));
+      // Nothing ever scrolls sideways.
+      expect(layout.overflow,`sideways overflow at ${width}×${height}`).toBeLessThanOrEqual(0);
+      // On a short window the header scrolls away rather than pinning a big band over the grid.
+      if(height<=560)expect(layout.sticky).toBe("static");
+      else expect(layout.header).toBeLessThan(height/3);
+      // The viewer: media fills the screen, and its controls fit within it.
+      await page.locator(".h-tile .h-media").first().click();
+      await expect(page.locator("#view")).toBeVisible();
+      const viewer=await page.evaluate(()=>{
+        const bar=document.querySelector(".h-view-bar")!.getBoundingClientRect(),stage=document.querySelector("#viewStage")!.getBoundingClientRect();
+        return {barRight:bar.right,stageWidth:stage.width,stageHeight:stage.height};
+      });
+      expect(viewer.barRight).toBeLessThanOrEqual(width+1);
+      expect([viewer.stageWidth,viewer.stageHeight]).toEqual([width,height]);
+      await page.keyboard.press("Escape");
+    }
+    // Zooming the media itself, in the real browser.
+    await page.setViewportSize({width:1280,height:800});
+    await page.locator(".h-tile .h-media").first().click();
+    const media=page.locator("#viewStage img");
+    await expect(media).toBeVisible();
+    await page.keyboard.press("+");
+    await expect(page.locator("#viewZoom")).toHaveText("125%");
+    expect(await media.evaluate(img=>getComputedStyle(img).transform)).not.toBe("none");
+    await page.keyboard.press("0");
+    await expect(page.locator("#viewZoom")).toBeHidden();
+    // Ctrl+scroll zooms at the pointer instead of zooming the whole page.
+    await page.mouse.move(640,400);
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0,-300);
+    await page.keyboard.up("Control");
+    await expect(page.locator("#viewZoom")).toBeVisible();
+    expect(await page.evaluate(()=>window.visualViewport?.scale??1)).toBe(1);
+  }finally{await closeExtension(context,profile)}
+});

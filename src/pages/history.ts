@@ -16,13 +16,14 @@
  */
 import DragSelect from "dragselect";
 import {escapeHtml} from "../shared/dom";
-import {LIBRARY_CACHE, STILLS_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
+import {FAVORITE_MEDIA, LIBRARY_CACHE, STILLS_CACHE, libraryFileName, readHistory, readLibrary, savedUrlOf, type HistoryEntry, type LibraryEntry} from "../shared/history";
 import {linkLabel, type MediaItem} from "../shared/media";
 import type {AuditTickMessage} from "../shared/messages";
 import {SeenMedia, recordSeen} from "../shared/seen-media";
 import {DEFAULT_SETTINGS, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {mineTags, titleHasTag, type TitleTag} from "../shared/title-tags";
 import {framePoint, gifStill, videoStill} from "./stills";
+import {ZOOM_STEP, ZoomPan} from "./zoom";
 
 /** Entries rendered per step as the list scrolls. */
 const PAGE = 240;
@@ -78,6 +79,8 @@ const $ = (id: string) => document.getElementById(id)!;
 let view: View = "seen";
 let filter: Filter = "all";
 let kind: Kind = "all";
+/** Only favourites are shown (and played). */
+let favoritesOnly = false;
 let sort: Sort = "newest";
 /** Chips shown in the row itself; the rest wait in the All-tags panel. */
 const INLINE_TAGS = 24;
@@ -170,7 +173,8 @@ function shaped(picture: string, row: Row) {
 
 function tile(row: Row, index: number) {
   const title = displayTitle(row);
-  const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "");
+  const badges = (row.type === "image" ? "" : `<span class="h-badge">${row.type === "gif" ? "GIF" : "▶"}</span>`) + (view === "saved" && !row.seen ? `<span class="h-new">Not seen yet</span>` : "")
+    + (favorites.has(row.saved) ? `<span class="h-fav" title="Favourite">★</span>` : "");
   // Moving media always gets a picture of itself; a site's own preview, if any, is the fallback.
   const fallback = row.thumb ? ` data-src="${escapeHtml(row.thumb)}"` : "";
   const picture = row.type !== "image" ? `<img data-still${fallback} alt="" decoding="async">`
@@ -341,7 +345,7 @@ function matchesTags(row: Row) {
 /** The rows of the current view, seen-state filter and kind of media, before tags and searching. */
 function untagged() {
   const base = view === "seen" ? seenRows : filter === "all" ? savedRows : savedRows.filter(row => row.seen === (filter === "seen"));
-  return kind === "all" ? base : base.filter(row => row.type === kind);
+  return base.filter(row => (kind === "all" || row.type === kind) && (!favoritesOnly || favorites.has(row.saved)));
 }
 
 /** The rows of the current view, seen-state filter, kind of media and tags, before searching. */
@@ -456,6 +460,7 @@ function summary() {
   const base = current(), query = ($("search") as HTMLInputElement).value.trim(), noun = NOUNS[kind][view === "seen" ? 0 : 1];
   if (!base.length) {
     if (activeTags.length) return `Nothing here carries ${activeTags.map(key => `\u201c${key}\u201d`).join(tagMode === "all" ? " + " : " or ")}.`;
+    if (favoritesOnly) return "No favourites here yet. In the full-size view, B stars what is on screen.";
     if (kind !== "all") return `No ${noun}s ${view === "seen" ? "in the history" : "among the saved files"} yet.`;
     if (view === "seen") return "Nothing here yet. What you open in LinkPeek appears here, newest first.";
     return filter === "unseen" ? "Nothing preloaded is waiting: everything saved has been seen." : "Nothing is saved on this device yet. Prepared and shown media is saved here as LinkPeek works.";
@@ -471,6 +476,7 @@ function paintControls() {
   for (const button of document.querySelectorAll<HTMLElement>("[data-show]")) button.setAttribute("aria-pressed", String(button.dataset.show === view));
   for (const button of document.querySelectorAll<HTMLElement>("[data-filter]")) button.setAttribute("aria-pressed", String(button.dataset.filter === filter));
   for (const button of document.querySelectorAll<HTMLElement>("[data-kind]")) button.setAttribute("aria-pressed", String(button.dataset.kind === kind));
+  $("favOnly").setAttribute("aria-pressed", String(favoritesOnly));
   const order = $("sort") as HTMLSelectElement;
   order.value = sort;
   // Only saved files know their size, so the seen view cannot order by it.
@@ -686,18 +692,22 @@ function fileName(row: Row) {
 }
 
 /**
- * Measures every saved file, removes ones below the minimum media size
- * (Downloads copies included), and fills in missing Downloads copies.
+ * Measures every saved file and every history entry, removes what is below
+ * the minimum media size (Downloads copies included), and fills in missing
+ * Downloads copies.
  */
 async function auditSaved() {
   $("summary").textContent = "Checking the saved files…";
   paintLive(0);
-  const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number} | undefined;
-  savedRows = await readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => []);
+  const result = await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_AUDIT"}).catch(() => undefined) as {removed: number; mirrored: number; historyRemoved: number} | undefined;
+  [seenRows, savedRows] = await Promise.all([
+    readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
+    readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
+  ]);
   await computeTags();
   await apply();
   $("summary").textContent = result
-    ? `Checked every saved file: removed ${result.removed.toLocaleString()} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
+    ? `Checked every saved file and the history: removed ${plural(result.removed, "file")} and ${plural(result.historyRemoved, "history entry", "history entries")} below your minimum size, added ${result.mirrored.toLocaleString()} to Downloads / LinkPeek Library.`
     : "Couldn’t check the saved files.";
 }
 
@@ -720,9 +730,10 @@ function onAuditTick(tick: AuditTickMessage) {
   auditStart ||= Date.now();
   paintLive(tick.checked / tick.total);
   const left = (tick.total - tick.checked) * (Date.now() - auditStart) / tick.checked;
-  $("summary").textContent = `Checking saved files · ${Math.round(tick.checked / tick.total * 100)}%`
+  const files = tick.phase === "files";
+  $("summary").textContent = `${files ? "Checking saved files" : "Checking the history"} · ${Math.round(tick.checked / tick.total * 100)}%`
     + ` · ${tick.checked.toLocaleString()} of ${tick.total.toLocaleString()}`
-    + ` · ${tick.removed.toLocaleString()} removed · ${tick.mirrored.toLocaleString()} added to Downloads · ${shortName(tick.url)}`
+    + ` · ${tick.removed.toLocaleString()} removed${files ? ` · ${tick.mirrored.toLocaleString()} added to Downloads` : ""} · ${shortName(tick.url)}`
     + (tick.checked >= 5 && tick.checked < tick.total ? ` · ${etaLabel(left)}` : "")
     + (tick.resting ? " · easing off to spare the browser" : "");
   // Done — the bar goes back to showing the space used (a check the worker ran by itself ends here too).
@@ -778,10 +789,19 @@ let playlist: Row[] | null = null;
 let playing = false;
 let paused = false;
 let playTimer: ReturnType<typeof setTimeout> | undefined;
-/** Something became seen while the viewer was open; the grid refreshes on close. */
-let seenChanged = false;
+/** Something the grid shows changed while the viewer was open (seen, deleted, favourited); the grid redraws on close. */
+let gridStale = false;
 /** The viewer's meta line without the slideshow suffix, so pause can redraw it. */
 let metaBase = "";
+/** A delete waiting for Enter (or the button) to confirm it. */
+let confirming = false;
+/** Controls fade after this long without the pointer or a key, leaving the media alone on screen. */
+const IDLE_MS = 2500;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+/** Zoom and pan for the media on screen; every new item starts fitted. */
+let zoom: ZoomPan;
+/** Files picked as favourites (by their saved address): starred, filterable, and never trimmed for space or by the size check. */
+let favorites = new Set<string>();
 
 /** What the slideshow adds to the meta line: its state, and roughly how long the rest will take. */
 function modeSuffix() {
@@ -807,8 +827,41 @@ function itemOf(row: Row): MediaItem {
 function markSeen(row: Row) {
   if (row.seen) return;
   row.seen = true;
-  seenChanged = true;
+  gridStale = true;
   recordSeen(seenMedia, itemOf(row), settings);
+}
+
+/** Shows the controls again, and hides them once the pointer and keys have been still for a moment. */
+function wake() {
+  $("view").classList.remove("h-idle");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    // A question waiting on screen, or the key list, keeps the controls up.
+    if (!confirming && $("viewHelp").hidden) $("view").classList.add("h-idle");
+  }, IDLE_MS);
+}
+
+/** The zoom readout, and a zoomed video's own controls: hidden while zoomed, where they would only be in the way. */
+function paintZoom(level: number) {
+  const readout = $("viewZoom");
+  readout.hidden = level === 1;
+  readout.textContent = `${Math.round(level * 100)}%`;
+  $("viewStage").classList.toggle("h-zoomed", level > 1);
+  const video = $("viewStage").querySelector("video");
+  if (video) video.controls = level === 1;
+}
+
+/** Looking closer pauses a slideshow rather than leaving it running underneath. */
+function zoomBy(factor: number, x?: number, y?: number) {
+  if (playing && !paused) togglePause();
+  zoom.zoomBy(factor, x, y);
+}
+
+function paintFavorite(row: Row | undefined) {
+  const on = Boolean(row && favorites.has(row.saved)), button = $("viewFav");
+  button.textContent = on ? "★" : "☆";
+  button.setAttribute("aria-pressed", String(on));
+  button.title = on ? "Favourite: kept whatever happens (B to unstar)" : "Favourite: keep it whatever happens (B)";
 }
 
 async function showItem(index: number) {
@@ -821,6 +874,7 @@ async function showItem(index: number) {
   stage.innerHTML = row.type === "video"
     ? `<video src="${escapeHtml(source)}" controls autoplay ${playing ? "" : "loop "}playsinline></video>`
     : `<img src="${escapeHtml(source)}" alt="">`;
+  zoom.reset();
   const title = $("viewTitle") as HTMLAnchorElement;
   title.textContent = displayTitle(row);
   title.href = row.source;
@@ -829,6 +883,7 @@ async function showItem(index: number) {
   const weight = row.bytes ? ` · ${sizeLabel(row.bytes)}` : "";
   metaBase = `${viewing + 1} of ${list.length}${size}${weight} · ${new Date(row.at).toLocaleString()}${copy ? " · saved on this device" : ""}`;
   $("viewMeta").textContent = metaBase + modeSuffix();
+  paintFavorite(row);
   markSeen(row);
   if (playing) {
     stage.querySelector("video")?.addEventListener("ended", () => advance(), {once: true});
@@ -870,11 +925,11 @@ function shuffleRows(rows: Row[]) {
   return rows;
 }
 
-/** What a slideshow started now would play: saved, never seen anywhere, and passing the kind, tags and search. */
+/** What a slideshow started now would play: saved, never seen anywhere, and passing the kind, favourites, tags and search. */
 function unseenPool() {
   const words = searchWords();
   return savedRows.filter(row => !row.seen && !seenMedia.has({originalUrl: row.open})
-    && (kind === "all" || row.type === kind) && matchesTags(row) && (!words.length || matchesSearch(row, words)));
+    && (kind === "all" || row.type === kind) && (!favoritesOnly || favorites.has(row.saved)) && matchesTags(row) && (!words.length || matchesSearch(row, words)));
 }
 
 /** Labels the play button with how much there is to play, so the tags' effect is visible before starting. */
@@ -883,11 +938,18 @@ function paintPlay() {
   $("play").textContent = count ? `▶ Play unseen · ${count.toLocaleString()}` : "▶ Play unseen";
 }
 
+function paintPause() {
+  const pause = $("viewPause");
+  pause.textContent = paused ? "▶" : "⏸";
+  pause.title = paused ? "Resume (Space)" : "Pause (Space)";
+  pause.setAttribute("aria-label", paused ? "Resume" : "Pause");
+}
+
 /**
  * Plays everything saved but never seen — not here, not in any tab, not ever —
- * honouring the kind, tags (all or any, as chosen) and search. Moving media
- * leads: GIFs first, then videos, then pictures, each group shuffled, and
- * every slide shown is recorded as seen.
+ * honouring the kind, favourites, tags (all or any, as chosen) and search.
+ * Moving media leads: GIFs first, then videos, then pictures, each group
+ * shuffled, and every slide shown is recorded as seen.
  */
 function startSlideshow() {
   const pool = unseenPool();
@@ -899,47 +961,117 @@ function startSlideshow() {
   }
   playing = true;
   paused = false;
-  const pause = $("viewPause");
-  pause.hidden = false;
-  pause.textContent = "Pause";
-  $("view").hidden = false;
+  $("viewPause").hidden = false;
+  paintPause();
+  showViewer();
   void showItem(0);
 }
 
 function togglePause() {
   if (!playing) return;
   paused = !paused;
-  $("viewPause").textContent = paused ? "Resume" : "Pause";
+  paintPause();
   $("viewMeta").textContent = metaBase + modeSuffix();
   if (paused) clearTimeout(playTimer);
   else queueAdvance(viewed()[viewing]);
 }
 
+function showViewer() {
+  $("view").hidden = false;
+  wake();
+}
+
 function openViewer(index: number) {
   playlist = null;
-  $("view").hidden = false;
+  showViewer();
   void showItem(index);
 }
 
 function closeViewer() {
   stopSlideshow();
+  cancelDelete();
+  $("viewHelp").hidden = true;
   playlist = null;
+  clearTimeout(idleTimer);
   $("view").hidden = true;
   $("viewStage").replaceChildren();
   viewing = -1;
-  if (seenChanged) {
-    seenChanged = false;
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  if (gridStale) {
+    gridStale = false;
     void apply();
   }
 }
 
 function step(delta: number) {
-  if (viewing >= 0) void showItem(viewing + delta);
+  if (viewing >= 0 && !confirming) void showItem(viewing + delta);
 }
 
 async function saveViewed() {
   const row = viewed()[viewing];
   await chrome.downloads.download({url: await savedCopy(row.saved) ?? row.open, filename: fileName(row), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
+}
+
+/** D: asks first, naming exactly what goes — the file and its Downloads copy, or the history entry. */
+function askDelete() {
+  if (viewing < 0 || confirming) return;
+  confirming = true;
+  if (playing && !paused) togglePause();
+  const row = viewed()[viewing], what = view === "seen" && !playlist ? "Remove this from the history" : "Delete this file from this device and Downloads";
+  const box = $("viewConfirm");
+  box.innerHTML = `<span>${what}: <b>${escapeHtml(shortName(row.saved))}</b>?</span>`
+    + `<button type="button" class="button danger" data-confirm="yes">Delete · Enter</button>`
+    + `<button type="button" class="button ghost" data-confirm="no">Keep · Esc</button>`;
+  box.hidden = false;
+  wake();
+}
+
+function cancelDelete() {
+  confirming = false;
+  $("viewConfirm").hidden = true;
+}
+
+/** Enter: deletes what was asked about, then shows the next one (or closes when nothing is left). */
+async function confirmDelete() {
+  if (!confirming) return;
+  cancelDelete();
+  const row = viewed()[viewing], fromHistory = view === "seen" && !playlist;
+  if (fromHistory) {
+    await chrome.runtime.sendMessage({type: "LINKPEEK_HISTORY_REMOVE", entries: [{a: row.at, o: row.open}]}).catch(() => undefined);
+    seenRows = seenRows.filter(other => other !== row);
+  } else {
+    await chrome.runtime.sendMessage({type: "LINKPEEK_LIBRARY_REMOVE", urls: [row.saved]}).catch(() => undefined);
+    savedRows = savedRows.filter(other => other !== row);
+  }
+  for (const list of [shown, playlist]) {
+    const at = list?.indexOf(row) ?? -1;
+    if (at >= 0) list!.splice(at, 1);
+  }
+  gridStale = true;
+  const list = viewed();
+  if (!list.length) {
+    closeViewer();
+    $("summary").textContent = fromHistory ? "Removed from the history" : "Deleted, Downloads copy included";
+    return;
+  }
+  await showItem(Math.min(viewing, list.length - 1));
+}
+
+/** B: stars or unstars the file on screen. Favourites are kept whatever happens: never trimmed for space, never removed by the size check. */
+async function toggleFavorite() {
+  if (viewing < 0) return;
+  const row = viewed()[viewing];
+  if (favorites.has(row.saved)) favorites.delete(row.saved);
+  else favorites.add(row.saved);
+  paintFavorite(row);
+  gridStale = true;
+  await chrome.storage.local.set({[FAVORITE_MEDIA]: [...favorites]}).catch(() => undefined);
+}
+
+/** F: the viewer alone on screen, or back. */
+function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  else void $("view").requestFullscreen?.().catch(() => undefined);
 }
 
 function onKey(event: KeyboardEvent) {
@@ -958,20 +1090,87 @@ function onKey(event: KeyboardEvent) {
     }
     return;
   }
+  // Ctrl, Cmd and Alt combinations stay the browser's own (Ctrl + and Ctrl - zoom the page).
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  wake();
+  if (confirming) {
+    if (event.key === "Enter") void confirmDelete();
+    else if (event.key === "Escape") cancelDelete();
+    else return;
+    event.preventDefault();
+    return;
+  }
+  const help = $("viewHelp");
+  if (!help.hidden) {
+    help.hidden = true;
+    event.preventDefault();
+    return;
+  }
   const moves: Record<string, number> = {ArrowRight: 1, ArrowDown: 1, " ": 1, ArrowLeft: -1, ArrowUp: -1};
-  if (event.key === " " && playing) togglePause();
-  else if (event.key === "Escape") closeViewer();
-  else if (event.key in moves) step(moves[event.key]);
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (key === " " && playing) togglePause();
+  else if (key === "Escape") closeViewer();
+  else if (key === "+" || key === "=") zoomBy(ZOOM_STEP);
+  else if (key === "-" || key === "_") zoomBy(1 / ZOOM_STEP);
+  else if (key === "0") zoom.reset();
+  else if (key === "d" || key === "Delete") askDelete();
+  else if (key === "b") void toggleFavorite();
+  else if (key === "f") toggleFullscreen();
+  else if (key === "?") help.hidden = false;
+  else if (key in moves) step(moves[key]);
   else return;
   event.preventDefault();
 }
 
+/** Scroll steps through; Ctrl+scroll (and a trackpad pinch, which arrives as one) zooms at the pointer. */
 function onWheel(event: WheelEvent) {
   if (viewing < 0) return;
   event.preventDefault();
+  wake();
+  if (event.ctrlKey) {
+    if (event.deltaY) zoomBy(Math.exp(-event.deltaY * 0.0025), event.clientX, event.clientY);
+    return;
+  }
   if (Date.now() - lastWheel < WHEEL_STEP_MS || !event.deltaY) return;
   lastWheel = Date.now();
   step(event.deltaY > 0 ? 1 : -1);
+}
+
+/**
+ * Zoomed media is dragged to pan. A press that barely moves is a click: on a
+ * zoomed video it plays or pauses it (its own controls are hidden while
+ * zoomed); on the empty stage of fitted media it closes the viewer.
+ */
+function bindStage() {
+  const stage = $("viewStage");
+  let drag: {x: number; y: number; moved: number} | undefined;
+  stage.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || !zoom.zoomed) return;
+    drag = {x: event.clientX, y: event.clientY, moved: 0};
+    stage.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  stage.addEventListener("pointermove", event => {
+    if (!drag) return;
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    drag = {x: event.clientX, y: event.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy)};
+    zoom.panBy(dx, dy);
+  });
+  stage.addEventListener("pointerup", event => {
+    const press = drag;
+    drag = undefined;
+    if (!press || press.moved > 4) return;
+    const video = (event.target as Element).closest("video");
+    if (video) void (video.paused ? video.play().catch(() => undefined) : video.pause());
+  });
+  stage.addEventListener("pointercancel", () => drag = undefined);
+  stage.addEventListener("dblclick", event => {
+    if (playing && !paused && !zoom.zoomed) togglePause();
+    zoom.toggle(event.clientX, event.clientY);
+  });
+  stage.addEventListener("click", event => {
+    if (event.target === stage && !zoom.zoomed) closeViewer();
+  });
 }
 
 /** The view and filter in the address, so the popup and the inspector can open "what was preloaded" directly. */
@@ -982,6 +1181,7 @@ function readAddress() {
   filter = wanted === "unseen" || wanted === "seen" ? wanted : "all";
   const media = params.get("media");
   kind = media === "gif" || media === "video" || media === "image" ? media : "all";
+  favoritesOnly = params.get("fav") === "1";
   const order = params.get("sort");
   sort = order === "oldest" || order === "title" || order === "largest" ? order : "newest";
   activeTags = (params.get("tag") ?? "").split(",").map(part => part.trim()).filter(Boolean);
@@ -993,33 +1193,20 @@ function writeAddress() {
   if (view === "saved") params.set("view", "saved");
   if (view === "saved" && filter !== "all") params.set("filter", filter);
   if (kind !== "all") params.set("media", kind);
+  if (favoritesOnly) params.set("fav", "1");
   if (sort !== "newest") params.set("sort", sort);
   if (activeTags.length) params.set("tag", activeTags.join(","));
   if (activeTags.length > 1 && tagMode === "any") params.set("match", "any");
   history.replaceState(null, "", `${location.pathname}${params.size ? `?${params}` : ""}`);
 }
 
-async function start() {
-  clearStep = new TwoStep($("clear"), () => view === "seen" ? "Clear history" : "Delete saved files", () => {
-    $("summary").textContent = summary();
-  });
-  readAddress();
-  // The preview size is a taste, remembered on this device.
-  const tileSize = $("tileSize") as HTMLInputElement;
-  tileSize.value = String(Number(localStorage.getItem("libraryTile")) || 220);
-  $("days").style.setProperty("--tile", `${tileSize.value}px`);
-  tileSize.addEventListener("input", () => {
-    $("days").style.setProperty("--tile", `${tileSize.value}px`);
-    localStorage.setItem("libraryTile", tileSize.value);
-  });
-  settings = await loadSettings().catch(() => DEFAULT_SETTINGS);
-  void seenMedia.load();
-  [seenRows, savedRows] = await Promise.all([
-    readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
-    readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
-  ]);
-  await computeTags();
-  await apply();
+/**
+ * Wires every control. It runs before any data is read or drawn, so a click
+ * the moment a tile appears opens the viewer instead of falling through to
+ * the tile's link.
+ */
+function wire() {
+  zoom = new ZoomPan($("viewStage"), () => $("viewStage").querySelector<HTMLElement>("img, video"), paintZoom);
   new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting) && rendered < shown.length) void renderMore();
   }, {rootMargin: "800px 0px"}).observe($("more"));
@@ -1039,7 +1226,6 @@ async function start() {
     if (msg?.type === "LINKPEEK_AUDIT_TICK") onAuditTick(msg as AuditTickMessage);
     return false;
   });
-  $("viewPause").addEventListener("click", togglePause);
   $("sort").addEventListener("change", () => {
     sort = ($("sort") as HTMLSelectElement).value as Sort;
     writeAddress();
@@ -1073,7 +1259,7 @@ async function start() {
     if (menu.open && !menu.contains(event.target as Node)) menu.open = false;
   });
   const onChip = (event: Event) => {
-    const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter],[data-kind]");
+    const button = (event.target as Element).closest<HTMLElement>("[data-show],[data-filter],[data-kind],[data-fav]");
     if (!button) return;
     if (button.dataset.show) {
       view = button.dataset.show as View;
@@ -1081,6 +1267,7 @@ async function start() {
       if (view === "seen" && sort === "largest") sort = "newest";
       exitSelecting();
     } else if (button.dataset.kind) kind = button.dataset.kind as Kind;
+    else if (button.hasAttribute("data-fav")) favoritesOnly = !favoritesOnly;
     else filter = button.dataset.filter as Filter;
     writeAddress();
     void apply();
@@ -1149,10 +1336,20 @@ async function start() {
     openViewer(Number(media.dataset.index));
   });
   $("view").addEventListener("click", event => {
-    const action = (event.target as Element).closest<HTMLElement>("[data-view]")?.dataset.view;
-    if (action === "close" || event.target === $("view")) closeViewer();
+    const target = event.target as Element, action = target.closest<HTMLElement>("[data-view]")?.dataset.view;
+    const answer = target.closest<HTMLElement>("[data-confirm]")?.dataset.confirm;
+    if (answer) void (answer === "yes" ? confirmDelete() : cancelDelete());
+    else if (action === "close" || target === $("view")) closeViewer();
     else if (action) step(action === "next" ? 1 : -1);
   });
+  $("view").addEventListener("pointermove", wake);
+  $("viewPause").addEventListener("click", togglePause);
+  $("viewZoom").addEventListener("click", () => zoom.reset());
+  $("viewFav").addEventListener("click", () => void toggleFavorite());
+  $("viewDelete").addEventListener("click", askDelete);
+  $("viewFull").addEventListener("click", toggleFullscreen);
+  $("viewKeys").addEventListener("click", () => $("viewHelp").hidden = !$("viewHelp").hidden);
+  bindStage();
   // The mouse's back and forward buttons step through, like in the preview.
   $("view").addEventListener("mouseup", event => {
     if (event.button === 3 || event.button === 4) step(event.button === 4 ? 1 : -1);
@@ -1160,6 +1357,33 @@ async function start() {
   $("viewSave").addEventListener("click", () => void saveViewed());
   document.addEventListener("keydown", onKey);
   $("view").addEventListener("wheel", onWheel, {passive: false});
+}
+
+async function start() {
+  clearStep = new TwoStep($("clear"), () => view === "seen" ? "Clear history" : "Delete saved files", () => {
+    $("summary").textContent = summary();
+  });
+  readAddress();
+  // The preview size is a taste, remembered on this device.
+  const tileSize = $("tileSize") as HTMLInputElement;
+  tileSize.value = String(Number(localStorage.getItem("libraryTile")) || 220);
+  $("days").style.setProperty("--tile", `${tileSize.value}px`);
+  tileSize.addEventListener("input", () => {
+    $("days").style.setProperty("--tile", `${tileSize.value}px`);
+    localStorage.setItem("libraryTile", tileSize.value);
+  });
+  // Every control works from the first frame: wired before anything is awaited or drawn.
+  wire();
+  settings = await loadSettings().catch(() => DEFAULT_SETTINGS);
+  const stored = (await chrome.storage.local.get(FAVORITE_MEDIA).catch(() => ({})) as Record<string, unknown>)[FAVORITE_MEDIA];
+  favorites = new Set(Array.isArray(stored) ? stored.filter((url): url is string => typeof url === "string") : []);
+  void seenMedia.load();
+  [seenRows, savedRows] = await Promise.all([
+    readHistory().then(entries => entries.map(rowFromHistory)).catch(() => []),
+    readLibrary().then(entries => entries.map(rowFromLibrary)).catch(() => [])
+  ]);
+  await computeTags();
+  await apply();
 }
 
 void start();

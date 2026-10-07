@@ -621,7 +621,7 @@ describe("history and fingerprints", () => {
       ["https://cdn.test/small.jpg", {bytes: 3, at: 1, w: 20, h: 300, dl: 9}],
       ["https://cdn.test/fine.jpg", {bytes: 4, at: 2, w: 900, h: 900}]
     ];
-    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 2, removed: 1, mirrored: 1});
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 2, removed: 1, mirrored: 1, historyRemoved: 0});
     expect(chrome.downloads.removeFile).toHaveBeenCalledWith(9);
     const index = new Map(store.mediaIndex as Array<[string, {dl?: number}]>);
     expect([[...index.keys()], index.get("https://cdn.test/fine.jpg")!.dl]).toEqual([["https://cdn.test/fine.jpg"], 7]);
@@ -631,11 +631,59 @@ describe("history and fingerprints", () => {
     expect(ticks[1]).toMatchObject({checked: 2, total: 2, removed: 1, mirrored: 1, url: "https://cdn.test/fine.jpg"});
   });
 
+  it("checks the history after the files, reusing the sizes the files already know", async () => {
+    fakeCaches();
+    store.mediaIndex = [["https://cdn.test/1-s.jpg", {bytes: 3, at: 1, w: 20, h: 20}]];
+    store.historyMeta = {first: 0, last: 0};
+    store["history:0"] = [
+      {a: 1, o: "https://cdn.test/1.jpg", p: "https://cdn.test/1-s.jpg", t: "image", s: "https://x.test"},
+      {a: 2, o: "https://cdn.test/2.jpg", p: "https://cdn.test/2-s.jpg", t: "image", s: "https://x.test", w: 900, h: 700},
+      {a: 3, o: "https://cdn.test/3.mp4", p: "", t: "video", s: "https://x.test"}
+    ];
+    const answer = (await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value;
+    // The file was too small too, so it went with its sighting.
+    expect(answer).toEqual({checked: 1, removed: 1, mirrored: 0, historyRemoved: 1});
+    expect((store["history:0"] as Array<{a: number}>).map(entry => entry.a)).toEqual([2, 3]);
+    const ticks = broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK") as any[];
+    expect(ticks.map(tick => tick.phase)).toEqual(["files", "history", "history"]);
+    expect(ticks.at(-1)).toMatchObject({checked: 3, total: 3, removed: 1, mirrored: 0});
+  });
+
+  it("never judges a favourite's sightings, however small", async () => {
+    fakeCaches();
+    store.favoriteMedia = ["https://cdn.test/1-s.jpg", "https://cdn.test/3-s.jpg"];
+    store.historyMeta = {first: 0, last: 0};
+    store["history:0"] = [
+      {a: 1, o: "https://cdn.test/1.jpg", p: "https://cdn.test/1-s.jpg", t: "image", s: "https://x.test"},
+      {a: 2, o: "https://cdn.test/2.jpg", p: "https://cdn.test/2-s.jpg", t: "image", s: "https://x.test", w: 5, h: 5},
+      {a: 3, o: "https://cdn.test/3.jpg", p: "https://cdn.test/3-s.jpg", t: "image", s: "https://x.test", w: 5, h: 5}
+    ];
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toMatchObject({historyRemoved: 1});
+    expect((store["history:0"] as Array<{a: number}>).map(entry => entry.a)).toEqual([1, 3]);
+    // A favourite is never even measured.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("takes back the history and saved file of media a preview rejected as too small", async () => {
+    fakeCaches();
+    store.mediaIndex = [["https://cdn.test/e-s.png", {bytes: 3, at: 1, dl: 4}]];
+    store.historyMeta = {first: 0, last: 0};
+    store["history:0"] = [
+      {a: 1, o: "https://cdn.test/e.png", p: "https://cdn.test/e-s.png", t: "image", s: "https://x.test"},
+      {a: 2, o: "https://cdn.test/keep.jpg", p: "https://cdn.test/keep-s.jpg", t: "image", s: "https://x.test"}
+    ];
+    expect((await send({type: "LINKPEEK_FORGET_MEDIA", original: "https://cdn.test/e.png", saved: "https://cdn.test/e-s.png"})).value).toEqual({ok: true});
+    expect((store["history:0"] as Array<{a: number}>).map(entry => entry.a)).toEqual([2]);
+    expect(chrome.downloads.removeFile).toHaveBeenCalledWith(4);
+  });
+
   it("ticks every tenth file through a quiet stretch of the check", async () => {
     fakeCaches();
     store.mediaIndex = Array.from({length: 11}, (_, i) => [`https://cdn.test/v${i}.mp4`, {bytes: 1, at: i, type: "video", dl: 50 + i}]);
-    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 11, removed: 0, mirrored: 0});
-    expect(broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK").map((msg: any) => msg.checked)).toEqual([10, 11]);
+    expect((await send({type: "LINKPEEK_LIBRARY_AUDIT"})).value).toEqual({checked: 11, removed: 0, mirrored: 0, historyRemoved: 0});
+    expect(broadcasts.filter((msg: any) => msg.type === "LINKPEEK_AUDIT_TICK").map((msg: any) => [msg.phase, msg.checked])).toEqual([["files", 10], ["files", 11]]);
   });
 
   it("forgets a picked set of saved files, and strikes picked entries from the history", async () => {

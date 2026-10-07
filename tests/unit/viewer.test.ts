@@ -364,8 +364,13 @@ describe("minimum media width runtime checks", () => {
     internal.rejectIfTooNarrow(item(0), 45, version - 1);
     internal.rejectIfTooNarrow(item(9), 45, version);
     viewer.index = 1;
-    internal.rejectIfTooNarrow(viewer.result!.items[0], 45, version);
+    const rejected = vi.fn();
+    viewer.onRejected = rejected;
+    const first = viewer.result!.items[0];
+    internal.rejectIfTooNarrow(first, 45, version);
     expect(viewer.index).toBe(0);
+    // The host hears about what was shown and then ruled out, to take back its history.
+    expect(rejected).toHaveBeenCalledWith(first);
     viewer.close(true);
     internal.rejectIfTooNarrow(item(1), 45, internal.renderVersion);
   });

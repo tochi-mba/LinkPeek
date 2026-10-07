@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MediaLibrary, type AuditProgress, type LibraryRules} from "../../src/background/media-library";
+import {MediaLibrary, measure, svgSize, type AuditProgress, type LibraryRules} from "../../src/background/media-library";
 import {LIBRARY_CACHE, LIBRARY_INDEX, type LibraryEntry} from "../../src/shared/history";
 import {fakeCaches} from "./fake-caches";
 
@@ -50,9 +50,9 @@ describe("the media library", () => {
     expect(store[LIBRARY_INDEX]).toBeUndefined();
     await vi.advanceTimersByTimeAsync(5000);
     expect((store[LIBRARY_INDEX] as unknown[]).length).toBe(4);
-    // A measured picture keeps its pixel size; a file that could not be decoded has none.
+    // A measured picture keeps its pixel size, even one served with no type at all.
     expect(index().get("https://cdn.test/a.jpg")).toMatchObject({w: 500, h: 500});
-    expect(index().get("https://cdn.test/untyped")!.w).toBeUndefined();
+    expect(index().get("https://cdn.test/untyped")).toMatchObject({w: 500, h: 500});
     expect(await library.stats()).toEqual({count: 4, bytes: 40});
     // Already kept: not fetched again.
     library.save("https://cdn.test/a.jpg", rules(), seen);
@@ -266,5 +266,85 @@ describe("prepared and seen media", () => {
     library.save("https://cdn.test/seen-new.jpg", rules(40), seen);
     await settle();
     expect(saved()).toEqual(["https://cdn.test/seen-old.jpg", "https://cdn.test/b.jpg", "https://cdn.test/c.jpg", "https://cdn.test/seen-new.jpg"]);
+  });
+});
+
+describe("measuring pictures", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
+
+  it("sizes an SVG by its own width and height, else its viewBox", () => {
+    expect(svgSize(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="20" height="18px">`)).toEqual({w: 20, h: 18});
+    expect(svgSize(`<svg viewBox="0 0 36 36"><path/></svg>`)).toEqual({w: 36, h: 36});
+    // Relative sizes say nothing in pixels, so the viewBox decides.
+    expect(svgSize(`<svg width="100%" height="100%" viewBox="-5,-5, 640 480">`)).toEqual({w: 640, h: 480});
+    expect(svgSize(`<svg width="10">`)).toBeUndefined();
+    expect(svgSize(`<svg viewBox="0 0 0 0">`)).toBeUndefined();
+    expect(svgSize("<html>no picture</html>")).toBeUndefined();
+  });
+
+  it("tries every picture whatever its declared type, skips video, and spots an SVG served as anything", async () => {
+    expect(await measure(bytes("x"), "video/mp4")).toBeUndefined();
+    expect(await measure(bytes(`<svg width="24" height="24"></svg>`), "application/octet-stream")).toEqual({w: 24, h: 24});
+    expect(await measure(bytes(`<svg viewBox="0 0 30 20"/>`), "image/svg+xml")).toEqual({w: 30, h: 20});
+    expect(await measure(bytes("png"), "")).toEqual({w: 500, h: 500});
+    (createImageBitmap as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("not a picture"));
+    expect(await measure(bytes("junk"), "text/plain")).toBeUndefined();
+  });
+
+  it("finds a file's size as measured, from its saved bytes, or from the web once", async () => {
+    store[LIBRARY_INDEX] = [["https://cdn.test/known.jpg", {bytes: 1, at: 1, w: 40, h: 30}], ["https://cdn.test/wide.jpg", {bytes: 1, at: 2, w: 90}]];
+    await (await caches.open(LIBRARY_CACHE)).put("https://cdn.test/kept.svg", new Response(`<svg width="12" height="12"/>`, {headers: {"content-type": "image/svg+xml"}}));
+    await (await caches.open(LIBRARY_CACHE)).put("https://cdn.test/plain.jpg", new Response(new Uint8Array(4)));
+    const library = new MediaLibrary();
+    expect(await library.sizeFor("https://cdn.test/known.jpg")).toEqual({w: 40, h: 30});
+    expect(await library.sizeFor("https://cdn.test/wide.jpg")).toEqual({w: 90, h: 0});
+    expect(await library.sizeFor("https://cdn.test/kept.svg")).toEqual({w: 12, h: 12});
+    expect(await library.sizeFor("https://cdn.test/plain.jpg")).toEqual({w: 500, h: 500});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await library.sizeFor("https://cdn.test/web.jpg")).toEqual({w: 500, h: 500});
+    // A web file sent with no type at all is still tried.
+    expect(await library.sizeFor("https://cdn.test/untyped-web")).toEqual({w: 500, h: 500});
+    expect(await library.sizeFor("https://cdn.test/missing.jpg")).toBeUndefined();
+    expect(await library.sizeFor("data:image/png;base64,xx")).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    // A file turned away for being too small keeps the size that ruled it out, with no second fetch.
+    sizes["https://cdn.test/tiny.png"] = 3;
+    dims[3] = {width: 20, height: 20};
+    library.save("https://cdn.test/tiny.png", rules(), seen);
+    await settle();
+    expect(await library.sizeFor("https://cdn.test/tiny.png")).toEqual({w: 20, h: 20});
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("favourites", () => {
+  it("are never trimmed for space, however full it gets", async () => {
+    store.favoriteMedia = ["https://cdn.test/old.jpg", 5];
+    const library = new MediaLibrary();
+    library.save("https://cdn.test/old.jpg", rules(40), prepared);
+    await settle();
+    for (const name of ["a", "b", "c", "d"]) {
+      library.save(`https://cdn.test/${name}.jpg`, rules(40), seen);
+      await settle();
+    }
+    // The oldest never-seen file would go first, but it is a favourite: the next oldest goes instead.
+    expect(saved()).toContain("https://cdn.test/old.jpg");
+    expect(saved()).not.toContain("https://cdn.test/a.jpg");
+  });
+
+  it("are never removed by the size check, however small", async () => {
+    store[LIBRARY_INDEX] = [["https://cdn.test/tiny-fav.jpg", {bytes: 1, at: 1, w: 10, h: 10}], ["https://cdn.test/tiny.jpg", {bytes: 1, at: 2, w: 10, h: 10}]];
+    store.favoriteMedia = ["https://cdn.test/tiny-fav.jpg"];
+    expect(await new MediaLibrary().audit(rules())).toMatchObject({removed: 1});
+    expect([...index().keys()]).toEqual(["https://cdn.test/tiny-fav.jpg"]);
+  });
+
+  it("read as none when the stored list is missing or broken", async () => {
+    store.favoriteMedia = "corrupt";
+    // A size stored with only its width (from an older index) is judged on the width alone.
+    store[LIBRARY_INDEX] = [["https://cdn.test/tiny.jpg", {bytes: 1, at: 2, w: 10}]];
+    const library = new MediaLibrary();
+    expect(await library.audit(rules())).toMatchObject({removed: 1});
+    expect(await library.sizeFor("https://cdn.test/tiny.jpg")).toEqual({w: 10, h: 0});
   });
 });
