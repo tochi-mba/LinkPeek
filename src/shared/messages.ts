@@ -24,8 +24,10 @@ export type LibraryStatsRequest = {type: "LINKPEEK_LIBRARY_STATS"};
 export type LibraryClearRequest = {type: "LINKPEEK_LIBRARY_CLEAR"};
 /** Library page: measure every saved file, drop ones below the minimums, and fill in missing Downloads copies. */
 export type LibraryAuditRequest = {type: "LINKPEEK_LIBRARY_AUDIT"};
-/** Worker -> the library page: the saved-files check moved along. */
-export type AuditTickMessage = {type: "LINKPEEK_AUDIT_TICK"; checked: number; total: number; removed: number; mirrored: number; url: string; resting: number};
+/** Worker -> the library page: the check moved along, through the saved files and then the history. */
+export type AuditTickMessage = {type: "LINKPEEK_AUDIT_TICK"; phase: "files" | "history"; checked: number; total: number; removed: number; mirrored: number; url: string; resting: number};
+/** A page's preview found this media too small after showing it: take back its history entries and saved file. */
+export type ForgetMediaRequest = {type: "LINKPEEK_FORGET_MEDIA"; original: string; saved: string};
 /** Library page: forget these saved files - bytes, index entries and Downloads copies. */
 export type LibraryRemoveRequest = {type: "LINKPEEK_LIBRARY_REMOVE"; urls: string[]};
 /** Library page: strike these entries (matched by time and address) from the history. */
@@ -39,7 +41,7 @@ export type ForgetGalleriesRequest = {type: "LINKPEEK_FORGET_GALLERIES"};
 export type BackgroundRequest = ScanRequest | PrefetchRequest | CancelScanRequest | FetchBinaryRequest | DownloadRequest | DownloadAllRequest | OpenTabRequest | ClearCacheRequest
   | ToggleMirrorRequest | MirrorReadyRequest | MirrorQueryRequest | GalleryStatsRequest | ForgetGalleriesRequest | FingerprintRequest
   | HistoryAddRequest | HistoryClearRequest | LibraryStatsRequest | LibraryClearRequest | LibraryAuditRequest | OpenLibraryRequest
-  | LibraryRemoveRequest | HistoryRemoveRequest;
+  | LibraryRemoveRequest | HistoryRemoveRequest | ForgetMediaRequest;
 
 /** Sent by the service worker while a long scan is still running. */
 export type ScanProgress = {type: "LINKPEEK_SCAN_PROGRESS"; token: string; url: string; result: ScanResult};

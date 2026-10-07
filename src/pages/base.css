@@ -246,16 +246,39 @@ input[type="range"] { accent-color: var(--signal); }
 .h-still { display: block; width: 100%; height: auto; }
 /* The preview-size slider. */
 .h-size { width: 110px; accent-color: var(--signal, #D7FF3F); }
-.h-view { position: fixed; inset: 0; z-index: 10; display: grid; grid-template-columns: 64px 1fr 64px; grid-template-rows: auto 1fr; background: rgba(5, 6, 5, .96); }
+/* The full-size viewer: the media has the whole screen; controls float over it and fade when idle. */
+.h-view { position: fixed; inset: 0; z-index: 10; background: #050605; overflow: hidden; }
 .h-view[hidden] { display: none; }
-.h-view-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line, #29302A); }
-.h-view-title { font-weight: 700; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+.h-view-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; }
+.h-view-stage img, .h-view-stage video { max-width: 100vw; max-height: 100vh; object-fit: contain; transform-origin: center; will-change: transform; }
+.h-view-stage.h-zoomed { cursor: grab; }
+.h-view-stage.h-zoomed:active { cursor: grabbing; }
+.h-view-bar { position: absolute; inset: 0 0 auto 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 8px 10px 22px; background: linear-gradient(rgba(5, 6, 5, .82), rgba(5, 6, 5, 0)); transition: opacity .25s ease; }
+.h-view-title { flex: 0 1 auto; min-width: 0; font-weight: 700; color: var(--text, #F2F5EE); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
 .h-view-title:hover { color: var(--signal, #D7FF3F); }
-.h-view-meta { color: var(--muted, #858D83); font: 600 12px ui-monospace, monospace; }
-.h-view-stage { display: grid; place-items: center; min-height: 0; overflow: hidden; }
-.h-view-stage img, .h-view-stage video { max-width: 100%; max-height: calc(100vh - 70px); object-fit: contain; }
-.h-view-nav { border: 0; background: transparent; color: var(--muted, #858D83); font-size: 44px; cursor: pointer; }
-.h-view-nav:hover { color: var(--signal, #D7FF3F); }
+.h-view-meta { min-width: 0; color: var(--muted, #858D83); font: 600 12px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-icon { display: inline-grid; place-items: center; min-width: 34px; height: 34px; padding: 0 8px; border: 0; border-radius: 9px; background: rgba(24, 30, 25, .72); color: var(--text, #F2F5EE); font: 600 15px/1 Inter, "Segoe UI", system-ui, sans-serif; text-decoration: none; cursor: pointer; }
+.h-icon:hover, .h-icon:focus-visible { background: var(--raised, #181E19); color: var(--signal, #D7FF3F); outline: none; }
+.h-icon[aria-pressed="true"] { color: var(--signal, #D7FF3F); }
+.h-icon[hidden] { display: none; }
+.h-icon.h-danger:hover { color: var(--live, #FF6B57); }
+.h-zoomlevel { font: 700 12px ui-monospace, monospace; }
+.h-view-nav { position: absolute; top: 50%; z-index: 2; width: 46px; height: 46px; margin-top: -23px; border: 0; border-radius: 50%; background: rgba(24, 30, 25, .55); color: var(--text, #F2F5EE); font-size: 30px; line-height: 1; cursor: pointer; transition: opacity .25s ease; }
+.h-view-nav.prev { left: 10px; }
+.h-view-nav.next { right: 10px; }
+.h-view-nav:hover { background: var(--raised, #181E19); color: var(--signal, #D7FF3F); }
+.h-view.h-idle { cursor: none; }
+.h-view.h-idle .h-view-bar, .h-view.h-idle .h-view-nav { opacity: 0; pointer-events: none; }
+.h-view-confirm { position: absolute; left: 50%; bottom: 24px; z-index: 3; transform: translateX(-50%); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 10px; max-width: calc(100vw - 32px); padding: 10px 14px; border: 1px solid var(--line, #29302A); border-radius: 14px; background: rgba(17, 21, 18, .96); box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+.h-view-confirm[hidden] { display: none; }
+.h-view-confirm .button { min-height: 34px; }
+.h-view-help { position: absolute; left: 50%; top: 50%; z-index: 3; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 16px 18px; border: 1px solid var(--line, #29302A); border-radius: 14px; background: rgba(17, 21, 18, .97); }
+.h-view-help[hidden] { display: none; }
+.h-view-help h2 { margin: 0 0 10px; font-size: 14px; }
+.h-view-help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
+.h-view-help dt { font: 700 12px ui-monospace, monospace; color: var(--signal, #D7FF3F); }
+.h-view-help dd { margin: 0; color: var(--text, #F2F5EE); }
+@media (prefers-reduced-motion: reduce) { .h-view-bar, .h-view-nav { transition: none; } }
 
 .h-views { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line, #29302A); border-radius: 10px; background: var(--raised, #181E19); }
 .h-chip { height: 28px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted, #858D83); font: 600 12px Inter, "Segoe UI", system-ui, sans-serif; cursor: pointer; }
@@ -309,4 +332,27 @@ input[type="range"] { accent-color: var(--signal); }
 .h-menu > summary::-webkit-details-marker { display: none; }
 .h-menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 6; display: flex; flex-direction: column; gap: 4px; min-width: 220px; padding: 6px; border: 1px solid var(--line, #29302A); border-radius: 12px; background: var(--raised, #181E19); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
 .h-menu-list .button { justify-content: flex-start; min-height: 38px; }
-.h-menu-list .button[hidden] { display: none; }
+
+/* Favourites: a star on the tile, and their own filter. */
+.h-fav { position: absolute; right: 7px; bottom: 7px; padding: 1px 6px; border-radius: 6px; background: rgba(17, 21, 18, .86); color: var(--signal, #D7FF3F); font: 700 12px/1.3 Inter, "Segoe UI", system-ui, sans-serif; }
+.h-favchip { border: 1px solid var(--line, #29302A); }
+
+/* Every browser zoom level (Ctrl + / Ctrl -) leaves the page usable: on a short window the header
+   scrolls away instead of covering the grid, and on a narrow one the rows wrap and the extras step aside. */
+@media (max-height: 560px) {
+  .history-head, .h-selbar { position: static; }
+  .h-tagsall .h-tags { max-height: 60vh; }
+}
+@media (max-width: 760px) {
+  .history-head .rex { display: none; }
+  .history-head { padding: 10px 12px; gap: 8px; }
+  .h-toolbar, .h-tags, .h-tagsall, .h-selbar, .history-summary, .h-bar { margin-left: 12px; margin-right: 12px; }
+  .h-toolbar { padding-left: 0; padding-right: 0; }
+  .h-day { padding-left: 12px; padding-right: 12px; }
+  .h-view-meta { display: none; }
+  .h-view-title { max-width: 60vw; }
+}
+@media (max-width: 420px) {
+  .history-head .button { min-height: 38px; padding: 0 12px; }
+  .h-sizer { display: none; }
+}

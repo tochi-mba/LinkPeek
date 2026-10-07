@@ -89,3 +89,91 @@ describe("the history", () => {
 });
 
 export type {HistoryEntry};
+
+describe("pruning the history", () => {
+  const seenEntry = (n: number, patch: Partial<HistoryEntry> = {}): HistoryEntry => ({a: n, o: `https://cdn.test/${n}.jpg`, p: `https://cdn.test/${n}-s.jpg`, t: "image", s: "https://x.test", ...patch});
+  const small = (w: number, h: number) => w < 50 || h < 50;
+
+  it("strikes every sighting of one address", async () => {
+    const writer = new HistoryWriter(0);
+    for (const entry of [seenEntry(1), seenEntry(2), seenEntry(3, {o: "https://cdn.test/1.jpg"})]) writer.add(entry);
+    await writer.flush();
+    await writer.removeAddress("https://cdn.test/1.jpg");
+    expect((await readHistory()).map(entry => entry.a)).toEqual([2]);
+  });
+
+  it("sizes the unsized once, drops the too small, keeps the sizes it learned, and leaves videos alone", async () => {
+    const writer = new HistoryWriter(0);
+    for (const entry of [seenEntry(1), seenEntry(2), seenEntry(3, {t: "video", p: ""}), seenEntry(4, {w: 10, h: 10}), seenEntry(5), seenEntry(6, {w: 900})]) writer.add(entry);
+    await writer.flush();
+    const sizes: Record<string, {w: number; h: number} | undefined> = {"https://cdn.test/1-s.jpg": {w: 20, h: 20}, "https://cdn.test/2-s.jpg": {w: 800, h: 600}};
+    const size = vi.fn(async (entry: HistoryEntry) => sizes[entry.p]);
+    const ticks: unknown[] = [];
+    expect(await writer.audit(size, small, tick => ticks.push(tick))).toEqual({checked: 6, removed: 3});
+    // Entry 4 already had a size; the video is never measured.
+    expect(size.mock.calls.map(([entry]) => entry.a)).toEqual([1, 2, 5]);
+    // Entry 6 had only a width on record: a missing height counts as unknown, and it is judged on its width.
+    const left = await readHistory();
+    expect(left.map(entry => entry.a)).toEqual([5, 3, 2]);
+    expect(left.find(entry => entry.a === 2)).toMatchObject({w: 800, h: 600});
+    // Entry 5 could not be sized, so it stays as it was, to be tried again next time.
+    expect(left.find(entry => entry.a === 5)!.w).toBeUndefined();
+    expect(ticks).toHaveLength(6);
+    expect(ticks.at(-1)).toMatchObject({checked: 6, total: 6, removed: 3, url: "https://cdn.test/6-s.jpg", resting: 0});
+    // A second check measures only what is still unsized.
+    size.mockClear();
+    expect(await writer.audit(size, small)).toEqual({checked: 3, removed: 0});
+    expect(size.mock.calls.map(([entry]) => entry.a)).toEqual([5]);
+  });
+
+  it("keeps what was added during a check, rests after slow steps, and skips a lost chunk", async () => {
+    const writer = new HistoryWriter(0);
+    writer.add(seenEntry(1));
+    await writer.flush();
+    let release!: () => void;
+    const size = vi.fn(async () => {
+      // While this entry is being measured, the page records another sighting, and measuring takes a while.
+      writer.add(seenEntry(9));
+      await writer.flush();
+      vi.setSystemTime(Date.now() + 400);
+      await new Promise<void>(resolve => release = resolve);
+      return {w: 10, h: 10};
+    });
+    const ticks: Array<{resting: number}> = [];
+    const done = writer.audit(size, small, tick => ticks.push(tick));
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(await done).toEqual({checked: 1, removed: 1});
+    expect(ticks[0].resting).toBe(400);
+    expect((await readHistory()).map(entry => entry.a)).toEqual([9]);
+    // The meta promises a chunk storage no longer holds: the check passes over it.
+    (store[HISTORY_META] as {last: number}).last = 1;
+    const fresh = new HistoryWriter(0);
+    expect(await fresh.audit(async () => ({w: 5, h: 5}), small)).toEqual({checked: 1, removed: 1});
+    expect(await readHistory()).toEqual([]);
+  });
+
+  it("drops a rewrite whose chunk vanished mid-check", async () => {
+    const writer = new HistoryWriter(0);
+    writer.add(seenEntry(1));
+    await writer.flush();
+    const done = writer.audit(async () => {
+      delete store[`${HISTORY_PREFIX}0`];
+      return {w: 5, h: 5};
+    }, small);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await done).toEqual({checked: 1, removed: 1});
+    expect(store[`${HISTORY_PREFIX}0`]).toBeUndefined();
+  });
+
+  it("queues every write, so a failed one does not stop the next", async () => {
+    const writer = new HistoryWriter(0);
+    (chrome.storage.local.set as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("quota"));
+    writer.add(seenEntry(1));
+    await expect(writer.flush()).rejects.toThrow("quota");
+    writer.add(seenEntry(2));
+    await writer.flush();
+    expect((await readHistory()).map(entry => entry.a)).toEqual([2]);
+  });
+});

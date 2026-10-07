@@ -67,6 +67,8 @@ export class Viewer {
   onSlideshowStart?: () => boolean;
   /** Each item shown in single view. */
   onSeen?: (item: MediaItem) => void;
+  /** Shown, then found too small to count once its real size was known. */
+  onRejected?: (item: MediaItem) => void;
   /** Reached the end of a gallery that is still growing. */
   onNeedMore?: () => void;
   /** Every item turned out too small to count, leaving the gallery empty. */
@@ -674,6 +676,7 @@ export class Viewer {
     const at = this.result.items.findIndex(entry => entry.id === item.id);
     if (at < 0) return;
     this.rejectedMedia.add(item.id);
+    this.onRejected?.(item);
     const items = this.result.items.filter(entry => entry.id !== item.id), wasCurrent = at === this.index;
     this.result = {...this.result, items};
     if (at < this.index) this.index--;

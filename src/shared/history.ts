@@ -12,6 +12,8 @@ export const HISTORY_META = "historyMeta";
 export const LIBRARY_CACHE = "linkpeek-media";
 /** The index of saved media files, oldest first. */
 export const LIBRARY_INDEX = "mediaIndex";
+/** Files starred as favourites in the Library, by saved address: kept whatever happens. */
+export const FAVORITE_MEDIA = "favoriteMedia";
 /** Still frames the library page made for GIF and video tiles, keyed like the saved files. */
 export const STILLS_CACHE = "linkpeek-stills";
 
@@ -65,6 +67,9 @@ export const HISTORY_LIMIT = 50_000;
 export interface HistoryEntry {
   /** Seen at (ms since epoch). */
   a: number;
+  /** Measured pixel size of what was shown, once a check has learned it. */
+  w?: number;
+  h?: number;
   /** Original address. */
   o: string;
   /** Preview (or video poster) address. */
@@ -107,13 +112,32 @@ export async function readHistory(): Promise<HistoryEntry[]> {
   return keys.flatMap(key => Array.isArray(stored[key]) ? (stored[key] as unknown[]).filter(isEntry) : []).reverse();
 }
 
-/** Appends entries in batches; the service worker keeps one of these. */
+/** How far the history check has come, and how long it is resting to spare the machine. */
+export type HistoryAuditProgress = {checked: number; total: number; removed: number; url: string; resting: number};
+
+/**
+ * Appends entries in batches; the service worker keeps one of these. Every
+ * write goes through one queue, so a check rewriting old chunks can never
+ * clobber entries added meanwhile.
+ */
 export class HistoryWriter {
   private meta?: Promise<HistoryMeta>;
   private pending: HistoryEntry[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private writes: Promise<unknown> = Promise.resolve();
 
   constructor(private delayMs = 2000) {}
+
+  /** Runs `work` after every write before it, and before any write after it. */
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writes.then(work, work);
+    this.writes = run.catch(() => undefined);
+    return run;
+  }
+
+  private chunkKeys(meta: HistoryMeta) {
+    return Array.from({length: meta.last - meta.first + 1}, (_, i) => HISTORY_PREFIX + (meta.first + i));
+  }
 
   private loadMeta() {
     this.meta ??= chrome.storage.local.get(HISTORY_META).then(stored => isMeta(stored[HISTORY_META]) ? stored[HISTORY_META] : {first: 0, last: 0});
@@ -125,9 +149,13 @@ export class HistoryWriter {
     this.timer ??= setTimeout(() => void this.flush(), this.delayMs);
   }
 
-  async flush() {
+  flush() {
     clearTimeout(this.timer);
     this.timer = undefined;
+    return this.serial(() => this.flushNow());
+  }
+
+  private async flushNow() {
     const added = this.pending;
     this.pending = [];
     if (!added.length) return;
@@ -152,29 +180,86 @@ export class HistoryWriter {
   }
 
   /** Strikes entries (matched by time and address) from the chunks that hold them. */
-  async remove(gone: ReadonlyArray<{a: number; o: string}>) {
-    await this.flush();
-    const meta = await this.loadMeta();
+  remove(gone: ReadonlyArray<{a: number; o: string}>) {
     const wanted = new Set(gone.map(entry => `${entry.a}\u0000${entry.o}`));
-    const keys = Array.from({length: meta.last - meta.first + 1}, (_, i) => HISTORY_PREFIX + (meta.first + i));
-    const stored = await chrome.storage.local.get(keys);
-    const update: Record<string, unknown> = {};
-    for (const key of keys) {
-      const chunk = stored[key];
-      if (!Array.isArray(chunk)) continue;
-      const kept = (chunk as HistoryEntry[]).filter(entry => !wanted.has(`${entry.a}\u0000${entry.o}`));
-      if (kept.length !== chunk.length) update[key] = kept;
+    return this.removeWhere(entry => wanted.has(`${entry.a}\u0000${entry.o}`));
+  }
+
+  /** Strikes every entry for this address, whenever it was seen. */
+  removeAddress(original: string) {
+    return this.removeWhere(entry => entry.o === original);
+  }
+
+  private removeWhere(gone: (entry: HistoryEntry) => boolean) {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    return this.serial(async () => {
+      await this.flushNow();
+      const keys = this.chunkKeys(await this.loadMeta());
+      const stored = await chrome.storage.local.get(keys);
+      const update: Record<string, unknown> = {};
+      for (const key of keys) {
+        const chunk = stored[key];
+        if (!Array.isArray(chunk)) continue;
+        const kept = (chunk as HistoryEntry[]).filter(entry => !gone(entry));
+        if (kept.length !== chunk.length) update[key] = kept;
+      }
+      if (Object.keys(update).length) await chrome.storage.local.set(update);
+    });
+  }
+
+  /**
+   * Walks every entry once: learns the size of those not yet sized (videos
+   * aside) through `size`, drops those `small` calls too small, and keeps the
+   * sizes learned so the next check skips them. Each chunk is rewritten from
+   * a fresh read inside the write queue, so entries added during the check
+   * survive. A step that took real work earns an equal rest, so the check
+   * never takes more than half the machine, but it always finishes.
+   */
+  async audit(size: (entry: HistoryEntry) => Promise<{w: number; h: number} | undefined>, small: (w: number, h: number, entry: HistoryEntry) => boolean,
+    onProgress?: (progress: HistoryAuditProgress) => void) {
+    await this.flush();
+    const keys = this.chunkKeys(await this.loadMeta()), stored = await chrome.storage.local.get(keys);
+    const chunks = keys.map(key => Array.isArray(stored[key]) ? (stored[key] as unknown[]).filter(isEntry) : []);
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0), id = (entry: HistoryEntry) => `${entry.a}\u0000${entry.o}`;
+    let checked = 0, removed = 0;
+    for (const [at, chunk] of chunks.entries()) {
+      const sized = new Map<string, {w: number; h: number}>(), dropped = new Set<string>();
+      for (const entry of chunk) {
+        const began = Date.now();
+        let known = entry.w === undefined ? undefined : {w: entry.w, h: entry.h ?? 0};
+        if (!known && entry.t !== "video") {
+          known = await size(entry);
+          if (known) sized.set(id(entry), known);
+        }
+        if (known && small(known.w, known.h, entry)) {
+          dropped.add(id(entry));
+          removed++;
+        }
+        checked++;
+        const took = Date.now() - began, resting = took > 25 ? Math.min(1000, took) : 0;
+        onProgress?.({checked, total, removed, url: savedUrlOf(entry), resting});
+        if (resting) await new Promise(resolve => setTimeout(resolve, resting));
+      }
+      if (!sized.size && !dropped.size) continue;
+      await this.serial(async () => {
+        const key = keys[at], fresh = (await chrome.storage.local.get(key))[key];
+        if (!Array.isArray(fresh)) return;
+        await chrome.storage.local.set({[key]: (fresh as HistoryEntry[]).filter(entry => !dropped.has(id(entry))).map(entry => ({...entry, ...sized.get(id(entry))}))});
+      });
     }
-    if (Object.keys(update).length) await chrome.storage.local.set(update);
+    return {checked: total, removed};
   }
 
   /** Forgets the whole history. */
-  async clear() {
+  clear() {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.pending = [];
-    const meta = await this.loadMeta();
-    await chrome.storage.local.remove([HISTORY_META, ...Array.from({length: meta.last - meta.first + 1}, (_, i) => HISTORY_PREFIX + (meta.first + i))]);
-    this.meta = Promise.resolve({first: 0, last: 0});
+    return this.serial(async () => {
+      const meta = await this.loadMeta();
+      await chrome.storage.local.remove([HISTORY_META, ...this.chunkKeys(meta)]);
+      this.meta = Promise.resolve({first: 0, last: 0});
+    });
   }
 }

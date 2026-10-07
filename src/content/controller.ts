@@ -11,7 +11,7 @@ import type {MediaItem} from "../shared/media";
 import type {MirrorStateMessage, ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {samePicture} from "../shared/picture";
 import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, loadSettings, type LinkPeekSettings} from "../shared/settings";
-import {SeenMedia, fingerprintsFor, recordSeen} from "../shared/seen-media";
+import {SeenMedia, fingerprintsFor, forgetRejected, recordSeen} from "../shared/seen-media";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
 import {HoverIntent, anchorFrom} from "./hover-intent";
@@ -150,6 +150,7 @@ export class PreviewController {
     this.viewer.onSlideshowStart = () => this.startShuffle();
     this.viewer.onNeedMore = () => void this.refillShuffle();
     this.viewer.onSeen = item => recordSeen(this.seen, item, this.pageSettings());
+    this.viewer.onRejected = forgetRejected;
     void this.seen.load();
     this.disposers.push(() => this.seen.stop());
     // A mirror window may already be open (opened before this page loaded).

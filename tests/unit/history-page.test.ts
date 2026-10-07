@@ -357,11 +357,11 @@ describe("the saved view", () => {
     harness.chrome.runtime.sendMessage.mockImplementation(async (msg: {type: string}) => {
       if (msg.type !== "LINKPEEK_LIBRARY_AUDIT") return {ok: true};
       harness.store[LIB] = [];
-      return {checked: 1, removed: 1, mirrored: 0};
+      return {checked: 1, removed: 1, mirrored: 0, historyRemoved: 2};
     });
     $("#audit").click();
     await settle();
-    expect($("#summary").textContent).toBe("Checked every saved file: removed 1 below your minimum size, added 0 to Downloads / LinkPeek Library.");
+    expect($("#summary").textContent).toBe("Checked every saved file and the history: removed 1 file and 2 history entries below your minimum size, added 0 to Downloads / LinkPeek Library.");
     expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
     // When the worker cannot answer, the page says so instead of staying stuck on "checking".
     harness.chrome.runtime.sendMessage.mockRejectedValueOnce(new Error("gone"));
@@ -761,7 +761,7 @@ describe("selecting many at once, and the live check line", () => {
   it("narrates the saved-files check on one line as the worker reports it", async () => {
     await openLibrary(rows(), "?view=saved");
     const tick = (patch: Record<string, unknown>) => {
-      for (const listener of harness.runtimeListeners) listener({type: "LINKPEEK_AUDIT_TICK", checked: 142, total: 384, removed: 3, mirrored: 12, url: "https://cdn.test/folder/beach.jpg?x=1", resting: 0, ...patch});
+      for (const listener of harness.runtimeListeners) listener({type: "LINKPEEK_AUDIT_TICK", phase: "files", checked: 142, total: 384, removed: 3, mirrored: 12, url: "https://cdn.test/folder/beach.jpg?x=1", resting: 0, ...patch});
     };
     // Too early for an estimate.
     tick({checked: 2, removed: 0, mirrored: 0});
@@ -786,6 +786,9 @@ describe("selecting many at once, and the live check line", () => {
     vi.advanceTimersByTime(200_000);
     tick({checked: 20, removed: 0, mirrored: 0});
     expect($("#summary").textContent).toContain("min left");
+    // The history comes second, and has no Downloads copies to speak of.
+    tick({phase: "history", checked: 1, total: 4, removed: 0, mirrored: 0});
+    expect($("#summary").textContent).toBe("Checking the history · 25% · 1 of 4 · 0 removed · beach.jpg");
     for (const listener of harness.runtimeListeners) listener({type: "OTHER"});
   });
 });
@@ -1123,7 +1126,7 @@ describe("tags, order and the slideshow", () => {
     const first = $("#viewTitle").textContent;
     expect($("#viewMeta").textContent).toMatch(/1 of 2/);
     $("#viewPause").click();
-    expect($("#viewPause").textContent).toBe("Resume");
+    expect([$("#viewPause").textContent, $("#viewPause").getAttribute("aria-label")]).toEqual(["▶", "Resume"]);
     expect($("#viewMeta").textContent).toMatch(/slideshow paused$/);
     await vi.advanceTimersByTimeAsync(10_000);
     await settle();
@@ -1134,7 +1137,7 @@ describe("tags, order and the slideshow", () => {
     expect($("#viewTitle").textContent).not.toBe(first);
     document.dispatchEvent(new KeyboardEvent("keydown", {key: " "}));
     await settle();
-    expect($("#viewPause").textContent).toBe("Pause");
+    expect([$("#viewPause").textContent, $("#viewPause").getAttribute("aria-label")]).toEqual(["⏸", "Pause"]);
     await vi.advanceTimersByTimeAsync(3000);
     await settle();
     expect($("#viewMeta").textContent).toMatch(/all caught up$/);
@@ -1169,5 +1172,308 @@ describe("tags, order and the slideshow", () => {
     // The pause button does nothing once the slideshow is over.
     $("#viewPause").click();
     expect($("#viewPause").hidden).toBe(true);
+  });
+});
+
+describe("the full-size viewer", () => {
+  const LIB = "mediaIndex";
+  const chip = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!;
+  const press = (key: string, init: KeyboardEventInit = {}) => document.dispatchEvent(new KeyboardEvent("keydown", {key, bubbles: true, cancelable: true, ...init}));
+  const media = () => document.querySelector<HTMLElement>("#viewStage img, #viewStage video")!;
+  const rows = () => {
+    const now = Date.now();
+    return [
+      ["https://cdn.test/a.jpg", {bytes: 1, at: now - 1, seen: true, type: "image", title: "Alpha"}],
+      ["https://cdn.test/b.mp4", {bytes: 1, at: now - 2, seen: true, type: "video", title: "Bravo"}],
+      ["https://cdn.test/c.jpg", {bytes: 1, at: now - 3, seen: true, type: "image", title: "Charlie"}]
+    ];
+  };
+
+  async function openLibrary(index: unknown, search = "?view=saved", extra: Record<string, unknown> = {}) {
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", `/history.html${search}`);
+    vi.resetModules();
+    loadPage("history.html");
+    harness = stubExtension({}, extra);
+    harness.store[LIB] = index;
+    await import("../../src/pages/history");
+    await settle();
+  }
+
+  async function view(at = 0) {
+    document.querySelector<HTMLElement>(`[data-index="${at}"]`)!.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+    await settle();
+  }
+
+  it("zooms by key, Ctrl+scroll and double-click, shows the level, and fits again on the next item", async () => {
+    await openLibrary(rows());
+    await view(0);
+    expect($("#viewZoom").hidden).toBe(true);
+    press("+");
+    expect([$("#viewZoom").hidden, $("#viewZoom").textContent, media().style.transform]).toEqual([false, "125%", "translate(0px, 0px) scale(1.25)"]);
+    press("-");
+    expect([$("#viewZoom").hidden, media().style.transform]).toEqual([true, ""]);
+    // Ctrl+scroll (and a pinch) zooms instead of stepping; plain scroll still steps.
+    $("#view").dispatchEvent(new WheelEvent("wheel", {deltaY: -100, ctrlKey: true, cancelable: true}));
+    expect($("#viewZoom").textContent).toBe("128%");
+    $("#view").dispatchEvent(new WheelEvent("wheel", {deltaY: 0, ctrlKey: true, cancelable: true}));
+    expect($("#viewZoom").textContent).toBe("128%");
+    // Ctrl and the other modifiers belong to the browser (Ctrl + zooms the page).
+    press("+", {ctrlKey: true});
+    press("=", {metaKey: true});
+    press("+", {altKey: true});
+    expect($("#viewZoom").textContent).toBe("128%");
+    $("#viewZoom").click();
+    expect($("#viewZoom").hidden).toBe(true);
+    $("#viewStage").dispatchEvent(new MouseEvent("dblclick", {bubbles: true, clientX: 10, clientY: 10}));
+    expect($("#viewZoom").textContent).toBe("200%");
+    press("=");
+    press("0");
+    expect($("#viewZoom").hidden).toBe(true);
+    press("_");
+    expect($("#viewZoom").hidden).toBe(true);
+    press("+");
+    press("ArrowRight");
+    await settle();
+    expect([$("#viewTitle").textContent, $("#viewZoom").hidden]).toEqual(["Bravo", true]);
+  });
+
+  it("drags zoomed media around, and a still click on a zoomed video plays or pauses it", async () => {
+    await openLibrary(rows());
+    await view(1);
+    const video = media() as HTMLVideoElement;
+    expect(video.controls).toBe(true);
+    // Not zoomed: a press does nothing special.
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0, clientX: 5, clientY: 5}));
+    press("+");
+    // Its own controls step aside while zoomed.
+    expect(video.controls).toBe(false);
+    const play = vi.spyOn(video, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(video, "pause").mockImplementation(() => undefined);
+    Object.defineProperty(video, "paused", {configurable: true, value: true});
+    video.dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0, clientX: 50, clientY: 50}));
+    video.dispatchEvent(new MouseEvent("pointerup", {bubbles: true, clientX: 51, clientY: 51}));
+    expect(play).toHaveBeenCalledTimes(1);
+    Object.defineProperty(video, "paused", {configurable: true, value: false});
+    video.dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0, clientX: 50, clientY: 50}));
+    video.dispatchEvent(new MouseEvent("pointerup", {bubbles: true, clientX: 50, clientY: 50}));
+    expect(pause).toHaveBeenCalledTimes(1);
+    // A real drag pans (holding on to the pointer even if it leaves the stage), and is not a click.
+    const capture = vi.fn();
+    $("#viewStage").setPointerCapture = capture;
+    video.dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0, clientX: 50, clientY: 50}));
+    expect(capture).toHaveBeenCalled();
+    $("#viewStage").dispatchEvent(new MouseEvent("pointermove", {bubbles: true, clientX: 90, clientY: 70}));
+    video.dispatchEvent(new MouseEvent("pointerup", {bubbles: true, clientX: 90, clientY: 70}));
+    expect([play.mock.calls.length, pause.mock.calls.length]).toEqual([1, 1]);
+    // Moving without a press, a right press, a cancelled press, and a still click off the video all do nothing.
+    $("#viewStage").dispatchEvent(new MouseEvent("pointermove", {bubbles: true, clientX: 1, clientY: 1}));
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 2}));
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerup", {bubbles: true}));
+    video.dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0}));
+    $("#viewStage").dispatchEvent(new Event("pointercancel"));
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerup", {bubbles: true}));
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerdown", {bubbles: true, button: 0}));
+    $("#viewStage").dispatchEvent(new MouseEvent("pointerup", {bubbles: true}));
+    expect([play.mock.calls.length, pause.mock.calls.length]).toEqual([1, 1]);
+    // Zoomed, a click on the empty stage keeps the viewer open; fitted, it closes it.
+    $("#viewStage").dispatchEvent(new MouseEvent("click", {bubbles: true}));
+    expect($("#view").hidden).toBe(false);
+    press("0");
+    expect(video.controls).toBe(true);
+    $("#viewStage").dispatchEvent(new MouseEvent("click", {bubbles: true}));
+    expect($("#view").hidden).toBe(true);
+  });
+
+  it("pauses a slideshow to look closer", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/u1.jpg", {bytes: 1, at: now - 1, seen: false, type: "image", title: "One"}],
+      ["https://cdn.test/u2.jpg", {bytes: 1, at: now - 2, seen: false, type: "image", title: "Two"}]
+    ]);
+    $("#play").click();
+    await settle();
+    press("+");
+    expect($("#viewMeta").textContent).toMatch(/slideshow paused$/);
+    // Already paused: zooming further leaves it paused, and double-clicking back out does not resume it.
+    press("+");
+    $("#viewStage").dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
+    expect($("#viewMeta").textContent).toMatch(/slideshow paused$/);
+    // Running, a double-click to look closer pauses it.
+    $("#viewPause").click();
+    $("#viewStage").dispatchEvent(new MouseEvent("dblclick", {bubbles: true}));
+    expect([$("#viewMeta").textContent!.endsWith("slideshow paused"), $("#viewZoom").textContent]).toEqual([true, "200%"]);
+  });
+
+  it("deletes with D then Enter, names what goes, moves on, and closes when nothing is left", async () => {
+    await openLibrary(rows());
+    await view(0);
+    press("d");
+    expect($("#viewConfirm").hidden).toBe(false);
+    expect($("#viewConfirm").textContent).toContain("Delete this file from this device and Downloads: a.jpg?");
+    // While asking, other keys wait.
+    press("ArrowRight");
+    press("x");
+    press("d");
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Alpha");
+    press("Escape");
+    expect([$("#viewConfirm").hidden, $("#view").hidden]).toEqual([true, false]);
+    press("Delete");
+    press("Enter");
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_LIBRARY_REMOVE", urls: ["https://cdn.test/a.jpg"]});
+    expect([$("#viewTitle").textContent, $("#viewMeta").textContent!.startsWith("1 of 2")]).toEqual(["Bravo", true]);
+    // The buttons do the same as the keys; pressing Delete again while asked changes nothing.
+    $("#viewDelete").click();
+    $("#viewDelete").click();
+    const stale = document.querySelector<HTMLButtonElement>('[data-confirm="yes"]')!;
+    document.querySelector<HTMLButtonElement>('[data-confirm="no"]')!.click();
+    expect($("#viewConfirm").hidden).toBe(true);
+    // A confirm button left over from a question already answered does nothing.
+    stale.click();
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Bravo");
+    $("#viewDelete").click();
+    document.querySelector<HTMLButtonElement>('[data-confirm="yes"]')!.click();
+    await settle();
+    expect($("#viewTitle").textContent).toBe("Charlie");
+    press("d");
+    press("Enter");
+    await settle();
+    // Nothing left: the viewer closes, and the grid is redrawn without them.
+    expect([$("#view").hidden, $("#summary").textContent, document.querySelectorAll(".h-tile").length]).toEqual([true, "Deleted, Downloads copy included", 0]);
+  });
+
+  it("removes from the history in the history view, and deletes the file during a slideshow", async () => {
+    const now = Date.now();
+    vi.resetModules();
+    fakeCaches();
+    vi.stubGlobal("URL", Object.assign(URL, {createObjectURL: vi.fn(() => "blob:saved")}));
+    history.replaceState(null, "", "/history.html");
+    loadPage("history.html");
+    harness = stubExtension({});
+    harness.store[HISTORY_META] = {first: 0, last: 0};
+    harness.store[`${HISTORY_PREFIX}0`] = [entry(1, now - 1), entry(2, now)];
+    harness.store[LIB] = [["https://cdn.test/new.jpg", {bytes: 1, at: now, seen: false, type: "image", title: "Fresh"}]];
+    await import("../../src/pages/history");
+    await settle();
+    await view(0);
+    press("d");
+    expect($("#viewConfirm").textContent).toContain("Remove this from the history: 2-s.jpg?");
+    press("Enter");
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_HISTORY_REMOVE", entries: [{a: now, o: "https://cdn.test/2.jpg"}]});
+    expect($("#viewTitle").textContent).toBe("Post 1");
+    press("d");
+    press("Enter");
+    await settle();
+    expect([$("#view").hidden, $("#summary").textContent]).toEqual([true, "Removed from the history"]);
+    $("#play").click();
+    await settle();
+    press("d");
+    expect($("#viewConfirm").textContent).toContain("Delete this file from this device and Downloads: new.jpg?");
+    press("Enter");
+    await settle();
+    expect(harness.messages).toContainEqual({type: "LINKPEEK_LIBRARY_REMOVE", urls: ["https://cdn.test/new.jpg"]});
+    expect($("#view").hidden).toBe(true);
+    // With the viewer closed, D and Enter do nothing.
+    press("d");
+    press("Enter");
+  });
+
+  it("stars favourites with B, shows and filters them, and keeps the filter in the address", async () => {
+    await openLibrary(rows(), "?view=saved", {favoriteMedia: ["https://cdn.test/c.jpg", 7]});
+    expect(document.querySelectorAll(".h-fav")).toHaveLength(1);
+    await view(0);
+    expect([$("#viewFav").textContent, $("#viewFav").getAttribute("aria-pressed")]).toEqual(["☆", "false"]);
+    press("b");
+    await settle();
+    expect([$("#viewFav").textContent, $("#viewFav").getAttribute("aria-pressed")]).toEqual(["★", "true"]);
+    expect(harness.store.favoriteMedia).toEqual(["https://cdn.test/c.jpg", "https://cdn.test/a.jpg"]);
+    $("#viewFav").click();
+    await settle();
+    expect(harness.store.favoriteMedia).toEqual(["https://cdn.test/c.jpg"]);
+    press("B");
+    await settle();
+    press("Escape");
+    await settle();
+    expect(document.querySelectorAll(".h-fav")).toHaveLength(2);
+    chip("#favOnly").click();
+    await settle();
+    expect([location.search, document.querySelectorAll(".h-tile").length, chip("#favOnly").getAttribute("aria-pressed")]).toEqual(["?view=saved&fav=1", 2, "true"]);
+    // The slideshow plays only favourites too (none of these are unseen).
+    expect($("#play").textContent).toBe("▶ Play unseen");
+    chip('[data-kind="video"]').click();
+    await settle();
+    expect($("#summary").textContent).toBe("No favourites here yet. In the full-size view, B stars what is on screen.");
+  });
+
+  it("counts only unseen favourites for the slideshow while the favourites filter is on", async () => {
+    const now = Date.now();
+    await openLibrary([
+      ["https://cdn.test/f1.jpg", {bytes: 1, at: now - 1, seen: false, type: "image", title: "Fav one"}],
+      ["https://cdn.test/n1.jpg", {bytes: 1, at: now - 2, seen: false, type: "image", title: "Plain one"}]
+    ], "?view=saved&fav=1", {favoriteMedia: ["https://cdn.test/f1.jpg"]});
+    expect($("#play").textContent).toBe("▶ Play unseen · 1");
+    chip("#favOnly").click();
+    await settle();
+    expect($("#play").textContent).toBe("▶ Play unseen · 2");
+  });
+
+  it("opens straight on favourites from the address, and copes with unreadable storage", async () => {
+    await openLibrary(rows(), "?view=saved&fav=1", {favoriteMedia: "corrupt"});
+    expect(document.querySelectorAll(".h-tile")).toHaveLength(0);
+    harness.chrome.storage.local.set = vi.fn(async () => Promise.reject(new Error("full")));
+    chip("#favOnly").click();
+    await settle();
+    await view(0);
+    press("b");
+    await settle();
+    expect($("#viewFav").textContent).toBe("★");
+    // With nothing on screen, B and the star do nothing.
+    press("Escape");
+    press("b");
+    $("#viewFav").click();
+    await settle();
+    expect(harness.chrome.storage.local.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes full screen with F, lists the keys with ?, and fades the controls when idle", async () => {
+    await openLibrary(rows());
+    await view(0);
+    const request = vi.fn(async () => undefined);
+    $("#view").requestFullscreen = request;
+    press("f");
+    expect(request).toHaveBeenCalled();
+    const exit = vi.fn(async () => undefined);
+    Object.defineProperty(document, "fullscreenElement", {configurable: true, value: $("#view")});
+    document.exitFullscreen = exit;
+    $("#viewFull").click();
+    expect(exit).toHaveBeenCalledTimes(1);
+    // Closing the viewer leaves full screen too.
+    press("Escape");
+    expect(exit).toHaveBeenCalledTimes(2);
+    Object.defineProperty(document, "fullscreenElement", {configurable: true, value: null});
+    await view(0);
+    press("?");
+    expect($("#viewHelp").hidden).toBe(false);
+    // The key list keeps the controls up, and any key closes it.
+    vi.advanceTimersByTime(3000);
+    expect($("#view").classList.contains("h-idle")).toBe(false);
+    press("x");
+    expect([$("#viewHelp").hidden, $("#view").hidden]).toEqual([true, false]);
+    $("#viewKeys").click();
+    $("#viewKeys").click();
+    expect($("#viewHelp").hidden).toBe(true);
+    vi.advanceTimersByTime(2600);
+    expect($("#view").classList.contains("h-idle")).toBe(true);
+    $("#view").dispatchEvent(new MouseEvent("pointermove", {bubbles: true}));
+    expect($("#view").classList.contains("h-idle")).toBe(false);
+    // A question on screen keeps them up too.
+    press("d");
+    vi.advanceTimersByTime(3000);
+    expect($("#view").classList.contains("h-idle")).toBe(false);
   });
 });

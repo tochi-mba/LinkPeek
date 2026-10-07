@@ -8,12 +8,12 @@
 import {ByteCache} from "./background/byte-cache";
 import {Fingerprinter} from "./background/fingerprint";
 import {GalleryStore, type StoredGallery} from "./background/gallery-store";
-import {MediaLibrary, type AuditProgress, type LibraryRules} from "./background/media-library";
+import {MediaLibrary, favoriteFiles, type AuditProgress, type LibraryRules} from "./background/media-library";
 import {HistoryWriter, LIBRARY_CACHE, savedUrlOf, savedUrlOfItem} from "./shared/history";
 import {prefetchDiscourse, scanDiscourse, type DiscourseSeed} from "./core/discourse";
 import {scanGeneric} from "./core/generic";
 import {bytesToBase64, fetchWithRetry, readBytesCapped} from "./core/http";
-import type {LinkKind, ScanResult} from "./shared/media";
+import {underSized, type LinkKind, type ScanResult} from "./shared/media";
 import type {AuditTickMessage, BackgroundRequest, DownloadAllRequest, ScanRequest} from "./shared/messages";
 import {SCAN_SETTING_KEYS, SETTINGS_VERSION, effectiveSettings, loadSettings, type LinkPeekSettings} from "./shared/settings";
 
@@ -89,15 +89,31 @@ function savePrepared(result: ScanResult, settings: LinkPeekSettings) {
   }
 }
 
-/** Streams the saved-files check to the extension pages: every removal and new copy, every tenth file, and the last. */
-function auditTicker() {
+/** Streams a check to the extension pages: every removal and new copy, every tenth item, and the last. */
+function auditTicker(phase: AuditTickMessage["phase"]) {
   let milestones = 0;
-  return (progress: AuditProgress) => {
-    const milestone = progress.removed + progress.mirrored !== milestones || progress.checked % 10 === 0 || progress.checked === progress.total;
-    milestones = progress.removed + progress.mirrored;
+  return (progress: Omit<AuditProgress, "mirrored"> & {mirrored?: number}) => {
+    const mirrored = progress.mirrored ?? 0;
+    const milestone = progress.removed + mirrored !== milestones || progress.checked % 10 === 0 || progress.checked === progress.total;
+    milestones = progress.removed + mirrored;
     if (!milestone) return;
-    chrome.runtime.sendMessage({type: "LINKPEEK_AUDIT_TICK", ...progress} satisfies AuditTickMessage).catch(() => undefined);
+    chrome.runtime.sendMessage({type: "LINKPEEK_AUDIT_TICK", phase, ...progress, mirrored} satisfies AuditTickMessage).catch(() => undefined);
   };
+}
+
+/**
+ * The full check: every saved file, then every history entry. Entries reuse
+ * the sizes the library measured, and fetch a picture only when its file was
+ * never kept.
+ */
+async function auditAll(settings: LinkPeekSettings) {
+  const rules = libraryRules(settings);
+  const files = await library.audit(rules, auditTicker("files"));
+  // A favourite's sightings are never judged, whatever their size.
+  const favorites = await favoriteFiles();
+  const past = await history.audit(entry => favorites.has(savedUrlOf(entry)) ? Promise.resolve(undefined) : library.sizeFor(savedUrlOf(entry)),
+    (w, h, entry) => !favorites.has(savedUrlOf(entry)) && underSized(w, h, rules), auditTicker("history"));
+  return {...files, historyRemoved: past.removed};
 }
 
 /** A gallery saved on the device earlier, when keeping them is on. */
@@ -390,7 +406,7 @@ chrome.runtime.onInstalled.addListener(async details => {
   } else if (details.reason === "update") {
     const settings = await loadSettings();
     // Files saved by an older version migrate into Downloads, and too-small ones are cleaned out.
-    if (settings.saveMediaOffline) await library.audit(libraryRules(settings), auditTicker()).catch(() => undefined);
+    if (settings.saveMediaOffline) await library.audit(libraryRules(settings), auditTicker("files")).catch(() => undefined);
   }
 });
 
@@ -446,7 +462,9 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "LINKPEEK_LIBRARY_CLEAR":
       return respond(library.clear().then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_AUDIT":
-      return respond(currentSettings().then(settings => library.audit(libraryRules(settings), auditTicker())), sendResponse);
+      return respond(currentSettings().then(auditAll), sendResponse);
+    case "LINKPEEK_FORGET_MEDIA":
+      return respond(Promise.all([history.removeAddress(msg.original), library.remove(msg.saved)]).then(() => ({ok: true})), sendResponse);
     case "LINKPEEK_LIBRARY_REMOVE":
       return respond((async () => {
         for (const url of msg.urls) await library.remove(url);

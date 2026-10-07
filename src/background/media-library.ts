@@ -15,7 +15,7 @@
  * time and never retries.
  */
 import {bytesToBase64, fetchWithRetry, readBytesCapped} from "../core/http";
-import {LIBRARY_CACHE, LIBRARY_INDEX, STILLS_CACHE, libraryFileName, type LibraryEntry} from "../shared/history";
+import {FAVORITE_MEDIA, LIBRARY_CACHE, LIBRARY_INDEX, STILLS_CACHE, libraryFileName, type LibraryEntry} from "../shared/history";
 import {underSized} from "../shared/media";
 
 const CONCURRENCY = 2;
@@ -38,9 +38,29 @@ function isEntry(value: unknown): value is [string, LibraryEntry] {
   return Array.isArray(pair) && typeof pair[0] === "string" && typeof pair[1]?.bytes === "number" && typeof pair[1]?.at === "number";
 }
 
-/** The pixel size of a decodable picture; undefined for video, SVG, or anything that cannot be decoded. */
-async function measure(bytes: ArrayBuffer, type: string): Promise<{w: number; h: number} | undefined> {
-  if (!type.startsWith("image/") || type.includes("svg")) return undefined;
+/** An SVG's size from its own width and height, else its viewBox; undefined when it states neither in plain numbers. */
+export function svgSize(text: string): {w: number; h: number} | undefined {
+  const tag = /<svg\b[^>]*>/i.exec(text)?.[0];
+  if (!tag) return undefined;
+  const number = (name: string) => {
+    const value = new RegExp(`\\s${name}\\s*=\\s*["']\\s*([\\d.]+)\\s*(?:px)?\\s*["']`, "i").exec(tag)?.[1];
+    return value === undefined ? undefined : Number(value);
+  };
+  const w = number("width"), h = number("height");
+  if (w && h) return {w, h};
+  const box = /\sviewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)\s*["']/i.exec(tag);
+  return box && Number(box[1]) && Number(box[2]) ? {w: Number(box[1]), h: Number(box[2])} : undefined;
+}
+
+/**
+ * The pixel size of a picture; undefined for video or anything that cannot be
+ * read. Files are tried whatever their declared type (servers often send
+ * pictures as octet-stream), and SVGs are sized by their own numbers.
+ */
+export async function measure(bytes: ArrayBuffer, type: string): Promise<{w: number; h: number} | undefined> {
+  if (type.startsWith("video/")) return undefined;
+  const head = new TextDecoder().decode(bytes.slice(0, 2048));
+  if (type.includes("svg") || /<svg\b/i.test(head)) return svgSize(new TextDecoder().decode(bytes));
   try {
     const bitmap = await createImageBitmap(new Blob([bytes], {type}));
     const size = {w: bitmap.width, h: bitmap.height};
@@ -51,11 +71,20 @@ async function measure(bytes: ArrayBuffer, type: string): Promise<{w: number; h:
   }
 }
 
+/** The most bytes read from the web just to learn a picture's size. */
+const MEASURE_MAX_BYTES = 12 * 1024 * 1024;
+
 /** Deletes an entry's Downloads copy: the file on disk, then its row in the downloads list. */
 async function removeMirror(entry: LibraryEntry) {
   if (entry.dl === undefined) return;
   await chrome.downloads.removeFile(entry.dl).catch(() => undefined);
   await chrome.downloads.erase({id: entry.dl}).catch(() => undefined);
+}
+
+/** The files starred as favourites in the Library, read fresh each time they matter. */
+export async function favoriteFiles() {
+  const stored = (await chrome.storage.local.get(FAVORITE_MEDIA))[FAVORITE_MEDIA];
+  return new Set<string>(Array.isArray(stored) ? stored.filter((url): url is string => typeof url === "string") : []);
 }
 
 export class MediaLibrary {
@@ -64,7 +93,8 @@ export class MediaLibrary {
   private queue: Job[] = [];
   private queued = new Map<string, Job>();
   private active = 0;
-  private rejected = new Set<string>();
+  /** Files measured too small to keep, with the size that ruled them out (the history check reuses it). */
+  private rejected = new Map<string, {w: number; h: number}>();
 
   private loadIndex() {
     this.index ??= chrome.storage.local.get(LIBRARY_INDEX).then(stored => {
@@ -141,7 +171,7 @@ export class MediaLibrary {
     }});
     const size = await measure(bytes, type);
     if (size && underSized(size.w, size.h, rules)) {
-      this.reject(url);
+      this.reject(url, size);
       return;
     }
     const cache = await caches.open(LIBRARY_CACHE);
@@ -154,8 +184,8 @@ export class MediaLibrary {
     this.saveIndexSoon();
   }
 
-  private reject(url: string) {
-    this.rejected.add(url);
+  private reject(url: string, size: {w: number; h: number}) {
+    this.rejected.set(url, size);
     while (this.rejected.size > REJECTED_MEMORY) this.rejected.delete(this.rejected.keys().next().value!);
   }
 
@@ -164,6 +194,27 @@ export class MediaLibrary {
     const copy = entry.bytes <= MIRROR_DATA_MAX ? await (await caches.open(LIBRARY_CACHE)).match(url) : undefined;
     const source = copy ? `data:${copy.headers.get("content-type")};base64,${bytesToBase64(await copy.arrayBuffer())}` : url;
     entry.dl = await chrome.downloads.download({url: source, filename: libraryFileName(url, entry.at), conflictAction: "uniquify", saveAs: false}).catch(() => undefined);
+  }
+
+  /**
+   * A file's pixel size: as measured when it was saved, else from its saved
+   * bytes, else fetched from the web once. Undefined for anything that cannot
+   * be read as a picture.
+   */
+  async sizeFor(url: string): Promise<{w: number; h: number} | undefined> {
+    // Removed for being too small: what ruled it out still stands.
+    const ruledOut = this.rejected.get(url);
+    if (ruledOut) return ruledOut;
+    const entry = (await this.loadIndex()).get(url);
+    if (entry?.w !== undefined) return {w: entry.w, h: entry.h ?? 0};
+    const kept = await (await caches.open(LIBRARY_CACHE)).match(url);
+    if (kept) return measure(await kept.arrayBuffer(), kept.headers.get("content-type") ?? "");
+    if (!/^https?:/.test(url)) return undefined;
+    const fetched = await fetchWithRetry(url, {credentials: "include"}, {mode: "background", timeoutMs: 15_000, read: async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return {bytes: await readBytesCapped(response, MEASURE_MAX_BYTES, "Too large to measure"), type: response.headers.get("content-type") ?? ""};
+    }}).catch(() => undefined);
+    return fetched && measure(fetched.bytes, fetched.type);
   }
 
   /** Forgets one file: its saved bytes, its index entry and its Downloads copy. */
@@ -183,7 +234,7 @@ export class MediaLibrary {
    * before mirroring their Downloads copy. Answers with what it did.
    */
   async audit(rules: LibraryRules, onProgress?: (progress: AuditProgress) => void) {
-    const index = await this.loadIndex(), entries = [...index];
+    const index = await this.loadIndex(), entries = [...index], favorites = await favoriteFiles();
     let removed = 0, mirrored = 0, checked = 0;
     const cache = await caches.open(LIBRARY_CACHE);
     for (const [url, entry] of entries) {
@@ -193,8 +244,8 @@ export class MediaLibrary {
         const size = hit && await measure(await hit.arrayBuffer(), hit.headers.get("content-type") ?? "");
         if (size) Object.assign(entry, size);
       }
-      if (entry.w !== undefined && underSized(entry.w, entry.h ?? 0, rules)) {
-        this.reject(url);
+      if (entry.w !== undefined && underSized(entry.w, entry.h ?? 0, rules) && !favorites.has(url)) {
+        this.reject(url, {w: entry.w, h: entry.h ?? 0});
         await this.remove(url);
         removed++;
       } else if (rules.mirror && entry.dl === undefined) {
@@ -219,8 +270,9 @@ export class MediaLibrary {
     let total = 0;
     for (const entry of index.values()) total += entry.bytes;
     if (total <= budget) return;
-    const cache = await caches.open(LIBRARY_CACHE);
-    const order = [...index].sort((a, b) => Number(a[1].seen !== false) - Number(b[1].seen !== false));
+    const cache = await caches.open(LIBRARY_CACHE), favorites = await favoriteFiles();
+    // Favourites never go to make room, whatever the budget says.
+    const order = [...index].filter(([url]) => !favorites.has(url)).sort((a, b) => Number(a[1].seen !== false) - Number(b[1].seen !== false));
     for (const [url, entry] of order) {
       if (total <= budget) break;
       index.delete(url);

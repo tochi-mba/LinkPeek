@@ -18,7 +18,7 @@
     <span class="spacer"></span>
     <button id="play" class="button primary" type="button" title="A slideshow of everything saved that you have never seen, GIFs first, then videos, then pictures, honouring the kind, tags and search. Every slide shown is marked as seen.">▶ Play unseen</button>
     <button id="select" class="button ghost" type="button" aria-pressed="false" title="Select many at once: drag a box over the grid, or use the checkmarks on the tiles">Select</button>
-    <button id="audit" class="button ghost" type="button" title="Measure every saved file, remove ones below your minimum media size, and add missing copies to Downloads / LinkPeek Library">Check saved files</button>
+    <button id="audit" class="button ghost" type="button" title="Measure every saved file and history entry, remove what is below your minimum media size, and add missing copies to Downloads / LinkPeek Library">Check saved files</button>
     <details id="more" class="h-menu">
       <summary class="button ghost" aria-label="More actions" title="More actions">⋯</summary>
       <div class="h-menu-list">
@@ -33,6 +33,7 @@
       <button type="button" class="h-chip" data-kind="video" aria-pressed="false">Videos</button>
       <button type="button" class="h-chip" data-kind="image" aria-pressed="false">Pictures</button>
     </div>
+    <button id="favOnly" type="button" class="h-chip h-favchip" data-fav aria-pressed="false" title="Only favourites (star one with B in the full-size view)">★ Favourites</button>
     <div id="filters" class="h-views" role="group" aria-label="Which saved media" hidden>
       <button type="button" class="h-chip" data-filter="all" aria-pressed="true">All</button>
       <button type="button" class="h-chip" data-filter="unseen" aria-pressed="false">Not seen yet</button>
@@ -65,18 +66,40 @@
   <main id="days"></main>
   <div id="more" class="history-more" aria-hidden="true"></div>
   <div id="view" class="h-view" role="dialog" aria-modal="true" aria-label="Saved media" hidden>
+    <div id="viewStage" class="h-view-stage"></div>
     <div class="h-view-bar">
       <a id="viewTitle" class="h-view-title" target="_blank" rel="noopener"></a>
       <span id="viewMeta" class="h-view-meta"></span>
       <span class="spacer"></span>
-      <button id="viewPause" class="button ghost" type="button" hidden>Pause</button>
-      <a id="viewOriginal" class="button ghost" target="_blank" rel="noopener">Open original</a>
-      <button id="viewSave" class="button ghost" type="button">Save file</button>
-      <button class="button ghost" type="button" data-view="close" aria-label="Close">×</button>
+      <button id="viewZoom" class="h-icon h-zoomlevel" type="button" title="Back to fitting (0)" hidden>100%</button>
+      <button id="viewPause" class="h-icon" type="button" title="Pause (Space)" aria-label="Pause" hidden>⏸</button>
+      <button id="viewFav" class="h-icon" type="button" title="Favourite: keep it whatever happens (B)" aria-label="Favourite" aria-pressed="false">☆</button>
+      <a id="viewOriginal" class="h-icon" target="_blank" rel="noopener" title="Open the original" aria-label="Open the original">↗</a>
+      <button id="viewSave" class="h-icon" type="button" title="Save the file to Downloads" aria-label="Save the file">⤓</button>
+      <button id="viewDelete" class="h-icon h-danger" type="button" title="Delete (D, then Enter)" aria-label="Delete">🗑</button>
+      <button id="viewFull" class="h-icon" type="button" title="Full screen (F)" aria-label="Full screen">⛶</button>
+      <button id="viewKeys" class="h-icon" type="button" title="Keys (?)" aria-label="Keys">?</button>
+      <button class="h-icon" type="button" data-view="close" title="Close (Esc)" aria-label="Close">×</button>
     </div>
-    <button class="h-view-nav prev" type="button" data-view="prev" aria-label="Previous">‹</button>
-    <div id="viewStage" class="h-view-stage"></div>
-    <button class="h-view-nav next" type="button" data-view="next" aria-label="Next">›</button>
+    <button class="h-view-nav prev" type="button" data-view="prev" aria-label="Previous" title="Previous (←)">‹</button>
+    <button class="h-view-nav next" type="button" data-view="next" aria-label="Next" title="Next (→)">›</button>
+    <div id="viewConfirm" class="h-view-confirm" role="alertdialog" aria-label="Confirm delete" hidden></div>
+    <div id="viewHelp" class="h-view-help" role="note" aria-label="Keys" hidden>
+      <h2>Keys</h2>
+      <dl>
+        <dt>← →, scroll</dt><dd>Previous, next</dd>
+        <dt>Space</dt><dd>Pause or resume the slideshow</dd>
+        <dt>+ − 0</dt><dd>Zoom in, out, back to fitting</dd>
+        <dt>Ctrl + scroll, pinch</dt><dd>Zoom at the pointer</dd>
+        <dt>Double-click</dt><dd>Twice the size there, or back</dd>
+        <dt>Drag</dt><dd>Move around while zoomed</dd>
+        <dt>B</dt><dd>Favourite: kept whatever happens</dd>
+        <dt>D, then Enter</dt><dd>Delete (Esc keeps it)</dd>
+        <dt>F</dt><dd>Full screen</dd>
+        <dt>Esc</dt><dd>Close</dd>
+      </dl>
+      <p class="muted">Any key closes this.</p>
+    </div>
   </div>
   <script src="history.js"></script>
 </body>
