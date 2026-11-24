@@ -13,6 +13,7 @@ export type PerformanceMode = "auto" | "saver" | "fast";
 export type PrefetchMode = "off" | "nearby" | "visible" | "page";
 export type ViewMode = "focus" | "grid";
 export type Placement = "auto" | "right" | "left" | "above" | "below";
+export type LinkTargetMode = "all" | "allowlist";
 
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
@@ -39,6 +40,10 @@ export interface LinkPeekSettings {
   magneticBridge: boolean;
   magneticBridgeStrength: number;
   activationKeywords: string[];
+  /** Which destination websites links may point to. Exclusions always win. */
+  linkTargetMode: LinkTargetMode;
+  allowedLinkSites: string[];
+  excludedLinkSites: string[];
 
   // Panel
   panelWidth: number;
@@ -218,6 +223,9 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   magneticBridge: true,
   magneticBridgeStrength: 0.7,
   activationKeywords: [],
+  linkTargetMode: "all",
+  allowedLinkSites: [],
+  excludedLinkSites: [],
 
   panelWidth: 480,
   panelMaxVh: 70,
@@ -336,6 +344,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
 /** Allowed values for every enumerated setting. */
 export const SETTING_CHOICES: Partial<Record<keyof LinkPeekSettings, readonly string[]>> = {
   activationMode: ["hover", "modifier", "click"],
+  linkTargetMode: ["all", "allowlist"],
   placement: ["auto", "right", "left", "above", "below"],
   defaultView: ["focus", "grid"],
   verticalGesture: ["navigate", "off"],
@@ -406,11 +415,13 @@ export const SCAN_SETTING_KEYS = [
   "includeImages", "includeGif", "includeWebp", "includeAvif", "includeSvg", "includeVideo",
   "includeAvatars", "includeEmoji", "minWidth", "minHeight", "quotedDuplicates", "recursiveSearch",
   "recursiveTrigger", "recursiveMaxDepth", "recursiveMaxPages", "maxMediaItems", "scanScope", "maxPosts",
-  "stripTracking", "canonicalizeQuery", "followRedirects", "referrerPolicy"
+  "stripTracking", "canonicalizeQuery", "followRedirects", "referrerPolicy",
+  "linkTargetMode", "allowedLinkSites", "excludedLinkSites"
 ] as const satisfies readonly (keyof LinkPeekSettings)[];
 
 export const SETTINGS_VERSION = 2;
 const MAX_KEYWORDS = 50;
+const MAX_SITE_PATTERNS = 200;
 const MAX_KEYS_PER_ACTION = 4;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -432,6 +443,30 @@ export function normalizeKeywords(value: unknown): string[] | undefined {
     out.push(keyword);
   }
   return out.slice(0, MAX_KEYWORDS);
+}
+
+/** Normalizes exact hosts and *.domain wildcards used by destination filters. */
+export function normalizeSitePatterns(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>(), out: string[] = [];
+  for (const entry of value) {
+    let pattern = String(entry).trim().toLowerCase();
+    if (!pattern) continue;
+    const wildcard = pattern.startsWith("*.");
+    const candidate = wildcard ? pattern.slice(2) : pattern;
+    try {
+      const input = /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+      const parsed = new URL(input);
+      if (parsed.username || parsed.password || parsed.port || parsed.pathname !== "/" || parsed.search || parsed.hash) continue;
+      pattern = `${wildcard ? "*." : ""}${parsed.hostname.toLowerCase().replace(/\.$/, "")}`;
+    } catch {
+      continue;
+    }
+    if (!pattern || seen.has(pattern)) continue;
+    seen.add(pattern);
+    out.push(pattern);
+  }
+  return out.slice(0, MAX_SITE_PATTERNS);
 }
 
 function sanitizeShortcuts(value: unknown): Partial<Shortcuts> | undefined {
@@ -466,6 +501,7 @@ export function sanitizeValue<K extends keyof LinkPeekSettings>(key: K, value: u
   if (key === "shortcuts") return sanitizeShortcuts(value) as LinkPeekSettings[K] | undefined;
   if (key === "siteProfiles") return sanitizeSiteProfiles(value) as LinkPeekSettings[K] | undefined;
   if (key === "activationKeywords") return normalizeKeywords(value) as LinkPeekSettings[K] | undefined;
+  if (key === "allowedLinkSites" || key === "excludedLinkSites") return normalizeSitePatterns(value) as LinkPeekSettings[K] | undefined;
   if (typeof fallback === "boolean") return typeof value === "boolean" ? value as LinkPeekSettings[K] : undefined;
   if (typeof fallback === "number") {
     if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -550,6 +586,26 @@ export function effectiveSettings(settings: LinkPeekSettings, url: string): Link
   }
   const override = siteProfileFor(settings.siteProfiles, host);
   return override ? {...settings, ...override, shortcuts: settings.shortcuts, siteProfiles: settings.siteProfiles} : settings;
+}
+
+function hostMatchesPattern(host: string, pattern: string) {
+  if (!pattern.startsWith("*.")) return host === pattern;
+  const base = pattern.slice(2);
+  return host === base || host.endsWith(`.${base}`);
+}
+
+/** Applies destination allow/exclude rules. Invalid and non-web URLs fail closed. */
+export function linkTargetAllowed(settings: Pick<LinkPeekSettings, "linkTargetMode" | "allowedLinkSites" | "excludedLinkSites">, url: string) {
+  let host: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return false;
+  }
+  if (settings.excludedLinkSites.some(pattern => hostMatchesPattern(host, pattern))) return false;
+  return settings.linkTargetMode === "all" || settings.allowedLinkSites.some(pattern => hostMatchesPattern(host, pattern));
 }
 
 /**
