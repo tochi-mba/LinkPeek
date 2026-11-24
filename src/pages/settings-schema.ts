@@ -188,8 +188,10 @@ export const SECTIONS: SectionSpec[] = [
     ]
   },
   {
-    id: "sites", title: "Sites", summary: "Rules for particular websites.",
+    id: "sites", title: "Sites", summary: "Control where LinkPeek runs, which destinations it previews, and per-site overrides.",
     fields: [
+      {key: "sourceSiteMode", label: "Run LinkPeek on", help: "Choose every website, only the websites listed below, or every website except those listed.", control: "segmented", options: {all: "Every website", allowlist: "Only listed", blocklist: "Everywhere except listed"}},
+      {key: "sourceSites", label: "Websites LinkPeek runs on", help: "The list is allowed or blocked according to the mode above. One domain per line; *.example.com includes the bare domain and every subdomain.", control: "site-patterns"},
       {key: "linkTargetMode", label: "Preview links to", help: "Choose every website, or only the destination websites listed below. This filters hover, preload, keyboard navigation and shuffle alike.", control: "segmented", options: {all: "Every website", allowlist: "Only listed websites"}},
       {key: "allowedLinkSites", label: "Allowed destination websites", help: "Used by Only listed websites. One domain per line. *.example.com includes the bare domain and every subdomain.", control: "site-patterns"},
       {key: "excludedLinkSites", label: "Never preview these websites", help: "One domain per line. Exclusions always win, including when a website is also allowed.", control: "site-patterns"},
