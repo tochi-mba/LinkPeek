@@ -14,6 +14,7 @@ export type PrefetchMode = "off" | "nearby" | "visible" | "page";
 export type ViewMode = "focus" | "grid";
 export type Placement = "auto" | "right" | "left" | "above" | "below";
 export type LinkTargetMode = "all" | "allowlist";
+export type SourceSiteMode = "all" | "allowlist" | "blocklist";
 
 export const SHORTCUT_ACTIONS = [
   "next", "previous", "nextLink", "previousLink", "grid", "expand", "pin", "favorite",
@@ -44,6 +45,9 @@ export interface LinkPeekSettings {
   linkTargetMode: LinkTargetMode;
   allowedLinkSites: string[];
   excludedLinkSites: string[];
+  /** Which websites LinkPeek is allowed to run inside. */
+  sourceSiteMode: SourceSiteMode;
+  sourceSites: string[];
 
   // Panel
   panelWidth: number;
@@ -226,6 +230,8 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
   linkTargetMode: "all",
   allowedLinkSites: [],
   excludedLinkSites: [],
+  sourceSiteMode: "all",
+  sourceSites: [],
 
   panelWidth: 480,
   panelMaxVh: 70,
@@ -345,6 +351,7 @@ export const DEFAULT_SETTINGS: LinkPeekSettings = {
 export const SETTING_CHOICES: Partial<Record<keyof LinkPeekSettings, readonly string[]>> = {
   activationMode: ["hover", "modifier", "click"],
   linkTargetMode: ["all", "allowlist"],
+  sourceSiteMode: ["all", "allowlist", "blocklist"],
   placement: ["auto", "right", "left", "above", "below"],
   defaultView: ["focus", "grid"],
   verticalGesture: ["navigate", "off"],
@@ -501,7 +508,7 @@ export function sanitizeValue<K extends keyof LinkPeekSettings>(key: K, value: u
   if (key === "shortcuts") return sanitizeShortcuts(value) as LinkPeekSettings[K] | undefined;
   if (key === "siteProfiles") return sanitizeSiteProfiles(value) as LinkPeekSettings[K] | undefined;
   if (key === "activationKeywords") return normalizeKeywords(value) as LinkPeekSettings[K] | undefined;
-  if (key === "allowedLinkSites" || key === "excludedLinkSites") return normalizeSitePatterns(value) as LinkPeekSettings[K] | undefined;
+  if (key === "allowedLinkSites" || key === "excludedLinkSites" || key === "sourceSites") return normalizeSitePatterns(value) as LinkPeekSettings[K] | undefined;
   if (typeof fallback === "boolean") return typeof value === "boolean" ? value as LinkPeekSettings[K] : undefined;
   if (typeof fallback === "number") {
     if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -592,6 +599,22 @@ function hostMatchesPattern(host: string, pattern: string) {
   if (!pattern.startsWith("*.")) return host === pattern;
   const base = pattern.slice(2);
   return host === base || host.endsWith(`.${base}`);
+}
+
+/** Whether LinkPeek may run inside a page on this website. */
+export function sourceSiteAllowed(settings: Pick<LinkPeekSettings, "sourceSiteMode" | "sourceSites">, urlOrHost: string) {
+  let host: string;
+  try {
+    const parsed = urlOrHost.includes("://") ? new URL(urlOrHost) : new URL(`https://${urlOrHost}`);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return false;
+  }
+  const listed = settings.sourceSites.some(pattern => hostMatchesPattern(host, pattern));
+  if (settings.sourceSiteMode === "allowlist") return listed;
+  if (settings.sourceSiteMode === "blocklist") return !listed;
+  return true;
 }
 
 /** Applies destination allow/exclude rules. Invalid and non-web URLs fail closed. */
