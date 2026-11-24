@@ -10,7 +10,7 @@ import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResul
 import type {MediaItem} from "../shared/media";
 import type {MirrorStateMessage, ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {samePicture} from "../shared/picture";
-import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, linkTargetAllowed, loadSettings, type LinkPeekSettings} from "../shared/settings";
+import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, linkTargetAllowed, loadSettings, sourceSiteAllowed, type LinkPeekSettings} from "../shared/settings";
 import {SeenMedia, fingerprintsFor, forgetRejected, recordSeen} from "../shared/seen-media";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
@@ -222,7 +222,8 @@ export class PreviewController {
   pageSettings(): LinkPeekSettings {
     const host = location.host;
     if (this.pageCache?.host !== host || this.pageCache.source !== this.settings) {
-      this.pageCache = {host, source: this.settings, value: effectiveSettings(this.settings, location.href)};
+      const effective = effectiveSettings(this.settings, location.href);
+      this.pageCache = {host, source: this.settings, value: sourceSiteAllowed(this.settings, location.href) ? effective : {...effective, enabled: false}};
     }
     return this.pageCache.value;
   }
