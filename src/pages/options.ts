@@ -4,7 +4,7 @@
  */
 import {escapeHtml} from "../shared/dom";
 import {
-  DEFAULT_SETTINGS, SETTING_CHOICES, SETTING_RANGES, SETTINGS_VERSION, SHORTCUT_ACTIONS, loadSettings, normalizeKeywords,
+  DEFAULT_SETTINGS, SETTING_CHOICES, SETTING_RANGES, SETTINGS_VERSION, SHORTCUT_ACTIONS, loadSettings, normalizeKeywords, normalizeSitePatterns,
   resolveSettings, saveSettings, settingsOverrides, type LinkPeekSettings, type ShortcutAction, type SiteProfiles
 } from "../shared/settings";
 import {SEEN_KEYS, forgetSeenMedia} from "../shared/seen-media";
@@ -104,6 +104,13 @@ function keywordsMarkup(field: FieldSpec) {
   return `<textarea id="field-${field.key}" class="text-area" rows="3" data-key="${field.key}" data-format="keywords" placeholder="gallery, photos, /media/">${escapeHtml(state.activationKeywords.join("\n"))}</textarea>`;
 }
 
+function sitePatternsMarkup(field: FieldSpec) {
+  const values = state[field.key] as string[];
+  const warning = field.key === "allowedLinkSites" && state.linkTargetMode === "allowlist" && !values.length
+    ? '<small class="field-warning" role="status">Add at least one website. Until then, no links will preview.</small>' : "";
+  return `<textarea id="field-${field.key}" class="text-area code" rows="4" data-key="${field.key}" data-format="site-patterns" placeholder="example.com\n*.images.example.com">${escapeHtml(values.join("\n"))}</textarea>${warning}`;
+}
+
 function shortcutsMarkup() {
   return `<div class="shortcuts">${SHORTCUT_ACTIONS.map(action => {
     const keys = state.shortcuts[action], label = SHORTCUT_LABELS[action];
@@ -175,6 +182,7 @@ function controlMarkup(field: FieldSpec) {
     case "number": return numberMarkup(field);
     case "range": return rangeMarkup(field);
     case "keywords": return keywordsMarkup(field);
+    case "site-patterns": return sitePatternsMarkup(field);
     case "shortcuts": return shortcutsMarkup();
     case "sites": return sitesMarkup();
     case "seen": return toggleMarkup(field) + seenMarkup();
@@ -241,6 +249,7 @@ function readControl(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElem
   if (el instanceof HTMLInputElement && el.type === "checkbox") return el.checked;
   if (el instanceof HTMLInputElement && (el.type === "number" || el.type === "range")) return Number(el.value);
   if (el.dataset.format === "keywords") return normalizeKeywords(el.value.split(/[\n,]+/));
+  if (el.dataset.format === "site-patterns") return normalizeSitePatterns(el.value.split(/[\n,]+/));
   return el.value;
 }
 
@@ -333,7 +342,7 @@ async function onChange(event: Event) {
   const key = el.dataset.key as SettingKey | undefined;
   if (!key) return;
   const value = readControl(el);
-  await update(key, value as never, el.dataset.format === "keywords" || el.type === "number");
+  await update(key, value as never, el.dataset.format === "keywords" || el.dataset.format === "site-patterns" || el.type === "number");
 }
 
 function onInput(event: Event) {
