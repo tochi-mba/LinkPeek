@@ -6,7 +6,7 @@
 import type {LinkPeekSettings} from "../shared/settings";
 
 export type SettingKey = keyof LinkPeekSettings;
-export type Control = "toggle" | "choice" | "segmented" | "number" | "range" | "keywords" | "shortcuts" | "sites" | "seen" | "galleries" | "library";
+export type Control = "toggle" | "choice" | "segmented" | "number" | "range" | "keywords" | "site-patterns" | "shortcuts" | "sites" | "seen" | "galleries" | "library";
 
 export interface FieldSpec {
   key: SettingKey;
@@ -190,7 +190,10 @@ export const SECTIONS: SectionSpec[] = [
   {
     id: "sites", title: "Sites", summary: "Rules for particular websites.",
     fields: [
-      {key: "siteProfiles", label: "Site rules", help: "A rule applies while you browse that site, and when LinkPeek scans its pages. *.example.com covers every subdomain.", control: "sites"}
+      {key: "linkTargetMode", label: "Preview links to", help: "Choose every website, or only the destination websites listed below. This filters hover, preload, keyboard navigation and shuffle alike.", control: "segmented", options: {all: "Every website", allowlist: "Only listed websites"}},
+      {key: "allowedLinkSites", label: "Allowed destination websites", help: "Used by Only listed websites. One domain per line. *.example.com includes the bare domain and every subdomain.", control: "site-patterns"},
+      {key: "excludedLinkSites", label: "Never preview these websites", help: "One domain per line. Exclusions always win, including when a website is also allowed.", control: "site-patterns"},
+      {key: "siteProfiles", label: "Per-page site rules", help: "A rule applies while you browse that site, and when LinkPeek scans its pages. *.example.com covers every subdomain.", control: "sites"}
     ]
   },
   {
