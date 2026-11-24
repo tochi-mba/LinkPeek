@@ -1,7 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {
   DEFAULT_SETTINGS, DEFAULT_SHORTCUTS, SCAN_SETTING_KEYS, SETTINGS_VERSION, SETTING_CHOICES, SETTING_RANGES, effectiveSettings,
-  linkMatchesKeywords, loadSettings, normalizeKeywords, resolveSettings, sanitizeOverrides, sanitizeValue, saveSettings,
+  linkMatchesKeywords, linkTargetAllowed, loadSettings, normalizeKeywords, normalizeSitePatterns, resolveSettings, sanitizeOverrides, sanitizeValue, saveSettings,
   settingsOverrides, siteProfileFor
 } from "../../src/shared/settings";
 
@@ -65,6 +65,11 @@ describe("sanitizing stored values", () => {
     expect(sanitizeValue("siteProfiles", {" Forum.Example ": {hoverDelay: 50, siteProfiles: {}, onboardingComplete: true, bogus: 1}, "": {}, "x.test": "bad"}))
       .toEqual({"forum.example": {hoverDelay: 50}});
     expect(sanitizeValue("siteProfiles", null)).toBeUndefined();
+  });
+
+  it("normalizes destination site patterns and rejects paths, ports and credentials", () => {
+    expect(normalizeSitePatterns([" Example.COM ", "https://example.com", "*.Media.Example.com", "example.com/path", "x.test:8080", "u:p@x.test", "bad host"]))
+      .toEqual(["example.com", "*.media.example.com"]);
   });
 
   it("drops unknown keys and invalid values from overrides", () => {
@@ -166,5 +171,18 @@ describe("activation keywords", () => {
     // A phrase matches an address's slug, and an address fragment still matches as typed.
     expect(linkMatchesKeywords({activationKeywords: ["beach day"]}, "https://x.test/t/alice_beach-day.1")).toBe(true);
     expect(linkMatchesKeywords({activationKeywords: ["/media/"]}, "https://x.test/media/a.jpg")).toBe(true);
+  });
+});
+
+
+describe("destination website filters", () => {
+  it("supports allow-only mode, wildcard subdomains and exclusion precedence", () => {
+    const filtered = resolveSettings({linkTargetMode: "allowlist", allowedLinkSites: ["photos.test", "*.media.test"], excludedLinkSites: ["private.media.test"]});
+    expect(linkTargetAllowed(filtered, "https://photos.test/a")).toBe(true);
+    expect(linkTargetAllowed(filtered, "https://media.test/a")).toBe(true);
+    expect(linkTargetAllowed(filtered, "https://cdn.media.test/a")).toBe(true);
+    expect(linkTargetAllowed(filtered, "https://private.media.test/a")).toBe(false);
+    expect(linkTargetAllowed(filtered, "https://elsewhere.test/a")).toBe(false);
+    expect(linkTargetAllowed(filtered, "javascript:alert(1)")).toBe(false);
   });
 });
