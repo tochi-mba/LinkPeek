@@ -271,6 +271,27 @@ describe("the popup", () => {
     expect(saved()).toEqual({siteProfiles: {"*.forum.test": {enabled: false}, "www.forum.test": {enabled: true}}});
   });
 
+  it("allows the current site from an allow-only policy", async () => {
+    await open({settings: {sourceSiteMode: "allowlist", sourceSites: []}});
+    expect($("#status").textContent).toBe("LinkPeek is not allowed on this site.");
+    expect($("#pauseSite").textContent).toBe("Allow here");
+    $("#pauseSite").click();
+    await settle();
+    expect(saved()).toEqual({sourceSiteMode: "allowlist", sourceSites: ["forum.test"]});
+  });
+
+  it("creates an exact resume override when a block wildcard covers the current site", async () => {
+    await open({settings: {sourceSiteMode: "blocklist", sourceSites: ["*.forum.test"]}, url: "https://www.forum.test/"});
+    expect($("#pauseSite").textContent).toBe("Allow here");
+    $("#pauseSite").click();
+    await settle();
+    expect(saved()).toEqual({
+      sourceSiteMode: "blocklist",
+      sourceSites: ["*.forum.test"],
+      siteProfiles: {"www.forum.test": {enabled: true}}
+    });
+  });
+
   it("switches performance mode and opening style", async () => {
     await open();
     $('[data-mode="saver"]').click();
