@@ -297,6 +297,20 @@ describe("the shortcut editor", () => {
 });
 
 describe("site rules", () => {
+  it("configures where LinkPeek runs and warns about an empty allowlist", async () => {
+    await open();
+    await click(field("sourceSiteMode").querySelector('[data-choice-value="allowlist"]')!);
+    expect(field("sourceSites").textContent).toContain("will not run on any page");
+    await change(field("sourceSites").querySelector("textarea")!, "Forum.Example.com\n*.media.test\nexample.com/path");
+    expect(saved()).toMatchObject({
+      sourceSiteMode: "allowlist",
+      sourceSites: ["forum.example.com", "*.media.test"]
+    });
+    expect(field("sourceSites").textContent).not.toContain("will not run on any page");
+    await click(field("sourceSiteMode").querySelector('[data-choice-value="blocklist"]')!);
+    expect(saved()).toMatchObject({sourceSiteMode: "blocklist"});
+  });
+
   it("pauses a site from a typed address, toggles and removes it", async () => {
     await open();
     const form = $<HTMLFormElement>("[data-site-form]");
