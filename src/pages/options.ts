@@ -106,8 +106,12 @@ function keywordsMarkup(field: FieldSpec) {
 
 function sitePatternsMarkup(field: FieldSpec) {
   const values = state[field.key] as string[];
-  const warning = field.key === "allowedLinkSites" && state.linkTargetMode === "allowlist" && !values.length
-    ? '<small class="field-warning" role="status">Add at least one website. Until then, no links will preview.</small>' : "";
+  const emptySourceAllowlist = field.key === "sourceSites" && state.sourceSiteMode === "allowlist" && !values.length;
+  const emptyTargetAllowlist = field.key === "allowedLinkSites" && state.linkTargetMode === "allowlist" && !values.length;
+  const warning = emptySourceAllowlist
+    ? '<small class="field-warning" role="status">Add at least one website. Until then, LinkPeek will not run on any page.</small>'
+    : emptyTargetAllowlist
+      ? '<small class="field-warning" role="status">Add at least one website. Until then, no links will preview.</small>' : "";
   return `<textarea id="field-${field.key}" class="text-area code" rows="4" data-key="${field.key}" data-format="site-patterns" placeholder="example.com\n*.images.example.com">${escapeHtml(values.join("\n"))}</textarea>${warning}`;
 }
 
@@ -199,7 +203,7 @@ function matches(section: SectionSpec, field: FieldSpec) {
 }
 
 function fieldMarkup(field: FieldSpec) {
-  const control = controlFor(field), wide = control === "shortcuts" || control === "sites" || control === "keywords";
+  const control = controlFor(field), wide = control === "shortcuts" || control === "sites" || control === "keywords" || control === "site-patterns";
   const reset = control === "shortcuts" || control === "sites" ? "" : `<button type="button" class="reset" data-reset="${field.key}" title="Reset to default" ${isDefault(field.key) ? "hidden" : ""}>↺</button>`;
   return `<div class="field${wide ? " wide" : ""}" data-field="${field.key}"><div class="field-text"><label for="field-${field.key}"><strong>${escapeHtml(field.label)}</strong></label>`
     + `${field.advanced ? '<span class="tag">Advanced</span>' : ""}<small>${escapeHtml(field.help)}</small></div>`
