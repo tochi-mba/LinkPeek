@@ -8,7 +8,7 @@
  */
 import type {LinkContext, MediaItem, ScanResult} from "../shared/media";
 import {isStateChangingUrl, stripTrackingParams} from "../shared/media";
-import type {LinkPeekSettings} from "../shared/settings";
+import {linkTargetAllowed, type LinkPeekSettings} from "../shared/settings";
 import {decodeEntities, dedupeMedia, extractMediaFromHtml, extractPageMetaMedia} from "./extract";
 import {fetchWithRetry, readTextCapped, type RetryMode} from "./http";
 
@@ -48,11 +48,21 @@ async function readPage(response: Response, requested: string, settings: LinkPee
   return {finalUrl: response.url, title, items: extractMediaFromHtml(html, response.url, title ? {sourceTitle: title} : {}, settings), html};
 }
 
-function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive") {
+async function fetchPage(url: string, settings: LinkPeekSettings | undefined, signal: AbortSignal | undefined, rootOrigin?: string, retryMode: RetryMode = "interactive", redirects = 0): Promise<PageScan> {
+  if (settings && !linkTargetAllowed(settings, url)) throw new Error("Destination website is not allowed");
   // Cookies go only to the site being previewed, never to other sites a linked-page search visits.
   const credentials: RequestCredentials = !rootOrigin || new URL(url).origin === rootOrigin ? "include" : "omit";
-  const init: RequestInit = {credentials, redirect: settings?.followRedirects === false ? "manual" : "follow", referrerPolicy: referrerPolicy(settings), signal};
-  return fetchWithRetry(url, init, {mode: retryMode, timeoutMs: clamp(settings?.fetchTimeout, 8000, 500, 30000), read: response => readPage(response, url, settings)});
+  const init: RequestInit = {credentials, redirect: "manual", referrerPolicy: referrerPolicy(settings), signal};
+  return fetchWithRetry(url, init, {mode: retryMode, timeoutMs: clamp(settings?.fetchTimeout, 8000, 500, 30000), read: async response => {
+    const location = response.headers.get("location");
+    if (location && response.status >= 300 && response.status < 400 && settings?.followRedirects !== false) {
+      await response.body?.cancel().catch(() => undefined);
+      if (redirects >= 10) throw new Error("Too many redirects");
+      return fetchPage(new URL(location, url).href, settings, signal, rootOrigin, retryMode, redirects + 1);
+    }
+    if (settings && !linkTargetAllowed(settings, response.url || url)) throw new Error("Redirected to a website that is not allowed");
+    return readPage(response, url, settings);
+  }});
 }
 
 /** Safe links in one fetched page, kept in document order for recursion and keyboard navigation. */
@@ -70,6 +80,7 @@ function pageLinks(html: string, base: string, rootOrigin: string, settings: Lin
       continue;
     }
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || isStateChangingUrl(url) || NON_PAGE.test(url.href)) continue;
+    if (!linkTargetAllowed(settings, url.href)) continue;
     if (settings.recursiveSearch !== "all" && url.origin !== rootOrigin) continue;
     url.hash = "";
     if (settings.stripTracking) stripTrackingParams(url);
