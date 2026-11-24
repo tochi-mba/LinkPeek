@@ -10,7 +10,7 @@ import {PREVIEWABLE_KINDS, classifyLink, contentLinks, linkLabel, type ScanResul
 import type {MediaItem} from "../shared/media";
 import type {MirrorStateMessage, ScanRequest, ScanResponse, TabStatus} from "../shared/messages";
 import {samePicture} from "../shared/picture";
-import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, loadSettings, type LinkPeekSettings} from "../shared/settings";
+import {DEFAULT_SETTINGS, effectiveSettings, linkMatchesKeywords, linkTargetAllowed, loadSettings, type LinkPeekSettings} from "../shared/settings";
 import {SeenMedia, fingerprintsFor, forgetRejected, recordSeen} from "../shared/seen-media";
 import {isTypingEvent, matchesCombo} from "../shared/shortcuts";
 import {Viewer, type ViewerState} from "../ui/viewer";
@@ -235,6 +235,7 @@ export class PreviewController {
   settingsForUrl(url: string, label?: string): LinkPeekSettings | undefined {
     const settings = this.pageSettings();
     if (!settings.enabled) return undefined;
+    if (!linkTargetAllowed(settings, url)) return undefined;
     if (settings.activationKeywords.length && !linkMatchesKeywords(settings, url, label ?? this.linkWords(url))) return undefined;
     const kind = classifyLink(url);
     if (!PREVIEWABLE_KINDS.has(kind) || (kind === "direct-video" && !settings.includeVideo)) return undefined;
