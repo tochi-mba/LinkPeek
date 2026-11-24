@@ -3,7 +3,7 @@ import {escapeHtml} from "../shared/dom";
 import {loadFavorites, removeFavorite} from "../shared/favorites";
 import {tumblrBlogFrom} from "../core/tumblr";
 import type {TabStatus, TumblrJobState} from "../shared/messages";
-import {loadSettings, saveSettings, siteProfileFor, type LinkPeekSettings} from "../shared/settings";
+import {loadSettings, saveSettings, siteProfileFor, sourceSiteAllowed, type LinkPeekSettings} from "../shared/settings";
 
 let settings: LinkPeekSettings;
 let host = "";
@@ -15,15 +15,21 @@ let tumblrStopping = false;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+function policyAllowsHere() {
+  return Boolean(host) && sourceSiteAllowed(settings, host);
+}
+
 function pausedHere() {
-  return Boolean(host) && siteProfileFor(settings.siteProfiles, host)?.enabled === false;
+  if (!host) return false;
+  const override = siteProfileFor(settings.siteProfiles, host)?.enabled;
+  return override === false || (!policyAllowsHere() && override !== true);
 }
 
 /** One line describing what LinkPeek is doing on this tab right now. */
 function statusLine(): string {
   if (!host) return "Previews work on web pages.";
   if (!settings.enabled) return "LinkPeek is off.";
-  if (pausedHere()) return "Paused on this site.";
+  if (pausedHere()) return policyAllowsHere() ? "Paused on this site." : "LinkPeek is not allowed on this site.";
   if (!status) return "Reload this page to start previews here.";
   const ready = `${status.prepared} link${status.prepared === 1 ? "" : "s"} ready`;
   if (status.reason) return `${ready} · easing off: ${status.reason}`;
@@ -104,7 +110,7 @@ function render() {
   $("status").textContent = statusLine();
   const pause = $("pauseSite") as HTMLButtonElement, inspector = $("inspector") as HTMLButtonElement;
   pause.hidden = !host;
-  pause.textContent = pausedHere() ? "Resume here" : "Pause here";
+  pause.textContent = pausedHere() ? (policyAllowsHere() ? "Resume here" : "Allow here") : "Pause here";
   // The inspector lives in the page, so it needs a page whose script answered.
   inspector.hidden = !status;
   ($("shuffle") as HTMLButtonElement).hidden = !status?.enabled || !settings.shuffleSlideshow;
@@ -137,6 +143,16 @@ async function save() {
 
 async function togglePause() {
   const sites = {...settings.siteProfiles}, rule = {...sites[host]};
+  if (!policyAllowsHere() && siteProfileFor(sites, host)?.enabled !== true) {
+    if (settings.sourceSiteMode === "allowlist") {
+      settings = {...settings, sourceSites: [...new Set([...settings.sourceSites, host])]};
+    } else {
+      sites[host] = {...rule, enabled: true};
+      settings = {...settings, siteProfiles: sites};
+    }
+    await save();
+    return;
+  }
   if (pausedHere()) {
     delete rule.enabled;
     if (Object.keys(rule).length) sites[host] = rule;
