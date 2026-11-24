@@ -258,6 +258,12 @@ describe("hover previews", () => {
     expect(anchors.map(anchor => Boolean(controller.settingsFor(anchor)))).toEqual([false, false, false, true]);
   });
 
+  it("filters links by exact and wildcard destination website rules", async () => {
+    await boot({linkTargetMode: "allowlist", allowedLinkSites: ["dest.test", "*.media.test"], excludedLinkSites: ["private.media.test"]});
+    const anchors = [link("allowed", "https://dest.test/gallery"), link("wildcard", "https://cdn.media.test/gallery"), link("excluded", "https://private.media.test/gallery"), link("other", "https://elsewhere.test/gallery")];
+    expect(anchors.map(anchor => Boolean(controller.settingsFor(anchor)))).toEqual([true, true, false, false]);
+  });
+
   it("matches keywords against a link's words too, for hovered links and for links known only by address", async () => {
     await boot({activationKeywords: ["beach day"]});
     const titled = link("t1", "https://dest.test/t/48213");
