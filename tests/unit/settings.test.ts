@@ -2,7 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {
   DEFAULT_SETTINGS, DEFAULT_SHORTCUTS, SCAN_SETTING_KEYS, SETTINGS_VERSION, SETTING_CHOICES, SETTING_RANGES, effectiveSettings,
   linkMatchesKeywords, linkTargetAllowed, loadSettings, normalizeKeywords, normalizeSitePatterns, resolveSettings, sanitizeOverrides, sanitizeValue, saveSettings,
-  settingsOverrides, siteProfileFor
+  settingsOverrides, siteProfileFor, sourceSiteAllowed
 } from "../../src/shared/settings";
 
 describe("default settings", () => {
@@ -184,5 +184,21 @@ describe("destination website filters", () => {
     expect(linkTargetAllowed(filtered, "https://private.media.test/a")).toBe(false);
     expect(linkTargetAllowed(filtered, "https://elsewhere.test/a")).toBe(false);
     expect(linkTargetAllowed(filtered, "javascript:alert(1)")).toBe(false);
+  });
+});
+
+
+describe("source website access", () => {
+  it("supports everywhere, allow-only and everywhere-except modes", () => {
+    expect(sourceSiteAllowed(resolveSettings({}), "https://anything.test/page")).toBe(true);
+    const allowed = resolveSettings({sourceSiteMode: "allowlist", sourceSites: ["forum.test", "*.example.com"]});
+    expect(sourceSiteAllowed(allowed, "forum.test")).toBe(true);
+    expect(sourceSiteAllowed(allowed, "https://example.com/")).toBe(true);
+    expect(sourceSiteAllowed(allowed, "https://deep.example.com/")).toBe(true);
+    expect(sourceSiteAllowed(allowed, "https://notexample.com/")).toBe(false);
+    expect(sourceSiteAllowed(resolveSettings({sourceSiteMode: "allowlist", sourceSites: []}), "forum.test")).toBe(false);
+    const blocked = resolveSettings({sourceSiteMode: "blocklist", sourceSites: ["*.example.com"]});
+    expect(sourceSiteAllowed(blocked, "a.example.com")).toBe(false);
+    expect(sourceSiteAllowed(blocked, "elsewhere.test")).toBe(true);
   });
 });
