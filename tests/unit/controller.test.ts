@@ -252,6 +252,20 @@ describe("hover previews", () => {
     expect(controller.status().enabled).toBe(false);
   });
 
+  it("does no preview work when the current website is outside the source policy", async () => {
+    await boot({sourceSiteMode: "allowlist", sourceSites: ["allowed.test"]});
+    pointer("pointerover", link("a"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(viewer.openLoading).not.toHaveBeenCalled();
+    expect(controller.status().enabled).toBe(false);
+  });
+
+  it("keeps explicit per-site resume overrides compatible with source policy", async () => {
+    await boot({sourceSiteMode: "blocklist", sourceSites: ["localhost"], siteProfiles: {localhost: {enabled: true}}});
+    expect(controller.status().enabled).toBe(true);
+    expect(controller.settingsFor(link("a"))).toBeDefined();
+  });
+
   it("previews only links that match the keywords and are safe and supported", async () => {
     await boot({activationKeywords: ["gallery"], includeVideo: false});
     const anchors = [link("a"), link("gallery-video", "https://dest.test/gallery/clip.mp4"), link("gallery-logout", "https://dest.test/gallery/logout"), link("gallery-ok", "https://dest.test/gallery/ok")];
