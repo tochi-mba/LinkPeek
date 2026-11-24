@@ -48,7 +48,7 @@ describe("reading a page", () => {
     const result = await scanGeneric("https://a.test/post", settings());
     expect(result).toMatchObject({kind: "generic", title: "A post", complete: true, diagnostics: {adapter: "Generic HTML", ignored: 0}});
     expect(result.items.map(item => item.originalUrl)).toEqual(["https://a.test/one.jpg", "https://a.test/two.png"]);
-    expect(calls[0].init).toMatchObject({credentials: "include", redirect: "follow", referrerPolicy: "same-origin"});
+    expect(calls[0].init).toMatchObject({credentials: "include", redirect: "manual", referrerPolicy: "same-origin"});
   });
 
   it("recognizes direct image, GIF and video responses without reading their bodies", async () => {
@@ -82,7 +82,13 @@ describe("reading a page", () => {
     html("https://a.test/r", "");
     await scanGeneric("https://a.test/r", settings({referrerPolicy: "never", followRedirects: false, recursiveSearch: "off"}));
     await scanGeneric("https://a.test/r", settings({referrerPolicy: "default", recursiveSearch: "off"}));
-    expect(calls.map(call => [call.init.referrerPolicy, call.init.redirect])).toEqual([["no-referrer", "manual"], [undefined, "follow"]]);
+    expect(calls.map(call => [call.init.referrerPolicy, call.init.redirect])).toEqual([["no-referrer", "manual"], [undefined, "manual"]]);
+  });
+
+  it("checks every redirect destination before requesting it", async () => {
+    routes.set("https://allowed.test/start", () => respond("https://allowed.test/start", null, "", 302, {location: "https://blocked.test/final"}));
+    await expect(scanGeneric("https://allowed.test/start", settings({excludedLinkSites: ["blocked.test"]}))).rejects.toThrow("not allowed");
+    expect(calls.map(call => call.url)).toEqual(["https://allowed.test/start"]);
   });
 
   it("gives up on a slow page after the timeout", async () => {
@@ -162,6 +168,14 @@ describe("searching linked pages", () => {
     const always = await scanGeneric(index, settings({recursiveSearch: "all", recursiveTrigger: "always"}));
     expect(always.items).toHaveLength(2);
     expect(calls.find(call => call.url === "https://other.test/g")!.init.credentials).toBe("omit");
+  });
+
+  it("never requests recursive links outside the destination allowlist", async () => {
+    html(index, `<a href="https://allowed.test/gallery">yes</a><a href="https://blocked.test/gallery">no</a>`);
+    html("https://allowed.test/gallery", `<img src="/ok.jpg">`);
+    const result = await scanGeneric(index, settings({recursiveSearch: "all", linkTargetMode: "allowlist", allowedLinkSites: ["a.test", "allowed.test"]}));
+    expect(result.items.map(item => item.originalUrl)).toEqual(["https://allowed.test/ok.jpg"]);
+    expect(calls.map(call => call.url)).toEqual([index, "https://allowed.test/gallery"]);
   });
 
   it("reports a single skipped page in the singular and stops at the media cap", async () => {
